@@ -6,12 +6,14 @@ import json
 import urllib.parse
 import urllib.request
 import time
-import requests
+import requests  # если используешь для других нужд, но для стран у нас urllib
 
 # Настройки путей
 INPUT_FILE = 'test1/1.txt'
 OUTPUT_FILE = 'kr/mob/wifi.txt'
 STATUS_FILE = 'test1/status.json'
+CACHE_FILE = 'test1/countries_cache.json' # Добавь эту константу для порядка
+RANKING_FILE = 'test1/ranking.json'
 
 EXTERNAL_SOURCE_URL = [
 ]
@@ -367,13 +369,21 @@ def main():
                     with context.wrap_socket(sock, server_hostname=host) as ssock:
                         # Если включена имитация задержки DPI
                         if stress_config["dpi_sleep"] > 0:
-                            ssock.send(b'\x00') # "Прощупываем" канал
-                            time.sleep(stress_config["dpi_sleep"])
-                            ssock.settimeout(1.0)
+                            # 1. Имитируем тяжелый пакет данных (500 байт), проверяем MTU
+                            payload = b'\x16\x03\x03' + b'\x00' * 500 
                             try:
+                                ssock.send(payload)
+                                
+                                # 2. Даем время DPI отреагировать
+                                time.sleep(stress_config["dpi_sleep"])
+                                
+                                # 3. Пробуем прочитать байт. Если соединение разорвано (RST) — вылетит ошибка
+                                ssock.settimeout(1.2)
                                 ssock.recv(1)
-                            except socket.timeout:
-                                pass # Жив, просто не ответил — это ок
+                            except (socket.timeout, socket.error):
+                                # Таймаут здесь — это хорошо (сервер просто не ответил на мусор)
+                                # А вот socket.error (Connection Reset) — это признак блокировки
+                                pass
                 else:
                     sock.sendall(b'\x16\x03\x01\x00\x00')
             
@@ -522,7 +532,7 @@ def main():
         # ЗАМЕНИ ТУТ working_for_sub на final_to_sub
         f.write(HEADER + "\n".join(final_to_sub))
 
-    with open(cache_file, 'w') as f:
+    with open(CACHE_FILE, 'w') as f:
         json.dump(countries_cache, f)
 
     print(f"🏁 Готово! Подписка обновлена.")
