@@ -112,6 +112,20 @@ def main():
     import subprocess
     token = os.getenv("GH_TOKEN")
     repo = os.getenv("GITHUB_REPOSITORY")
+    # --- НАСТРОЙКИ СТРЕСС-ТЕСТА (ИМИТАЦИЯ ГЛУШЕНИЯ) ---
+    stress_config = {
+        "timeout": 2.5,
+        "dpi_sleep": 0.1
+    }
+    if os.path.exists('test1/stress_profile.json'):
+        try:
+            with open('test1/stress_profile.json', 'r') as f:
+                data = json.load(f)
+                # max_handshake_ms из конфига переводим в секунды
+                stress_config["timeout"] = data.get("max_handshake_ms", 2500) / 1000
+                stress_config["dpi_sleep"] = 0.1 if data.get("mimic_dpi_delay") else 0
+        except: 
+            pass
 
     blacklist = set()
     pinned_list = []
@@ -323,45 +337,46 @@ def main():
         if not endpoint or not host or not port:
             continue
 
-        # --- ЭТАП 1: ХАРД-РЕЗОЛВИНГ + ИМИТАЦИЯ ПЛОХОЙ СЕТИ (ОБНОВЛЕНО) ---
+        # --- ЭТАП 1: ХАРД-РЕЗОЛВИНГ + ИМИТАЦИЯ ГЛУШЕНИЯ ---
         resolved_ip = None
         is_alive = False
         try:
-            # 1. Резолвим IP
             resolved_ip = socket.gethostbyname(host) if not is_ipv6(host) else host
             if resolved_ip in seen_ips:
                 continue 
-            
-            # 2. Тест на "выживание" в мобильной сети
-            # Мы ставим жесткий таймаут 2.5с. Если DPI или сеть тупят дольше — сервер нам не подходит.
-            with socket.create_connection((resolved_ip, int(port)), timeout=2.5) as sock:
+
+            # Используем значение из нашего stress_config
+            with socket.create_connection((resolved_ip, int(port)), timeout=stress_config["timeout"]) as sock:
                 use_tls = "security=tls" in base_part.lower() or "security=reality" in base_part.lower()
                 
                 if use_tls:
-                    # Создаем контекст для проверки TLS хендшейка
                     context = ssl.create_default_context()
                     context.check_hostname = False
                     context.verify_mode = ssl.CERT_NONE
                     
-                    # Самый важный момент: именно на wrap_socket (хендшейке) 
-                    # чаще всего срабатывает глушилка (DPI)
                     with context.wrap_socket(sock, server_hostname=host) as ssock:
-                        pass
+                        # Если включена имитация задержки DPI
+                        if stress_config["dpi_sleep"] > 0:
+                            ssock.send(b'\x00') # "Прощупываем" канал
+                            time.sleep(stress_config["dpi_sleep"])
+                            ssock.settimeout(1.0)
+                            try:
+                                ssock.recv(1)
+                            except socket.timeout:
+                                pass # Жив, просто не ответил — это ок
                 else:
-                    # Если TLS нет, просто имитируем минимальный запрос
                     sock.sendall(b'\x16\x03\x01\x00\x00')
             
-            # Если дошли до этой строки без ошибок — сервер "живой" и быстрый
             is_alive = True
             seen_ips.add(resolved_ip) 
 
-        except Exception as e:
-            # Если упали по таймауту или соединение сброшено (RST) — помечаем как мертвый
+        except (socket.timeout, ConnectionResetError, ssl.SSLError, socket.error):
+            # Сервер не прошел имитацию мобильной "глушилки"
             is_alive = False
-            # print(f"DEBUG: {host} не прошел тест сети: {e}") # Можно раскомментировать для отладки
 
         # --- ЭТАП 2: ЕСЛИ СЕРВЕР РАБОТАЕТ ---
         if is_alive:
+            # Твоя логика сохранения (БЕЗ ИЗМЕНЕНИЙ СИСТЕМЫ ЗАКРЕПОВ)
             if "security=none" in base_part.lower():
                 print(f"❌ НЕТ ШИФРОВАНИЯ: {host}")
                 continue
