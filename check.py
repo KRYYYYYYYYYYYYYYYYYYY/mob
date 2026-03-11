@@ -323,32 +323,43 @@ def main():
         if not endpoint or not host or not port:
             continue
 
-        # --- ЭТАП 1: ХАРД-РЕЗОЛВИНГ + ПРОВЕРКА СВЯЗИ ---
+        # --- ЭТАП 1: ХАРД-РЕЗОЛВИНГ + ИМИТАЦИЯ ПЛОХОЙ СЕТИ (ОБНОВЛЕНО) ---
         resolved_ip = None
         is_alive = False
         try:
+            # 1. Резолвим IP
             resolved_ip = socket.gethostbyname(host) if not is_ipv6(host) else host
             if resolved_ip in seen_ips:
                 continue 
             
-            start_time = time.time()
-            use_tls = "security=tls" in base_part.lower() or "security=reality" in base_part.lower()
-            
-            with socket.create_connection((resolved_ip, int(port)), timeout=4.0) as sock:
+            # 2. Тест на "выживание" в мобильной сети
+            # Мы ставим жесткий таймаут 2.5с. Если DPI или сеть тупят дольше — сервер нам не подходит.
+            with socket.create_connection((resolved_ip, int(port)), timeout=2.5) as sock:
+                use_tls = "security=tls" in base_part.lower() or "security=reality" in base_part.lower()
+                
                 if use_tls:
+                    # Создаем контекст для проверки TLS хендшейка
                     context = ssl.create_default_context()
                     context.check_hostname = False
                     context.verify_mode = ssl.CERT_NONE
+                    
+                    # Самый важный момент: именно на wrap_socket (хендшейке) 
+                    # чаще всего срабатывает глушилка (DPI)
                     with context.wrap_socket(sock, server_hostname=host) as ssock:
                         pass
                 else:
+                    # Если TLS нет, просто имитируем минимальный запрос
                     sock.sendall(b'\x16\x03\x01\x00\x00')
             
+            # Если дошли до этой строки без ошибок — сервер "живой" и быстрый
             is_alive = True
             seen_ips.add(resolved_ip) 
-        except:
+
+        except Exception as e:
+            # Если упали по таймауту или соединение сброшено (RST) — помечаем как мертвый
             is_alive = False
-    
+            # print(f"DEBUG: {host} не прошел тест сети: {e}") # Можно раскомментировать для отладки
+
         # --- ЭТАП 2: ЕСЛИ СЕРВЕР РАБОТАЕТ ---
         if is_alive:
             if "security=none" in base_part.lower():
