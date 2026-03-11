@@ -14,12 +14,6 @@ OUTPUT_FILE = 'kr/mob/wifi.txt'
 STATUS_FILE = 'test1/status.json'
 
 EXTERNAL_SOURCE_URL = [
-    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS_mobile.txt",
-    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS.txt",
-    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_SS%2BAll_RUS.txt",
-    "https://raw.githubusercontent.com/KiryaScript/white-lists/refs/heads/main/githubmirror/26.txt",
-    "https://raw.githubusercontent.com/KiryaScript/white-lists/refs/heads/main/githubmirror/27.txt",
-    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-SNI-RU-all.txt"
 ]
 
 GRACE_PERIOD = 2 * 24 * 60 * 60 # 48 часов
@@ -82,14 +76,30 @@ def format_uri_host(host: str) -> str:
         return f"[{host}]"
     return host
 
-def get_country_code(host: str) -> str:
+def get_country_code(host, cache):
+    # Если это домен, резолвим в IP для кэша (страна привязана к IP)
     try:
-        url = f"http://ip-api.com/json/{host}?fields=status,countryCode"
+        ip = socket.gethostbyname(host)
+    except:
+        ip = host
+
+    # Проверяем кэш
+    if ip in cache:
+        return cache[ip]
+
+    # Если в кэше нет, идем в API (не забываем про лимит 45 зап/мин)
+    try:
+        # Добавляем небольшую паузу, чтобы не спамить (0.5 сек даст ~120 зап/мин, чуть рискованно, но для 200 серверов пойдет)
+        time.sleep(0.5) 
+        url = f"http://ip-api.com/json/{ip}?fields=status,countryCode"
         with urllib.request.urlopen(url, timeout=3) as response:
             data = json.loads(response.read().decode("utf-8"))
             if data.get("status") == "success":
-                return data.get("countryCode", "Unknown")
-    except: pass
+                code = data.get("countryCode", "Unknown")
+                cache[ip] = code # Сохраняем в память
+                return code
+    except: 
+        pass
     return "Unknown"
 
 def fetch_external_servers() -> list:
@@ -381,7 +391,7 @@ def main():
                 print(f"❌ НЕТ ШИФРОВАНИЯ: {host}")
                 continue
     
-            country = get_country_code(host)
+            country = get_country_code(host, countries_cache)
             if country not in ALLOWED_COUNTRIES:
                 continue
     
@@ -511,6 +521,9 @@ def main():
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
         # ЗАМЕНИ ТУТ working_for_sub на final_to_sub
         f.write(HEADER + "\n".join(final_to_sub))
+
+    with open(cache_file, 'w') as f:
+        json.dump(countries_cache, f)
 
     print(f"🏁 Готово! Подписка обновлена.")
     # --- ОБНОВЛЕНИЕ ИНТЕРФЕЙСА С ГАЛОЧКАМИ ---
