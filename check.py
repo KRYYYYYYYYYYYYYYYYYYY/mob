@@ -55,6 +55,23 @@ def rebuild_link_name(link: str, new_name: str) -> str:
     
     return f"{base}#{urllib.parse.quote(new_name)}"
 
+def remove_from_input_file(base_to_remove: str):
+    """Удаляет конкретную ссылку из 1.txt по её базовой части"""
+    if not os.path.exists(INPUT_FILE):
+        return
+    try:
+        with open(INPUT_FILE, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+        
+        # Оставляем только те строки, которые НЕ содержат этот base_part
+        new_lines = [l for l in lines if base_to_remove not in l]
+        
+        if len(lines) != len(new_lines):
+            with open(INPUT_FILE, 'w', encoding='utf-8') as f:
+                f.writelines(new_lines)
+    except Exception as e:
+        print(f"⚠️ Ошибка при очистке {INPUT_FILE}: {e}")
+
 def is_ipv6(host: str) -> bool:
     return ":" in host
 
@@ -488,6 +505,8 @@ def main():
             if country not in ALLOWED_COUNTRIES:
                 print(f"🌍 МИМО: Страна {country} не в белом списке ({host})")
                 continue
+
+            remove_from_input_file(base_part)
     
             working_for_base.append(base_part)
             ip_str = f"[{resolved_ip}]" if is_ipv6(resolved_ip) else resolved_ip
