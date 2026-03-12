@@ -120,34 +120,30 @@ def fetch_external_servers() -> list:
             print(f"❌ Ошибка загрузки {url}: {e}")
     return all_configs
 
-def safe_gh_call(cmd, token, repo):
-    """Безопасный вызов GitHub CLI с повторными попытками."""
+def safe_gh_call(cmd, token):
+    """Безопасно вызывает gh cli, пробуя 3 раза при сетевых сбоях."""
     import subprocess
     import time
-    
-    # Пытаемся 3 раза, если это сетевая ошибка
+    import os
     for attempt in range(3):
         try:
-            result = subprocess.check_output(
+            # Выполняем команду
+            return subprocess.check_output(
                 cmd, 
-                env={**os.environ, "GH_TOKEN": token},
-                stderr=subprocess.PIPE # Захватываем ошибки для анализа
+                env={**os.environ, "GH_TOKEN": token}, 
+                stderr=subprocess.STDOUT
             ).decode()
-            return result
         except subprocess.CalledProcessError as e:
-            error_msg = e.stderr.decode().lower() if e.stderr else ""
-            # Если это ошибка сети или API, ждем и пробуем снова
-            if "connection" in error_msg or "api.github.com" in error_msg or "timeout" in error_msg:
-                print(f"⚠️ Сбой сети GitHub (попытка {attempt+1}/3). Ждем 5 сек...")
+            err_output = e.output.decode().lower() if e.output else ""
+            # Если это сетевая ошибка GitHub, ждем и повторяем
+            if any(x in err_output for x in ["connection", "api.github.com", "timeout"]):
+                print(f"⏳ Сетевой лаг GitHub (попытка {attempt+1}/3)... Ждем 5 сек.")
                 time.sleep(5)
                 continue
-            # Если ошибка прав доступа или другая — не мучаем API
-            print(f"❌ Ошибка GH CLI: {error_msg}")
+            # Если ошибка другая (например, нет прав), выходим
+            print(f"❌ Ошибка GH CLI: {err_output[:100]}")
             break
-        except Exception as e:
-            print(f"⚠️ Непредвиденная ошибка при вызове GH: {e}")
-            break
-    return "[]" # Возвращаем пустой список, чтобы скрипт не упал
+    return "[]"
 
 def main():
     import subprocess
