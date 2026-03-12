@@ -120,6 +120,35 @@ def fetch_external_servers() -> list:
             print(f"❌ Ошибка загрузки {url}: {e}")
     return all_configs
 
+def safe_gh_call(cmd, token, repo):
+    """Безопасный вызов GitHub CLI с повторными попытками."""
+    import subprocess
+    import time
+    
+    # Пытаемся 3 раза, если это сетевая ошибка
+    for attempt in range(3):
+        try:
+            result = subprocess.check_output(
+                cmd, 
+                env={**os.environ, "GH_TOKEN": token},
+                stderr=subprocess.PIPE # Захватываем ошибки для анализа
+            ).decode()
+            return result
+        except subprocess.CalledProcessError as e:
+            error_msg = e.stderr.decode().lower() if e.stderr else ""
+            # Если это ошибка сети или API, ждем и пробуем снова
+            if "connection" in error_msg or "api.github.com" in error_msg or "timeout" in error_msg:
+                print(f"⚠️ Сбой сети GitHub (попытка {attempt+1}/3). Ждем 5 сек...")
+                time.sleep(5)
+                continue
+            # Если ошибка прав доступа или другая — не мучаем API
+            print(f"❌ Ошибка GH CLI: {error_msg}")
+            break
+        except Exception as e:
+            print(f"⚠️ Непредвиденная ошибка при вызове GH: {e}")
+            break
+    return "[]" # Возвращаем пустой список, чтобы скрипт не упал
+
 def main():
     import subprocess
     token = os.getenv("GH_TOKEN")
@@ -206,29 +235,46 @@ def main():
     all_lines = current_base + deferred_base + external_servers
 
     # 2. Проверяем галочки в GitHub Issue (если есть токен)
-    if token and repo: # Добавь проверку и на токен, и на репо
-        try:
-            # Ищем Issue с меткой 'control'
-            cmd = ['gh', 'issue', 'list', '--repo', repo, '--label', 'control', '--json', 'body,number', '--limit', '1']
-            issue_data = subprocess.check_output(
-                cmd, 
-                env={**os.environ, "GH_TOKEN": token},
-                stderr=subprocess.DEVNULL
-            ).decode()
-            
-            if issue_data and issue_data != "[]":
+    if token and repo:
+        # --- БЛОК 1: BLACKLIST (CONTROL) ---
+        print("🔍 Проверка черного списка в GitHub...")
+        cmd_control = ['gh', 'issue', 'list', '--repo', repo, '--label', 'control', '--json', 'body,number', '--limit', '1']
+        issue_data = safe_gh_call(cmd_control, token)
+        
+        if issue_data and issue_data != "[]":
+            try:
                 issue = json.loads(issue_data)[0]
-                # Находим все ссылки, помеченные [x]
                 checked = re.findall(r'- \[x\] (vless://[^\s]+)', issue['body'])
-                for s in checked:
-                    clean_s = s.split('#')[0] # Берем только саму ссылку
-                    blacklist.add(clean_s)
-                
-                # Сохраняем обновленный черный список в файл
-                with open('test1/blacklist.txt', 'w') as f:
-                    f.write("\n".join(list(blacklist)))
-        except Exception as e:
-            print(f"⚠️ Ошибка чтения галочек: {e}")
+                if checked:
+                    for s in checked:
+                        clean_s = s.split('#')[0].strip()
+                        blacklist.add(clean_s)
+                    with open('test1/blacklist.txt', 'w') as f:
+                        f.write("\n".join(list(blacklist)))
+                    print(f"🚫 Обновлено: {len(checked)} серверов в блэклисте.")
+            except Exception as e:
+                print(f"⚠️ Ошибка парсинга Issue 'control': {e}")
+
+        # --- БЛОК 2: PIN_CONTROL ---
+        print("🔍 Проверка новых закрепов...")
+        cmd_pin = ['gh', 'issue', 'list', '--repo', repo, '--label', 'pin_control', '--json', 'body', '--limit', '1']
+        pin_read = safe_gh_call(cmd_pin, token)
+        
+        if pin_read and pin_read != "[]":
+            try:
+                issue_pin = json.loads(pin_read)[0]
+                to_pin = re.findall(r'- \[x\] (vless://[^\s#\s]+)', issue_pin['body'])
+                if to_pin:
+                    # Дописываем только новые, чтобы не ломать твою систему закрепов
+                    with open('test1/pinned.txt', 'a', encoding='utf-8') as pf:
+                        for s in to_pin:
+                            base = s.split("#")[0].strip()
+                            if all(base != p.split("#")[0].strip() for p in pinned_list):
+                                pf.write(s.strip() + "\n")
+                                pinned_list.append(s.strip())
+                    print(f"💎 Добавлено {len(to_pin)} новых закрепов.")
+            except Exception as e:
+                print(f"⚠️ Ошибка парсинга Issue 'pin_control': {e}")
 
             pin_read = subprocess.check_output(['gh', 'issue', 'list', '--repo', repo, '--label', 'pin_control', '--json', 'body', '--limit', '1'], env={**os.environ, "GH_TOKEN": token}).decode()
             if pin_read and pin_read != "[]":
