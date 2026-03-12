@@ -96,6 +96,10 @@ def main_torturer():
 
     ranking_db = load_ranking()
     vetted_set = load_vetted() 
+    
+    print(f"📊 Всего в ranking.json: {len(ranking_db)} записей.")
+    print(f"🛡️ Уже в vetted.txt: {len(vetted_set)} записей.")
+
     if not ranking_db:
         print("📭 Рейтинг пуст, пытать некого.")
         return
@@ -111,7 +115,7 @@ def main_torturer():
             candidates.append((base, link))
 
     if not candidates:
-        print(f"⌛ Нет кандидатов (Ранг >= {THRESHOLD} или Ранг <= 0)...")
+        print(f"⌛ Нет подходящих кандидатов (нужен ранг >= {THRESHOLD} или <= 0). Завершаю работу.")
         return
 
     print(f"🔥 Инквизиция: Пытаем {len(candidates)} серверов в 5 потоков.")
@@ -120,6 +124,8 @@ def main_torturer():
 
     def run_torture(item):
         base, full_link = item
+        # Добавил принт начала процесса для каждого потока
+        print(f"⛓️  Начинаю пытку {base[:25]}...")
         success = torture_check(full_link)
         return base, full_link, success
 
@@ -147,17 +153,19 @@ def main_torturer():
                 else:
                     ranking_db[base]['rank'] = max(0, old_rank - 30)
                     ranking_db[base]['last_torture'] = "FAIL"
-                    print(f"❌ {base[:25]}... СЛОМАЛСЯ (Штраф -30).")
+                    print(f"❌ {base[:25]}... СЛОМАЛСЯ (Штраф -30, текущий ранг: {ranking_db[base]['rank']}).")
 
     # Удаляем "мертвецов"
-    for dead_base in dead_to_remove:
-        if dead_base in ranking_db:
-            del ranking_db[dead_base]
+    if dead_to_remove:
+        print(f"💀 Всего удалено из базы: {len(dead_to_remove)}")
+        for dead_base in dead_to_remove:
+            if dead_base in ranking_db:
+                del ranking_db[dead_base]
 
     # Сохраняем итоги
     with open(RANK_FILE, 'w', encoding='utf-8') as f:
         json.dump(ranking_db, f, ensure_ascii=False, indent=4)
-    print("💾 База данных обновлена.")
+    print("💾 База данных сохранена. Инквизиция окончена.")
 
 if __name__ == "__main__":
     main_torturer()
