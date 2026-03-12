@@ -7,13 +7,17 @@ INPUT_FILE = 'test1/1.txt'
 BLACKLIST_FILE = 'test1/blacklist.txt'
 PINNED_FILE = 'test1/pinned.txt'
 
+ALLOWED_COUNTRIES = {"US", "DE", "NL", "GB", "FR", "FI", "SG", "JP", "PL", "TR", "RU"}
+
 def get_country(host):
-    """Определяет страну сервера для Issues"""
+    """Определяет страну сервера (быстрая проверка)"""
     try:
-        # Используем быстрый и бесплатный API (без ключа)
-        resp = requests.get(f"http://ip-api.com/json/{host}?fields=countryCode", timeout=2)
+        # Ограничиваем таймаут, чтобы монитор не зависал на одном сервере
+        resp = requests.get(f"http://ip-api.com/json/{host}?fields=status,countryCode", timeout=2)
         if resp.status_code == 200:
-            return resp.json().get("countryCode", "??")
+            data = resp.json()
+            if data.get("status") == "success":
+                return data.get("countryCode", "??")
     except: pass
     return "??"
 
@@ -101,7 +105,6 @@ def main_monitor():
     # --- ЗАГРУЗКА РЕЙТИНГА ---
     ranking_db = {}
     RANK_FILE = 'test1/ranking.json'
-    VETTED_FILE = 'test1/vetted.txt'
     
     if os.path.exists(RANK_FILE):
         try:
@@ -109,10 +112,12 @@ def main_monitor():
                 ranking_db = json.load(f)
         except: ranking_db = {}
 
+    # Цикл работает 10 минут (600 сек)
     while time.time() - start_run < 600:
-        print(f"🕵️ Обход в {time.strftime('%H:%M:%S')}")
+        print(f"\n🕵️ ОБХОД В {time.strftime('%H:%M:%S')}")
         
         if not os.path.exists(WIFI_FILE):
+            print("📭 Файл wifi.txt не найден, жду...")
             time.sleep(60)
             continue
 
@@ -121,52 +126,68 @@ def main_monitor():
 
         pinned_in_wifi = [l for l in lines if is_pinned(l.split("#")[0].strip())]
         others_in_wifi = [l for l in lines if not is_pinned(l.split("#")[0].strip())]
+        
+        # Берем только первые 50 закрепов (лимит)
         pinned_in_wifi = pinned_in_wifi[:50]
         
         valid_others = []
         for link in others_in_wifi:
             base = link.split("#")[0].strip()
+            host, port = extract_host_port(base)
+            
+            if not host:
+                continue
+
+            print(f"🔍 Монитор {host[:20]}...", end=" ", flush=True)
+
             is_ok, status_code = deep_kill_check(link)
 
-            # Инициализируем данные, если их нет
+            # Инициализируем данные
             data = ranking_db.get(base, {"rank": 0, "fails": 0, "link": link, "geo": "??"})
-            if not isinstance(data, dict): data = {"rank": data, "fails": 0, "link": link}
+            if not isinstance(data, dict): data = {"rank": data, "fails": 0, "link": link, "geo": "??"}
             
             if is_ok:
-                data["rank"] += 1
-                data["fails"] = 0 # Обнуляем ошибки при успехе
-                # Получаем гео только если еще нет (чтобы не спамить API)
-                if data.get("geo") in ["??", None]:
-                    host, _ = extract_host_port(base)
+                # Проверка ГЕО (если еще нет или была ошибка)
+                if data.get("geo") in ["??", None, "?"]:
                     data["geo"] = get_country(host)
                 
+                # Фильтр стран в мониторе
+                if data["geo"] not in ALLOWED_COUNTRIES and data["geo"] != "??":
+                    print(f"🌍 МИМО ({data['geo']})")
+                    remove_from_all(base)
+                    continue
+
+                data["rank"] += 1
+                data["fails"] = 0 
                 ranking_db[base] = data
                 valid_others.append(link)
-                print(f"📈 {data['geo']} | {base[:15]}... Баллы: {data['rank']}")
+                print(f"✅ ГУД (Баллы: {data['rank']} | {data['geo']})")
             else:
                 data["fails"] += 1
-                # Желтая карточка: оставляем сервер в списке, пока не наберет 3 ошибки
                 if data["fails"] >= 3:
                     if base in ranking_db: del ranking_db[base]
                     remove_from_all(base)
                     if status_code == 404: add_to_blacklist(base)
-                    print(f"💀 БАН (3 промаха): {base[:20]}")
+                    print(f"💀 БАН (3 промаха)")
                 else:
                     ranking_db[base] = data
-                    valid_others.append(link) # Оставляем в списке, даем шанс
-                    print(f"⚠️ Осечка {data['fails']}/3: {base[:20]}")
+                    valid_others.append(link) # Даем шанс
+                    print(f"⚠️ ОСЕЧКА {data['fails']}/3 (Код: {status_code})")
 
-        # Сохраняем прогресс рейтинга после каждого круга
+        # Сохраняем прогресс рейтинга
         with open(RANK_FILE, 'w', encoding='utf-8') as f:
             json.dump(ranking_db, f, ensure_ascii=False, indent=4)
 
+        # Формируем итоговый список (до 200 серверов)
         final_list = pinned_in_wifi + valid_others
         final_list = final_list[:200] 
 
         with open(WIFI_FILE, 'w', encoding='utf-8') as f:
-            f.write("# profile-title: 🏴WIFI🏴\n\n" + "\n".join(final_list))
+            # Используем твой стандартный хедер
+            header = "# profile-title: 🏴WIFI🏴\n# profile-update-interval: 2\n\n"
+            f.write(header + "\n".join(final_list))
         
-        print(f"📊 Монитор: {len(pinned_in_wifi)} закрепов, {len(valid_others)} живых. Рейтинг обновлен.")
+        print(f"📊 ИТОГ: {len(pinned_in_wifi)} закрепов, {len(valid_others)} живых. Жду минуту...")
         time.sleep(60)
 
 if __name__ == "__main__":
