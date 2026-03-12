@@ -59,45 +59,41 @@ def remove_from_all(base_part):
                     f.writelines(new_lines)
                 print(f" 🧹 [УДАЛЕНИЕ] Сервер вырезан из {path}")
 
-def deep_kill_check(link, stress_config): # Добавили stress_config
+def deep_kill_check(link, stress_config):
     base_part = link.split("#")[0].strip()
     if is_pinned(base_part): return True, 200 
     
     host, port = extract_host_port(base_part)
     if not host or not port: return False, 404
 
-    headers = [
-        b"GET / HTTP/1.1\r\nHost: google.com\r\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0\r\n\r\n",
-        b"GET / HTTP/1.1\r\nHost: apple.com\r\nUser-Agent: Mozilla/5.0 (iPhone; CPU iPhone OS 17_3 like Mac OS X)\r\n\r\n"
-    ]
+    # Имитируем запрос как в основном чекере
+    request_data = f"GET / HTTP/1.1\r\nHost: {host}\r\nUser-Agent: Mozilla/5.0\r\n\r\n".encode()
 
     try:
         start = time.time()
-        # ИСПОЛЬЗУЕМ ТАЙМАУТ ИЗ JSON (например, 1.8s вместо 4.5s)
         with socket.create_connection((host, int(port)), timeout=stress_config["timeout"]) as s:
             if "security=tls" in link.lower() or "security=reality" in link.lower():
                 sni_match = re.search(r'sni=([^&?#]+)', link)
                 server_hostname = sni_match.group(1) if sni_match else host
+                
                 context = ssl.create_default_context()
                 context.check_hostname = False
                 context.verify_mode = ssl.CERT_NONE
                 
                 with context.wrap_socket(s, server_hostname=server_hostname) as ssock:
-                    ssock.sendall(headers[int(time.time()) % 2])
+                    ssock.sendall(request_data)
                     
-                    # Имитируем задержку DPI, если она включена в профиле
                     if stress_config["dpi_sleep"] > 0:
                         time.sleep(stress_config["dpi_sleep"])
                         
-                    ssock.settimeout(1.5) # Таймаут на получение данных
-                    data = ssock.recv(10)
+                    ssock.settimeout(2.0) # Ждем ответ строго
+                    data = ssock.recv(1)  # Пытаемся прочитать 1 байт
                     if not data: return False, 403
             else:
-                s.sendall(b'\x05\x01\x00') 
+                # Для обычных соединений
+                s.sendall(b'\x05\x01\x00')
+                if not s.recv(2): return False, 403
             
-            lat = (time.time() - start) * 1000
-            # Если латентность выше лимита из конфига — бракуем
-            if lat > (stress_config["timeout"] * 1000): return False, 1001 
             return True, 200
     except:
         return False, 404
@@ -168,16 +164,19 @@ def main_monitor():
             if not isinstance(data, dict): data = {"rank": data, "fails": 0, "link": link, "geo": "??"}
             
             if is_ok:
-                if data.get("geo") in ["??", None, "?"]:
+                # Определяем гео, если его еще нет
+                if data.get("geo") in ["??", None, ""]:
                     data["geo"] = get_country(host)
                 
-                # ЖЕСТКИЙ ФИЛЬТР: Удаляем сразу, не дожидаясь 3 осечек
-                if data["geo"] not in ALLOWED_COUNTRIES and data["geo"] != "??":
+                # ЖЕСТКИЙ ФИЛЬТР: Удаляем сразу, если страны нет в белом списке
+                # Убрал условие != "??", чтобы неопознанные тоже не висели в топе
+                if data["geo"] not in ALLOWED_COUNTRIES:
                     print(f"🌍 МИМО ({data['geo']}) -> МГНОВЕННОЕ УДАЛЕНИЕ")
                     if base in ranking_db: del ranking_db[base]
                     remove_from_all(base)
                     continue 
 
+                # Если всё ок — начисляем баллы
                 data["rank"] += 1
                 data["fails"] = 0 
                 ranking_db[base] = data
