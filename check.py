@@ -520,7 +520,7 @@ def main():
                 continue 
     
             if now - fail_time < GRACE_PERIOD:
-                country = get_country_code(host)
+                country = get_country_code(host, countries_cache)
                 if country in ALLOWED_COUNTRIES:
                     working_for_base.append(base_part)
                     new_history[base_part] = fail_time
