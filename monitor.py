@@ -1,4 +1,4 @@
-import socket, time, os, ssl, re, json, subprocess
+import socket, time, os, ssl, re, json, subprocess, requests
 
 # Файлы
 WIFI_FILE = 'kr/mob/wifi.txt'
@@ -6,6 +6,16 @@ DEFERRED_FILE = 'test1/deferred.txt'
 INPUT_FILE = 'test1/1.txt'
 BLACKLIST_FILE = 'test1/blacklist.txt'
 PINNED_FILE = 'test1/pinned.txt'
+
+def get_country(host):
+    """Определяет страну сервера для Issues"""
+    try:
+        # Используем быстрый и бесплатный API (без ключа)
+        resp = requests.get(f"http://ip-api.com/json/{host}?fields=countryCode", timeout=2)
+        if resp.status_code == 200:
+            return resp.json().get("countryCode", "??")
+    except: pass
+    return "??"
 
 def extract_host_port(link):
     match = re.search(r'@([\w\.-]+):(\d+)', link)
@@ -46,58 +56,44 @@ def remove_from_all(base_part):
 
 def deep_kill_check(link):
     base_part = link.split("#")[0].strip()
-    
-    # --- ИММУНИТЕТ ДЛЯ ЗАКРЕПОВ ---
-    if is_pinned(base_part): 
-        print(f"🛡️ [MONITOR] ЗАКРЕП ИГНОРИРУЕТСЯ: {base_part[:30]}...") 
-        return True, 200 
+    if is_pinned(base_part): return True, 200 
     
     host, port = extract_host_port(base_part)
     if not host or not port: return False, 404
 
-    # Пытаемся 3 раза, прежде чем вынести приговор
-    for attempt in range(3): 
-        try:
-            start = time.time()
-            # Увеличиваем таймаут на коннект до 4.5с, чтобы не резать "далекие" сервера
-            with socket.create_connection((host, int(port)), timeout=4.5) as s:
+    # Имитируем разные устройства (Anti-DPI)
+    headers = [
+        b"GET / HTTP/1.1\r\nHost: google.com\r\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0\r\n\r\n",
+        b"GET / HTTP/1.1\r\nHost: apple.com\r\nUser-Agent: Mozilla/5.0 (iPhone; CPU iPhone OS 17_3 like Mac OS X)\r\n\r\n"
+    ]
+
+    try:
+        start = time.time()
+        # Таймаут 4.5с как ты и просил
+        with socket.create_connection((host, int(port)), timeout=4.5) as s:
+            if "security=tls" in link.lower() or "security=reality" in link.lower():
+                sni_match = re.search(r'sni=([^&?#]+)', link)
+                server_hostname = sni_match.group(1) if sni_match else host
                 
-                if "security=tls" in link.lower() or "security=reality" in link.lower():
-                    # Пытаемся вытащить реальный SNI из ссылки
-                    sni_match = re.search(r'sni=([^&?#]+)', link)
-                    server_hostname = sni_match.group(1) if sni_match else host
-                    
-                    context = ssl.create_default_context()
-                    context.check_hostname = False
-                    context.verify_mode = ssl.CERT_NONE
-                    
-                    # Полноценная проверка TLS-рукопожатия
-                    with context.wrap_socket(s, server_hostname=server_hostname) as ssock:
-                        pass
-                else:
-                    # Для обычных соединений шлем проверочный байт
-                    s.sendall(b'\x05\x01\x00') 
+                context = ssl.create_default_context()
+                context.check_hostname = False
+                context.verify_mode = ssl.CERT_NONE
+                
+                with context.wrap_socket(s, server_hostname=server_hostname) as ssock:
+                    # ТЕСТ НА DPI: Шлем реальные данные и ждем ответа
+                    ssock.sendall(headers[int(time.time()) % 2])
+                    ssock.settimeout(2.0)
+                    data = ssock.recv(10) # Если получили хоть 1 байт — канал чист
+                    if not data: return False, 403 # Блокировка данных (DPI)
+            else:
+                s.sendall(b'\x05\x01\x00') 
             
             lat = (time.time() - start) * 1000
-            
-            # --- ПРОВЕРКА НА ТОРМОЗА ---
-            # 1500мс — золотая середина. И не лагает, и не режет лишнего.
-            if lat > 1500: 
-                return False, 1001 
-            
-            # Если дошли сюда — сервер живой и быстрый
+            if lat > 1500: return False, 1001 
             return True, 200
             
-        except (socket.timeout, ConnectionRefusedError, ssl.SSLError):
-            # Если это была не последняя попытка — ждем чуть-чуть и пробуем снова
-            if attempt < 2:
-                time.sleep(0.5)
-                continue
-            return False, 404
-        except Exception as e:
-            return False, 404
-            
-    return False, 404
+    except:
+        return False, 404
     
 def main_monitor():
     start_run = time.time()
@@ -131,36 +127,34 @@ def main_monitor():
         for link in others_in_wifi:
             base = link.split("#")[0].strip()
             is_ok, status_code = deep_kill_check(link)
-            
-            if is_ok:
-                valid_others.append(link)
 
-                # --- БЕЗОПАСНОЕ ПОЛУЧЕНИЕ РАНГА ---
-                old_data = ranking_db.get(base, 0)
-                if isinstance(old_data, dict):
-                    old_rank = old_data.get("rank", 0)
-                else:
-                    old_rank = old_data # Если там было просто число
+            # Инициализируем данные, если их нет
+            data = ranking_db.get(base, {"rank": 0, "fails": 0, "link": link, "geo": "??"})
+            if not isinstance(data, dict): data = {"rank": data, "fails": 0, "link": link}
+            
+            iif is_ok:
+                data["rank"] += 1
+                data["fails"] = 0 # Обнуляем ошибки при успехе
+                # Получаем гео только если еще нет (чтобы не спамить API)
+                if data.get("geo") in ["??", None]:
+                    host, _ = extract_host_port(base)
+                    data["geo"] = get_country(host)
                 
-                new_rank = old_rank + 1
-                
-                # --- СОХРАНЕНИЕ В ПРАВИЛЬНОМ ФОРМАТЕ ---
-                ranking_db[base] = {"rank": new_rank, "link": link}
-                
-                print(f"📈 {base[:20]}... живет. Баллы: {new_rank}")
-                
+                ranking_db[base] = data
+                valid_others.append(link)
+                print(f"📈 {data['geo']} | {base[:15]}... Баллы: {data['rank']}")
             else:
-                # Если сервер упал — удаляем его из рейтинга совсем
-                if base in ranking_db:
-                    del ranking_db[base]
-                remove_from_all(base)
-                print(f"🧊 {base[:20]}... упал. Рейтинг обнулен.")
-                
-                if status_code == 404:
-                    add_to_blacklist(base)
-                    print(f"💀 БАН (Н/Д): {base[:30]}")
-                elif status_code == 1001:
-                    print(f"🐢 ТОРМОЗ (>1000ms): {base[:30]}")
+                data["fails"] += 1
+                # Желтая карточка: оставляем сервер в списке, пока не наберет 3 ошибки
+                if data["fails"] >= 3:
+                    if base in ranking_db: del ranking_db[base]
+                    remove_from_all(base)
+                    if status_code == 404: add_to_blacklist(base)
+                    print(f"💀 БАН (3 промаха): {base[:20]}")
+                else:
+                    ranking_db[base] = data
+                    valid_others.append(link) # Оставляем в списке, даем шанс
+                    print(f"⚠️ Осечка {data['fails']}/3: {base[:20]}")
 
         # Сохраняем прогресс рейтинга после каждого круга
         with open(RANK_FILE, 'w', encoding='utf-8') as f:
