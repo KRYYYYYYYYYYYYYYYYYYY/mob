@@ -406,24 +406,26 @@ def main():
             counter += 1
             continue
             
-        # --- ФИЛЬТРЫ ---
+        # --- ФИЛЬТРЫ И ПРОВЕРКИ ---
         if base_part in blacklist:
+            print(f"🚫 Пропуск: Сервер в черном списке ({host})")
             continue
-        if not re.search(r'[a-f0-9\-]{36}@', base_part):
+
+        if "type=ws" in base_part.lower() or "type=grpc" in base_part.lower():
+            print(f"📡 Пропуск: Протокол WS/gRPC временно отключен ({host})")
             continue 
 
-        # --- ФИЛЬТРЫ ---
-        if base_part in blacklist:
-            continue
-        # НОВОЕ: Блокируем Websocket и gRPC, если сеть сильно глушится
-        if "type=ws" in base_part.lower() or "type=grpc" in base_part.lower():
-            continue 
         if not re.search(r'[a-f0-9\-]{36}@', base_part):
+            print(f"❓ Пропуск: Неверный формат UUID или ссылки ({host if host else 'unknown'})")
             continue
     
         endpoint, host, port = extract_host_port(base_part)
         if not endpoint or not host or not port:
+            print(f"❌ Ошибка: Не удалось извлечь хост/порт из ссылки")
             continue
+
+        # --- ПРОВЕРКА СОЕДИНЕНИЯ ---
+        print(f"🔍 Тестирую: {host}...", end=" ", flush=True) # Печатаем без переноса строки
 
         # --- ЭТАП 1: РЕЗОЛВИНГ И ПРОВЕРКА ПОД "ГЛУШИЛКУ" ---
         resolved_ip = None
@@ -484,6 +486,7 @@ def main():
     
             country = get_country_code(host, countries_cache)
             if country not in ALLOWED_COUNTRIES:
+                print(f"🌍 МИМО: Страна {country} не в белом списке ({host})")
                 continue
     
             working_for_base.append(base_part)
@@ -502,6 +505,7 @@ def main():
     
         # --- ЭТАП 3: ЕСЛИ СЕРВЕР НЕ ОТВЕЧАЕТ ---
         else:
+            print(f"💀 МЕРТВ: Не удалось подключиться или таймаут ({host})")
             if base_part in ranking_db:
                 del ranking_db[base_part]
             if base_part in vetted_list:
