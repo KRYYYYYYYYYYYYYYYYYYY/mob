@@ -13,7 +13,8 @@ jobs:
   check:
     runs-on: ubuntu-latest
     permissions:
-      contents: write       # Даем права на запись в репозиторий
+      contents: write
+      issues: read    # <--- ДОБАВИТЬ ЭТО (для чтения команд из Issue)
 
     steps:
       - name: 📂 Checkout Code
@@ -32,7 +33,10 @@ jobs:
           python -m pip install psutil
 
       - name: ⛓️ Run Torturer
-        run: python torture_bot.py # Новый скрипт "Инквизитор"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: python torture_bot.py
 
       - name: 💾 Save Results
         run: |
