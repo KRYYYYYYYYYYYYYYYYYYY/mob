@@ -392,12 +392,21 @@ def main():
             continue
         if not re.search(r'[a-f0-9\-]{36}@', base_part):
             continue 
+
+        # --- ФИЛЬТРЫ ---
+        if base_part in blacklist:
+            continue
+        # НОВОЕ: Блокируем Websocket и gRPC, если сеть сильно глушится
+        if "type=ws" in base_part.lower() or "type=grpc" in base_part.lower():
+            continue 
+        if not re.search(r'[a-f0-9\-]{36}@', base_part):
+            continue
     
         endpoint, host, port = extract_host_port(base_part)
         if not endpoint or not host or not port:
             continue
 
-        # --- ЭТАП 1: ХАРД-РЕЗОЛВИНГ + ИМИТАЦИЯ ГЛУШЕНИЯ ---
+        #--- ЭТАП 1: ХАРД-РЕЗОЛВИНГ + ИМИТАЦИЯ ГЛУШЕНИЯ ---
         resolved_ip = None
         is_alive = False
         try:
@@ -405,7 +414,7 @@ def main():
             if resolved_ip in seen_ips:
                 continue 
 
-            # Используем значение из нашего stress_config
+            # Соединяемся
             with socket.create_connection((resolved_ip, int(port)), timeout=stress_config["timeout"]) as sock:
                 use_tls = "security=tls" in base_part.lower() or "security=reality" in base_part.lower()
                 
@@ -415,31 +424,30 @@ def main():
                     context.verify_mode = ssl.CERT_NONE
                     
                     with context.wrap_socket(sock, server_hostname=host) as ssock:
-                        # Если включена имитация задержки DPI
+                        # А) Проверка на "молчаливое глушение": отправляем HTTP-запрос через туннель
+                        # ТСПУ часто рвет связь именно на этом моменте
+                        ssock.sendall(f"GET / HTTP/1.1\r\nHost: {host}\r\n\r\n".encode())
+                        
+                        # Б) Даем DPI время (имитация задержки мобильной сети)
                         if stress_config["dpi_sleep"] > 0:
-                            # 1. Имитируем тяжелый пакет данных (500 байт), проверяем MTU
-                            payload = b'\x16\x03\x03' + b'\x00' * 500 
-                            try:
-                                ssock.send(payload)
-                                
-                                # 2. Даем время DPI отреагировать
-                                time.sleep(stress_config["dpi_sleep"])
-                                
-                                # 3. Пробуем прочитать байт. Если соединение разорвано (RST) — вылетит ошибка
-                                ssock.settimeout(1.2)
-                                ssock.recv(1)
-                            except (socket.timeout, socket.error):
-                                # Таймаут здесь — это хорошо (сервер просто не ответил на мусор)
-                                # А вот socket.error (Connection Reset) — это признак блокировки
-                                pass
+                            time.sleep(stress_config["dpi_sleep"])
+                        
+                        # В) Пробуем прочитать ответ. Если сервер живой и не заглушен — он что-то ответит
+                        ssock.settimeout(1.5)
+                        response = ssock.recv(1) # Читаем хотя бы 1 байт
+                        if response:
+                            is_alive = True
                 else:
-                    sock.sendall(b'\x16\x03\x01\x00\x00')
+                    # Для обычных соединений (SOCKS5/Shadowsocks)
+                    sock.sendall(b'\x05\x01\x00')
+                    if sock.recv(2):
+                        is_alive = True
             
-            is_alive = True
-            seen_ips.add(resolved_ip) 
+            if is_alive:
+                seen_ips.add(resolved_ip) 
 
         except (socket.timeout, ConnectionResetError, ssl.SSLError, socket.error):
-            # Сервер не прошел имитацию мобильной "глушилки"
+            # Если словили Reset или Timeout после отправки данных — сервер "мусорный" для мобилы
             is_alive = False
 
         # --- ЭТАП 2: ЕСЛИ СЕРВЕР РАБОТАЕТ ---
