@@ -5,6 +5,7 @@ import threading
 
 # Настройки путей
 RANK_FILE = 'test1/ranking.json'
+PINNED_FILE = 'test1/pinned.txt'
 VETTED_FILE = 'test1/vetted.txt'
 THRESHOLD = 50 
 
@@ -82,6 +83,35 @@ def load_vetted():
             return {line.split('#')[0].strip() for line in f if 'vless://' in line}
     except: return set()
 
+def process_pin_commands(token, repo, vetted_list):
+    if not token or not repo: return vetted_list
+    try:
+        cmd = ['gh', 'issue', 'list', '--repo', repo, '--label', 'pin_control', '--json', 'body', '--limit', '1']
+        pin_read = subprocess.check_output(cmd, env={**os.environ, "GH_TOKEN": token}).decode()
+        if pin_read and pin_read != "[]":
+            issue_data = json.loads(pin_read)[0]
+            to_pin = re.findall(r'- \[x\] (vless://[^\s#\s]+)', issue_data['body'])
+            if to_pin:
+                added_bases = set()
+                current_p = []
+                if os.path.exists(PINNED_FILE):
+                    with open(PINNED_FILE, 'r', encoding='utf-8') as f:
+                        current_p = [l.strip().split('#')[0] for l in f]
+                with open(PINNED_FILE, 'a', encoding='utf-8') as pf:
+                    for link in to_pin:
+                        base = link.strip()
+                        if base not in current_p:
+                            pf.write(base + "\n")
+                            added_bases.add(base)
+                if added_bases:
+                    new_vetted = [v for v in vetted_list if v.split('#')[0].strip() not in added_bases]
+                    with open(VETTED_FILE, 'w', encoding='utf-8') as vf:
+                        vf.write("\n".join(new_vetted) + ("\n" if new_vetted else ""))
+                    return new_vetted
+    except: pass
+    return vetted_list
+
+
 def main_torturer():
     # --- ЗАЩИТА ОТ ДУБЛИКАТОВ ПРОЦЕССА ---
     current_pid = os.getpid()
@@ -94,11 +124,34 @@ def main_torturer():
                     return
         except (psutil.NoSuchProcess, psutil.AccessDenied): continue
 
+    token = os.getenv("GH_TOKEN")
+    repo = os.getenv("GH_REPO")
+
+    # Сначала загружаем сырой список из vetted.txt
+    if os.path.exists(VETTED_FILE):
+        with open(VETTED_FILE, 'r', encoding='utf-8') as f:
+            vetted_list = [l.strip() for l in f if 'vless://' in l]
+    else: 
+        vetted_list = []
+
+    # --- ВЫЗОВ СИСТЕМЫ УПРАВЛЕНИЯ ЧЕРЕЗ GITHUB ---
+    # Она перенесет отмеченные в Issue ссылки в pinned.txt и удалит их из vetted_list
+    vetted_list = process_pin_commands(token, repo, vetted_list)
+
     ranking_db = load_ranking()
-    vetted_set = load_vetted() 
+    
+    # Теперь создаем множество для быстрой фильтрации из обновленного списка
+    vetted_set = {v.split('#')[0].strip() for v in vetted_list}
+    
+    # --- НОВАЯ СИСТЕМА: ЗАГРУЗКА ЗАКРЕПОВ ---
+    pinned_set = set()
+    if os.path.exists(PINNED_FILE):
+        with open(PINNED_FILE, 'r', encoding='utf-8') as f:
+            pinned_set = {l.split('#')[0].strip() for l in f if 'vless://' in l}
     
     print(f"📊 Всего в ranking.json: {len(ranking_db)} записей.")
     print(f"🛡️ Уже в vetted.txt: {len(vetted_set)} записей.")
+    print(f"📌 В закрепах (pinned.txt): {len(pinned_set)} записей.")
 
     if not ranking_db:
         print("📭 Рейтинг пуст, пытать некого.")
@@ -110,8 +163,8 @@ def main_torturer():
         rank = data.get("rank", 0) if isinstance(data, dict) else data
         link = data.get("link", base) if isinstance(data, dict) else base
         
-        # Пытаем если высокий ранг ИЛИ если он уже 0 (проверка на удаление)
-        if (rank >= THRESHOLD or rank <= 0) and base not in vetted_set:
+        # --- НОВАЯ СИСТЕМА: УСЛОВИЕ ОТБОРА (base not in pinned_set) ---
+        if (rank >= THRESHOLD or rank <= 0) and base not in vetted_set and base not in pinned_set:
             candidates.append((base, link))
 
     if not candidates:
@@ -124,7 +177,6 @@ def main_torturer():
 
     def run_torture(item):
         base, full_link = item
-        # Добавил принт начала процесса для каждого потока
         print(f"⛓️  Начинаю пытку {base[:25]}...")
         success = torture_check(full_link)
         return base, full_link, success
@@ -146,7 +198,6 @@ def main_torturer():
         else:
             if isinstance(ranking_db.get(base), dict):
                 old_rank = ranking_db[base].get('rank', 0)
-                # ЛОГИКА УДАЛЕНИЯ: Если он уже был 0 или меньше и снова упал - удаляем
                 if old_rank <= 0:
                     dead_to_remove.append(base)
                     print(f"🧹 {base[:25]}... окончательно удален (стабильный 0).")
@@ -155,17 +206,15 @@ def main_torturer():
                     ranking_db[base]['last_torture'] = "FAIL"
                     print(f"❌ {base[:25]}... СЛОМАЛСЯ (Штраф -30, текущий ранг: {ranking_db[base]['rank']}).")
 
-    # Удаляем "мертвецов"
     if dead_to_remove:
         print(f"💀 Всего удалено из базы: {len(dead_to_remove)}")
         for dead_base in dead_to_remove:
             if dead_base in ranking_db:
                 del ranking_db[dead_base]
 
-    # Сохраняем итоги
     with open(RANK_FILE, 'w', encoding='utf-8') as f:
         json.dump(ranking_db, f, ensure_ascii=False, indent=4)
     print("💾 База данных сохранена. Инквизиция окончена.")
-
+    
 if __name__ == "__main__":
     main_torturer()
