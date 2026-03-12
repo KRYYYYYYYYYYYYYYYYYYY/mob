@@ -46,39 +46,44 @@ def torture_check(link):
     sni = re.search(r"sni=([^&?#]+)", link)
     server_hostname = sni.group(1) if sni else host
 
-    # Увеличиваем до 20 попыток. 
-    # При паузе в 60 сек один сервер будет проверяться ~20 минут.
-    total_attempts = 20 
+    # Список разных User-Agent для маскировки под разные устройства
+    user_agents = [
+        b"GET / HTTP/1.1\r\nHost: google.com\r\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36\r\n\r\n",
+        b"GET / HTTP/1.1\r\nHost: bing.com\r\nUser-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/121.0.0.0\r\n\r\n",
+        b"GET / HTTP/1.1\r\nHost: apple.com\r\nUser-Agent: Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) Safari/605.1.15\r\n\r\n"
+    ]
+
+    total_attempts = 20  
     
     for i in range(total_attempts):
         try:
-            # Увеличиваем таймаут до 7 сек, чтобы не резать за секундный лаг
+            # Таймаут 7 сек — даем шанс в условиях жестких помех
             with socket.create_connection((host, port), timeout=7) as s:
                 if is_tls:
                     ctx = build_tls_context()
-                    with ctx.wrap_socket(s, server_hostname=server_hostname):
-                        pass
+                    with ctx.wrap_socket(s, server_hostname=server_hostname) as ssock:
+                        # ТЕСТ НА DPI: Каждую 5-ю попытку имитируем реальный запрос данных
+                        if (i + 1) % 5 == 0:
+                            payload = user_agents[i % len(user_agents)]
+                            ssock.sendall(payload)
+                            ssock.settimeout(3) # Ждем данные чуть дольше
+                            response = ssock.recv(20) # Ждем хотя бы заголовков ответа
+                            if not response:
+                                raise Exception("DPI Block: Соединение есть, но данные не идут")
                 else:
-                    # Посылаем байтики начала SOCKS5
                     s.sendall(b'\x05\x01\x00')
-                    # Даем серверу 2 секунды на ответ
-                    s.settimeout(2)
-                    try:
-                        resp = s.recv(2)
-                        if not resp:
-                            raise Exception("Пустой ответ (шифрование/прокси не подтверждены)")
-                    except socket.timeout:
-                        # Некоторые прокси молчат, пока не придет полный запрос.
-                        # Это нормально, но если хочешь жесткости — можно бросать ошибку здесь.
-                        pass
+                    s.settimeout(3)
+                    resp = s.recv(2)
+                    if not resp:
+                        raise Exception("Proxy Error: Нет ответа от протокола")
 
-            # Выводим прогресс, чтобы логи GitHub не выглядели мертвыми
+            # Каждые 5 попыток пишем лог
             if (i + 1) % 5 == 0:
-                print(f"   ⛓️  Прогресс пытки: {i + 1}/{total_attempts} пройден")
+                print(f"    ⛓️  Пытка: {i + 1}/{total_attempts} | Трафик проходит успешно")
 
-            # ПАУЗА — ГЛАВНЫЙ ИНСТРУМЕНТ. 
-            # 60 секунд между попытками заставит бота мучать сервер 20 минут.
-            time.sleep(60) 
+            # Если это не последняя попытка — отдыхаем
+            if i < total_attempts - 1:
+                time.sleep(60) 
 
         except Exception as e:
             print(f"❌ [ПРОВАЛ НА {i+1} ПОПЫТКЕ] Ошибка: {e}")
@@ -132,15 +137,18 @@ def main_torturer():
         print(f"⛓️ Пытаем {base[:30]}...")
         
         if torture_check(full_link):
+            # Добавляем инфо о прохождении пыток в ссылку для vetted.txt (по желанию)
+            vetted_entry = f"{full_link} # Rank: ELITE | {time.strftime('%Y-%m-%d')}"
             with open(VETTED_FILE, 'a', encoding='utf-8') as f:
-                f.write(full_link + "\n")
+                f.write(vetted_entry + "\n")
             
-            # ВАЖНО: После успеха сбрасываем балл, чтобы не пытать его завтра снова
-            # Или вообще удаляем из рейтинга, т.к. он теперь в элите
-            ranking_db[base]['rank'] = 0 
+            # В рейтинге обнуляем ранг, но помечаем, что пытки пройдены успешно
+            ranking_db[base]['rank'] = 0
+            ranking_db[base]['last_torture'] = "PASS"
             print(f"🎖️ СЕРВЕР ПРОШЕЛ ПЫТКИ: Повышен до VETTED!")
         else:
             ranking_db[base]['rank'] = max(0, ranking_db[base]['rank'] - 30)
+            ranking_db[base]['last_torture'] = "FAIL"
             print(f"❌ СЛОМАЛСЯ НА ПЫТКАХ. Штраф -30 баллов.")
 
     # Сохраняем итоги инквизиции
