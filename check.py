@@ -126,19 +126,35 @@ def get_country_code(host, cache):
     return "Unknown"
 
 def fetch_external_servers() -> list:
-    # Если вдруг в переменной осталась просто строка, превращаем её в список для совместимости
-    urls = [EXTERNAL_SOURCE_URL] if isinstance(EXTERNAL_SOURCE_URL, str) else EXTERNAL_SOURCE_URL
+    # Приводим к списку в любом случае
+    urls = EXTERNAL_SOURCE_URL if isinstance(EXTERNAL_SOURCE_URL, list) else [EXTERNAL_SOURCE_URL]
     
     all_configs = []
+    print(f"🌐 Начинаю сбор из {len(urls)} источников...")
+
     for url in urls:
-        if not url.strip(): continue
+        url = url.strip()
+        if not url: continue
+        
         try:
-            print(f"📥 Загрузка из {url}")
-            with urllib.request.urlopen(url, timeout=8) as response:
-                configs = response.read().decode("utf-8").splitlines()
-                all_configs.extend(configs)
+            # Увеличиваем таймаут и добавляем User-Agent, чтобы GitHub не блокировал
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req, timeout=15) as response:
+                content = response.read().decode("utf-8")
+                configs = [line.strip() for line in content.splitlines() if "vless://" in line]
+                
+                if configs:
+                    all_configs.extend(configs)
+                    print(f"✅ {url.split('/')[-1]}: Найдено {len(configs)} шт.")
+                else:
+                    print(f"⚠️ {url.split('/')[-1]}: Файл пуст или нет vless")
+                    
         except Exception as e:
-            print(f"❌ Ошибка загрузки {url}: {e}")
+            # Если один URL упал, просто пишем ошибку и идем дальше
+            print(f"❌ Ошибка на источнике {url.split('/')[-1]}: {e}")
+            continue 
+
+    print(f"📊 Итого загружено извне: {len(all_configs)} потенциальных серверов")
     return all_configs
 
 def safe_gh_call(cmd, token):
@@ -257,7 +273,17 @@ def main():
     
     # СОБИРАЕМ ОЧЕРЕДЬ: База + Отложенные + Новые
     # Это гарантирует, что "старички" из очереди проверятся раньше новичков
-    all_lines = current_base + deferred_base + external_servers
+    all_lines = pinned_list + deferred_base + external_servers + current_base
+
+    # Убираем дубликаты, сохраняя этот новый приоритетный порядок
+    unique_links = []
+    seen_parts = set()
+    for l in all_lines:
+        if not l or "vless://" not in l: continue
+        base = l.split("#")[0].strip()
+        if base not in seen_parts:
+            unique_links.append(l)
+            seen_parts.add(base)
 
     # --- БЛОК ЧТЕНИЯ КОМАНД ИЗ GITHUB (В начале main) ---
     if token and repo:
@@ -334,19 +360,6 @@ def main():
         try:
             with open(STATUS_FILE, "r") as f: history = json.load(f)
         except: history = {}
-
-# --- ИЗМЕНЕНИЕ ТУТ: МЕНЯЕМ ПОРЯДОК ОЧЕРЕДИ ---
-    # Сначала отложенные с прошлого раза, потом новые, потом старые из базы
-    all_lines = pinned_list + deferred_base + external_servers + current_base
-    
-    # Убираем дубликаты, сохраняя этот новый приоритетный порядок
-    unique_links = []
-    seen_parts = set()
-    for l in all_lines:
-        base = l.split("#")[0].strip()
-        if base not in seen_parts and "vless://" in l:
-            unique_links.append(l)
-            seen_parts.add(base)
     
     working_for_base = []
     working_for_sub = []
