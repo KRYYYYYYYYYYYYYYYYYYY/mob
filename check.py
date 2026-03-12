@@ -297,8 +297,8 @@ def main():
                     pinned_list = [s for s in pinned_list if s not in to_unpin]
                     with open('test1/pinned.txt', 'w', encoding='utf-8') as pf:
                         pf.write("\n".join(pinned_list) + "\n")
-        except Exception as e:
-            print(f"⚠️ Ошибка чтения команд: {e}")
+            except Exception as e:
+                print(f"⚠️ Ошибка чтения команд: {e}")
 
     # 1. Загрузка базы и истории
     current_base = []
