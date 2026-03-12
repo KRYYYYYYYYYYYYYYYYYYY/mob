@@ -1,4 +1,5 @@
 import socket, time, os, ssl, re, json
+from concurrent.futures import ThreadPoolExecutor
 
 # Те же настройки путей
 RANK_FILE = 'test1/ranking.json'
@@ -104,6 +105,15 @@ def load_vetted():
         # Берем только базу (до решетки), чтобы сравнивать уникальность
         return {line.split('#')[0].strip() for line in f if 'vless://' in line}
 
+Смотри, чтобы не ломать твою структуру, тебе нужно сделать три шага: добавить импорт, вставить вспомогательную функцию и заменить цикл for на блок ThreadPoolExecutor.
+
+Вот готовый код твоей функции main_torturer с внедренной параллельностью (на 5 потоков):
+
+1. В самый верх файла добавь:
+Python
+from concurrent.futures import ThreadPoolExecutor
+2. Замени свою функцию на эту:
+Python
 def main_torturer():
     if not os.path.exists(RANK_FILE):
         print("📭 Рейтинг пуст, пытать некого.")
@@ -115,15 +125,13 @@ def main_torturer():
     # Отбираем кандидатов
     candidates = []
     for base, data in ranking_db.items():
-        # 1. Определяем ранг
         if isinstance(data, dict):
             rank = data.get("rank", 0)
-            link = data.get("link", base) # Берем ссылку из словаря или саму базу
+            link = data.get("link", base)
         else:
-            rank = data  # Если там просто число
-            link = base  # Если данных нет, сама ссылка и есть ключ (base)
+            rank = data
+            link = base
 
-        # 2. Проверяем порог
         if rank >= THRESHOLD and base not in vetted_set:
             candidates.append((base, link))
 
@@ -131,25 +139,37 @@ def main_torturer():
         print(f"⌛ Пока нет кандидатов с баллом >= {THRESHOLD}...")
         return
 
-    print(f"🔥 Инквизиция начинается! На проверке {len(candidates)} кандидатов.")
+    print(f"🔥 Инквизиция начинается! Пытаем сразу 5 серверов (всего: {len(candidates)})")
 
-    for base, full_link in candidates:
-        print(f"⛓️ Пытаем {base[:30]}...")
-        
-        if torture_check(full_link):
-            # Добавляем инфо о прохождении пыток в ссылку для vetted.txt (по желанию)
+    # --- НОВАЯ ЛОГИКА ПАРАЛЛЕЛЬНОСТИ ---
+    
+    def run_torture(item):
+        """Вспомогательная функция для одного потока"""
+        base, full_link = item
+        print(f"⛓️ Запуск пытки: {base[:30]}...")
+        success = torture_check(full_link)
+        return base, full_link, success
+
+    # Запускаем проверку параллельно
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        results = list(executor.map(run_torture, candidates))
+
+    # Обрабатываем результаты после того, как ВСЕ закончили
+    for base, full_link, success in results:
+        if success:
             vetted_entry = f"{full_link} # Rank: ELITE | {time.strftime('%Y-%m-%d')}"
             with open(VETTED_FILE, 'a', encoding='utf-8') as f:
                 f.write(vetted_entry + "\n")
             
-            # В рейтинге обнуляем ранг, но помечаем, что пытки пройдены успешно
-            ranking_db[base]['rank'] = 0
-            ranking_db[base]['last_torture'] = "PASS"
-            print(f"🎖️ СЕРВЕР ПРОШЕЛ ПЫТКИ: Повышен до VETTED!")
+            if isinstance(ranking_db.get(base), dict):
+                ranking_db[base]['rank'] = 0
+                ranking_db[base]['last_torture'] = "PASS"
+            print(f"🎖️ {base[:30]} ПРОШЕЛ ПЫТКИ!")
         else:
-            ranking_db[base]['rank'] = max(0, ranking_db[base]['rank'] - 30)
-            ranking_db[base]['last_torture'] = "FAIL"
-            print(f"❌ СЛОМАЛСЯ НА ПЫТКАХ. Штраф -30 баллов.")
+            if isinstance(ranking_db.get(base), dict):
+                ranking_db[base]['rank'] = max(0, ranking_db[base]['rank'] - 30)
+                ranking_db[base]['last_torture'] = "FAIL"
+            print(f"❌ {base[:30]} СЛОМАЛСЯ.")
 
     # Сохраняем итоги инквизиции
     with open(RANK_FILE, 'w', encoding='utf-8') as f:
