@@ -288,7 +288,7 @@ def main():
                                 pf.write(s.strip() + "\n")
                                 pinned_list.append(s.strip())
 
-            # ЧИТАЕМ ГАЛОЧКИ ДЛЯ РАЗЗАКРЕПЛЕНИЯ (unpin_control)
+        try:  
             unpin_read = subprocess.check_output(['gh', 'issue', 'list', '--repo', repo, '--label', 'unpin_control', '--json', 'body', '--limit', '1'], env={**os.environ, "GH_TOKEN": token}).decode()
             if unpin_read and unpin_read != "[]":
                 issue_unp = json.loads(unpin_read)[0]
@@ -297,8 +297,8 @@ def main():
                     pinned_list = [s for s in pinned_list if s not in to_unpin]
                     with open('test1/pinned.txt', 'w', encoding='utf-8') as pf:
                         pf.write("\n".join(pinned_list) + "\n")
-            except Exception as e:
-                print(f"⚠️ Ошибка чтения команд: {e}")
+        except Exception as e:
+            print(f"⚠️ Ошибка чтения команд: {e}")
 
     # 1. Загрузка базы и истории
     current_base = []
