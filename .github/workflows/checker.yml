@@ -12,9 +12,10 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 360  # Даем инквизитору 6 часов (максимум для GitHub)
     permissions:
       contents: write
-      issues: read    # <--- ДОБАВИТЬ ЭТО (для чтения команд из Issue)
+      issues: read
 
     steps:
       - name: 📂 Checkout Code
