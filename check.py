@@ -29,7 +29,7 @@ HEADER = """# profile-title: 🏴WIFI🏴
 
 """
 
-ALLOWED_COUNTRIES = {"US", "DE", "NL", "GB", "FR", "FI", "SG", "JP", "PL", "TR"}
+ALLOWED_COUNTRIES = {"US", "DE", "NL", "GB", "FR", "FI", "SG", "JP", "PL", "TR", "RU"}
 
 def rebuild_link_name(link: str, new_name: str) -> str:
     base, _, fragment = link.partition("#")
