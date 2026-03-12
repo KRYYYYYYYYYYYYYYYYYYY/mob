@@ -149,6 +149,14 @@ def main():
     import subprocess
     token = os.getenv("GH_TOKEN")
     repo = os.getenv("GITHUB_REPOSITORY")
+
+    # --- ЗАГРУЗКА КЭША СТРАН (важно для get_country_code) ---
+    countries_cache = {}
+    if os.path.exists(CACHE_FILE):
+        try:
+            with open(CACHE_FILE, 'r') as f: countries_cache = json.load(f)
+        except: countries_cache = {}
+    
     # --- НАСТРОЙКИ СТРЕСС-ТЕСТА (ИМИТАЦИЯ ГЛУШЕНИЯ) ---
     stress_config = {
         "timeout": 2.5,
@@ -230,38 +238,34 @@ def main():
     # Это гарантирует, что "старички" из очереди проверятся раньше новичков
     all_lines = current_base + deferred_base + external_servers
 
-    # 2. Проверяем галочки в GitHub Issue (если есть токен)
+    # --- БЛОК ЧТЕНИЯ КОМАНД ИЗ GITHUB (В начале main) ---
     if token and repo:
-        # --- БЛОК 1: BLACKLIST (CONTROL) ---
-        print("🔍 Проверка черного списка в GitHub...")
-        cmd_control = ['gh', 'issue', 'list', '--repo', repo, '--label', 'control', '--json', 'body,number', '--limit', '1']
-        issue_data = safe_gh_call(cmd_control, token)
-        
-        if issue_data and issue_data != "[]":
-            try:
-                issue = json.loads(issue_data)[0]
-                checked = re.findall(r'- \[x\] (vless://[^\s]+)', issue['body'])
+        # 1. ЧЕРНЫЙ СПИСОК (CONTROL)
+        try:
+            print("🔍 Проверка черного списка в GitHub...")
+            cmd_control = ['gh', 'issue', 'list', '--repo', repo, '--label', 'control', '--json', 'body', '--limit', '1']
+            out = safe_gh_call(cmd_control, token)
+            data = json.loads(out)
+            if data:
+                checked = re.findall(r'- \[x\] (vless://[^\s]+)', data[0]['body'])
                 if checked:
                     for s in checked:
-                        clean_s = s.split('#')[0].strip()
-                        blacklist.add(clean_s)
+                        blacklist.add(s.split('#')[0].strip())
                     with open('test1/blacklist.txt', 'w') as f:
                         f.write("\n".join(list(blacklist)))
                     print(f"🚫 Обновлено: {len(checked)} серверов в блэклисте.")
-            except Exception as e:
-                print(f"⚠️ Ошибка парсинга Issue 'control': {e}")
+        except Exception as e:
+            print(f"⚠️ Ошибка Blacklist: {e}")
 
-        # --- БЛОК 2: PIN_CONTROL ---
-        print("🔍 Проверка новых закрепов...")
-        cmd_pin = ['gh', 'issue', 'list', '--repo', repo, '--label', 'pin_control', '--json', 'body', '--limit', '1']
-        pin_read = safe_gh_call(cmd_pin, token)
-        
-        if pin_read and pin_read != "[]":
-            try:
-                issue_pin = json.loads(pin_read)[0]
-                to_pin = re.findall(r'- \[x\] (vless://[^\s#\s]+)', issue_pin['body'])
+        # 2. НОВЫЕ ЗАКРЕПЫ (PIN_CONTROL)
+        try:
+            print("🔍 Проверка новых закрепов...")
+            cmd_pin = ['gh', 'issue', 'list', '--repo', repo, '--label', 'pin_control', '--json', 'body', '--limit', '1']
+            out = safe_gh_call(cmd_pin, token)
+            data = json.loads(out)
+            if data:
+                to_pin = re.findall(r'- \[x\] (vless://[^\s#\s]+)', data[0]['body'])
                 if to_pin:
-                    # Дописываем только новые, чтобы не ломать твою систему закрепов
                     with open('test1/pinned.txt', 'a', encoding='utf-8') as pf:
                         for s in to_pin:
                             base = s.split("#")[0].strip()
@@ -269,32 +273,34 @@ def main():
                                 pf.write(s.strip() + "\n")
                                 pinned_list.append(s.strip())
                     print(f"💎 Добавлено {len(to_pin)} новых закрепов.")
-            except Exception as e:
-                print(f"⚠️ Ошибка парсинга Issue 'pin_control': {e}")
-
-            pin_read = subprocess.check_output(['gh', 'issue', 'list', '--repo', repo, '--label', 'pin_control', '--json', 'body', '--limit', '1'], env={**os.environ, "GH_TOKEN": token}).decode()
-            if pin_read and pin_read != "[]":
-                issue_pin = json.loads(pin_read)[0]
-                to_pin = re.findall(r'- \[x\] (vless://[^\s#\s]+)', issue_pin['body'])
-                if to_pin:
-                    with open('test1/pinned.txt', 'a', encoding='utf-8') as pf:
-                        for s in to_pin:
-                            base = s.split("#")[0].strip()
-                            if all(base != p.split("#")[0].strip() for p in pinned_list):
-                                pf.write(s.strip() + "\n")
-                                pinned_list.append(s.strip())
-
-        try:  
-            unpin_read = subprocess.check_output(['gh', 'issue', 'list', '--repo', repo, '--label', 'unpin_control', '--json', 'body', '--limit', '1'], env={**os.environ, "GH_TOKEN": token}).decode()
-            if unpin_read and unpin_read != "[]":
-                issue_unp = json.loads(unpin_read)[0]
-                to_unpin = re.findall(r'- \[x\] (vless://[^\s#\s]+)', issue_unp['body'])
-                if to_unpin:
-                    pinned_list = [s for s in pinned_list if s not in to_unpin]
-                    with open('test1/pinned.txt', 'w', encoding='utf-8') as pf:
-                        pf.write("\n".join(pinned_list) + "\n")
         except Exception as e:
-            print(f"⚠️ Ошибка чтения команд: {e}")
+            print(f"⚠️ Ошибка Pin: {e}")
+
+        # 3. РАЗЗАКРЕПЛЕНИЕ (UNPIN_CONTROL)
+        try:
+            print("🔍 Проверка раззакрепления...")
+            cmd_unpin = ['gh', 'issue', 'list', '--repo', repo, '--label', 'unpin_control', '--json', 'body', '--limit', '1']
+            out = safe_gh_call(cmd_unpin, token)
+            data = json.loads(out)
+            if data:
+                to_unpin = re.findall(r'- \[x\] (vless://[^\s#\s]+)', data[0]['body'])
+                if to_unpin:
+                    to_unpin_bases = [u.split("#")[0].strip() for u in to_unpin]
+                    pinned_list = [s for s in pinned_list if s.split("#")[0].strip() not in to_unpin_bases]
+                    with open('test1/pinned.txt', 'w', encoding='utf-8') as pf:
+                        pf.write("\n".join(pinned_list) + ("\n" if pinned_list else ""))
+                    print(f"🔓 Убрано из закрепов: {len(to_unpin)}")
+        except Exception as e:
+            print(f"⚠️ Ошибка Unpin: {e}")
+
+    # --- ПЕРЕЗАГРУЗКА ИСТОРИИ ПЕРЕД ПРОВЕРКОЙ ---
+    history = {}
+    if os.path.exists(STATUS_FILE):
+        try:
+            with open(STATUS_FILE, "r") as f: history = json.load(f)
+        except: history = {}
+
+    all_lines = pinned_list + deferred_base + external_servers + current_base
 
     # 1. Загрузка базы и истории
     current_base = []
