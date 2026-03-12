@@ -343,6 +343,25 @@ def main():
     seen_parts = set()
     
     idx = 0
+
+    # --- НАСТРОЙКИ СТРЕСС-ТЕСТА (Интеграция твоего JSON) ---
+    stress_config = {
+        "timeout": 2.5,        # Дефолт
+        "dpi_sleep": 0.1,      # Дефолт
+        "target_mtu": 1280     # Для мобильных сетей
+    }
+    
+    if os.path.exists('test1/stress_profile.json'):
+        try:
+            with open('test1/stress_profile.json', 'r') as f:
+                data = json.load(f)
+                # Берем 1800ms из твоего конфига и превращаем в секунды (1.8)
+                stress_config["timeout"] = data.get("max_handshake_ms", 2500) / 1000
+                # Если mimic_dpi_delay: true, ставим паузу 0.5 сек (имитация лага мобилы)
+                stress_config["dpi_sleep"] = 0.5 if data.get("mimic_dpi_delay") else 0
+                stress_config["target_mtu"] = data.get("target_mtu", 1280)
+        except: 
+            pass
     # Работаем, пока не набрали 200 в подписку ИЛИ пока не кончились ссылки в unique_links
     while len(working_for_sub) < 200 and idx < len(unique_links):
         link = unique_links[idx]
@@ -406,16 +425,21 @@ def main():
         if not endpoint or not host or not port:
             continue
 
-        #--- ЭТАП 1: ХАРД-РЕЗОЛВИНГ + ИМИТАЦИЯ ГЛУШЕНИЯ ---
+        # --- ЭТАП 1: РЕЗОЛВИНГ И ПРОВЕРКА ПОД "ГЛУШИЛКУ" ---
         resolved_ip = None
         is_alive = False
         try:
+            # Проверка DNS (то, что у тебя падает на мобиле)
             resolved_ip = socket.gethostbyname(host) if not is_ipv6(host) else host
+            
             if resolved_ip in seen_ips:
                 continue 
-
-            # Соединяемся
+    
+            # Установка соединения с учетом таймаута из stress_profile (1.8s)
             with socket.create_connection((resolved_ip, int(port)), timeout=stress_config["timeout"]) as sock:
+                # Имитируем малый MTU, характерный для забитых каналов или мобильных VPN
+                # sock.setsockopt(socket.IPPROTO_IP, socket.IP_MTU_DISCOVER, socket.IP_PMTUDISC_DO) 
+                
                 use_tls = "security=tls" in base_part.lower() or "security=reality" in base_part.lower()
                 
                 if use_tls:
@@ -424,31 +448,32 @@ def main():
                     context.verify_mode = ssl.CERT_NONE
                     
                     with context.wrap_socket(sock, server_hostname=host) as ssock:
-                        # А) Проверка на "молчаливое глушение": отправляем HTTP-запрос через туннель
-                        # ТСПУ часто рвет связь именно на этом моменте
-                        ssock.sendall(f"GET / HTTP/1.1\r\nHost: {host}\r\n\r\n".encode())
+                        # ОТПРАВЛЯЕМ ДАННЫЕ (Важно! Глушилки смотрят на первый пакет после Handshake)
+                        # Эмулируем обычный браузерный запрос
+                        request = f"GET / HTTP/1.1\r\nHost: {host}\r\nUser-Agent: Mozilla/5.0\r\n\r\n"
+                        ssock.sendall(request.encode())
                         
-                        # Б) Даем DPI время (имитация задержки мобильной сети)
+                        # ПАУЗА DPI (из конфига)
                         if stress_config["dpi_sleep"] > 0:
                             time.sleep(stress_config["dpi_sleep"])
                         
-                        # В) Пробуем прочитать ответ. Если сервер живой и не заглушен — он что-то ответит
-                        ssock.settimeout(1.5)
-                        response = ssock.recv(1) # Читаем хотя бы 1 байт
+                        # Ждем ответа. Если ТСПУ оборвал связь — тут выпадет ConnectionResetError
+                        ssock.settimeout(1.5) 
+                        response = ssock.recv(1) 
                         if response:
                             is_alive = True
                 else:
-                    # Для обычных соединений (SOCKS5/Shadowsocks)
+                    # Для SOCKS5/Shadowsocks имитируем рукопожатие
                     sock.sendall(b'\x05\x01\x00')
                     if sock.recv(2):
                         is_alive = True
-            
-            if is_alive:
-                seen_ips.add(resolved_ip) 
 
         except (socket.timeout, ConnectionResetError, ssl.SSLError, socket.error):
-            # Если словили Reset или Timeout после отправки данных — сервер "мусорный" для мобилы
+            # Если DNS не нашелся или связь оборвалась после отправки данных — сервер в утиль
             is_alive = False
+                
+            if is_alive:
+                seen_ips.add(resolved_ip) 
 
         # --- ЭТАП 2: ЕСЛИ СЕРВЕР РАБОТАЕТ ---
         if is_alive:
