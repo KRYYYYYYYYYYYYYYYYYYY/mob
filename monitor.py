@@ -132,7 +132,7 @@ def main_monitor():
             data = ranking_db.get(base, {"rank": 0, "fails": 0, "link": link, "geo": "??"})
             if not isinstance(data, dict): data = {"rank": data, "fails": 0, "link": link}
             
-            iif is_ok:
+            if is_ok:
                 data["rank"] += 1
                 data["fails"] = 0 # Обнуляем ошибки при успехе
                 # Получаем гео только если еще нет (чтобы не спамить API)
