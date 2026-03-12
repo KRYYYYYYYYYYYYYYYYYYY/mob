@@ -3,6 +3,8 @@ import psutil
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 
+ALLOWED_COUNTRIES = {"US", "DE", "NL", "GB", "FR", "FI", "SG", "JP", "PL", "TR", "RU"}
+
 # Настройки путей
 RANK_FILE = 'test1/ranking.json'
 PINNED_FILE = 'test1/pinned.txt'
@@ -13,6 +15,17 @@ THRESHOLD = 50
 file_lock = threading.Lock()
 
 HOST_PORT_RE = re.compile(r'@(?P<host>[A-Za-z0-9.-]+):(?P<port>\d+)')
+
+def get_country(host):
+    """Определяет страну сервера (быстрая проверка для инквизиции)"""
+    try:
+        resp = requests.get(f"http://ip-api.com/json/{host}?fields=status,countryCode", timeout=2)
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get("status") == "success":
+                return data.get("countryCode", "??")
+    except: pass
+    return "??"
 
 def extract_host_port(link: str) -> tuple[str | None, int | None]:
     m = HOST_PORT_RE.search(link)
@@ -177,44 +190,54 @@ def main_torturer():
 
     def run_torture(item):
         base, full_link = item
-        print(f"⛓️  Начинаю пытку {base[:25]}...")
+        host, _ = extract_host_port(base)
+        
+        # 1. Проверка ГЕО перед пыткой (зачем мучить тех, кто нам не подходит?)
+        country = get_country(host)
+        if country not in ALLOWED_COUNTRIES and country != "??":
+            print(f"🌍 МИМО: {host[:15]} из {country} (не в белом списке)")
+            return base, full_link, False, "WRONG_GEO"
+        
+        print(f"⛓️  Начинаю пытку {host[:15]} ({country})...")
+        
+        # 2. Сама пытка
         success = torture_check(full_link)
-        return base, full_link, success
+        
+        status = "PASS" if success else "FAIL"
+        return base, full_link, success, status
 
     with ThreadPoolExecutor(max_workers=20) as executor:
+        # Теперь возвращаем 4 параметра
         results = list(executor.map(run_torture, candidates))
 
-    for base, full_link, success in results:
+    for base, full_link, success, status in results:
+        if status == "WRONG_GEO":
+            # Просто удаляем из рейтинга, если страна не та
+            if base in ranking_db: del ranking_db[base]
+            continue
+
         if success:
+            # Если прошел — добавляем в элиту
             vetted_entry = f"{full_link} # Rank: ELITE | {time.strftime('%Y-%m-%d')}"
             with file_lock:
                 with open(VETTED_FILE, 'a', encoding='utf-8') as f:
                     f.write(vetted_entry + "\n")
             
             if isinstance(ranking_db.get(base), dict):
-                ranking_db[base]['rank'] = 0 # Сбрасываем, так как он уже в Vetted
+                ranking_db[base]['rank'] = 0 
                 ranking_db[base]['last_torture'] = "PASS"
             print(f"🎖️ {base[:25]}... ПРОШЕЛ ПЫТКИ!")
         else:
+            # Если не прошел — штрафуем или удаляем
             if isinstance(ranking_db.get(base), dict):
                 old_rank = ranking_db[base].get('rank', 0)
                 if old_rank <= 0:
                     dead_to_remove.append(base)
-                    print(f"🧹 {base[:25]}... окончательно удален (стабильный 0).")
+                    print(f"🧹 {base[:20]}... удален (стабильный 0).")
                 else:
                     ranking_db[base]['rank'] = max(0, old_rank - 30)
                     ranking_db[base]['last_torture'] = "FAIL"
-                    print(f"❌ {base[:25]}... СЛОМАЛСЯ (Штраф -30, текущий ранг: {ranking_db[base]['rank']}).")
-
-    if dead_to_remove:
-        print(f"💀 Всего удалено из базы: {len(dead_to_remove)}")
-        for dead_base in dead_to_remove:
-            if dead_base in ranking_db:
-                del ranking_db[dead_base]
-
-    with open(RANK_FILE, 'w', encoding='utf-8') as f:
-        json.dump(ranking_db, f, ensure_ascii=False, indent=4)
-    print("💾 База данных сохранена. Инквизиция окончена.")
+                    print(f"❌ {base[:20]}... СЛОМАЛСЯ (Штраф -30, ранг: {ranking_db[base]['rank']})")
     
 if __name__ == "__main__":
     main_torturer()
