@@ -105,15 +105,7 @@ def load_vetted():
         # Берем только базу (до решетки), чтобы сравнивать уникальность
         return {line.split('#')[0].strip() for line in f if 'vless://' in line}
 
-Смотри, чтобы не ломать твою структуру, тебе нужно сделать три шага: добавить импорт, вставить вспомогательную функцию и заменить цикл for на блок ThreadPoolExecutor.
-
-Вот готовый код твоей функции main_torturer с внедренной параллельностью (на 5 потоков):
-
-1. В самый верх файла добавь:
-Python
 from concurrent.futures import ThreadPoolExecutor
-2. Замени свою функцию на эту:
-Python
 def main_torturer():
     if not os.path.exists(RANK_FILE):
         print("📭 Рейтинг пуст, пытать некого.")
