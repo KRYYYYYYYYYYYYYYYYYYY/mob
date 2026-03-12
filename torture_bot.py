@@ -181,7 +181,7 @@ def main_torturer():
         success = torture_check(full_link)
         return base, full_link, success
 
-    with ThreadPoolExecutor(max_workers=5) as executor:
+    with ThreadPoolExecutor(max_workers=20) as executor:
         results = list(executor.map(run_torture, candidates))
 
     for base, full_link, success in results:
