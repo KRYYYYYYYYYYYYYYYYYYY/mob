@@ -46,57 +46,53 @@ def extract_host_port(link: str):
     except: return None, None
 
 # --- ОБНОВЛЕННАЯ ПЫТКА ---
-def torture_check(link, stress_config):
+def torture_check(link, stress_config, resolved_ip):
     host, port = extract_host_port(link)
     if not host or not port: return False
     is_tls = "security=tls" in link.lower() or "security=reality" in link.lower()
+    
     sni = re.search(r"sni=([^&?#]+)", link)
     server_hostname = sni.group(1) if sni else host
 
-    user_agents = [
-        b"GET / HTTP/1.1\r\nHost: google.com\r\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)\r\n\r\n",
-        b"GET / HTTP/1.1\r\nHost: apple.com\r\nUser-Agent: Mozilla/5.0 (iPhone; CPU iPhone OS 17_3 like Mac OS X)\r\n\r\n"
-    ]
+    # Юзер-агенты для имитации реального трафика
+    payload = b"GET / HTTP/1.1\r\nHost: " + server_hostname.encode() + b"\r\nUser-Agent: Mozilla/5.0\r\n\r\n"
 
     total_attempts = 20 
     for i in range(total_attempts):
         try:
-            # ИСПОЛЬЗУЕМ ЖЕСТКИЙ ТАЙМАУТ ИЗ ПРОФИЛЯ
-            with socket.create_connection((host, port), timeout=stress_config["timeout"]) as s:
+            # Коннектимся строго по IP
+            with socket.create_connection((resolved_ip, port), timeout=stress_config["timeout"]) as s:
                 if is_tls:
                     ctx = ssl.create_default_context()
                     ctx.check_hostname = False
                     ctx.verify_mode = ssl.CERT_NONE
                     with ctx.wrap_socket(s, server_hostname=server_hostname) as ssock:
-                        # Каждую 5-ю попытку шлем реальный запрос
-                        if (i + 1) % 5 == 0:
-                            payload = user_agents[i % len(user_agents)]
-                            ssock.sendall(payload)
+                        # Каждую попытку шлем запрос (в тортурере халявы нет)
+                        ssock.sendall(payload)
+                        
+                        if stress_config["dpi_sleep"] > 0:
+                            time.sleep(stress_config["dpi_sleep"])
                             
-                            # Имитация задержки DPI
-                            if stress_config["dpi_sleep"] > 0:
-                                time.sleep(stress_config["dpi_sleep"])
-                                
-                            ssock.settimeout(2.0)
-                            if not ssock.recv(5): raise Exception("Empty Resp")
+                        ssock.settimeout(2.0)
+                        # Ждем хотя бы 1 байт ответа
+                        if not ssock.recv(1): raise Exception("Silent Drop")
                 else:
                     s.sendall(b'\x05\x01\x00')
-                    s.settimeout(2.0)
-                    if not s.recv(2): raise Exception("Proxy Error")
+                    if not s.recv(2): raise Exception("Proxy Dead")
             
             if (i + 1) % 5 == 0:
                 print(f"    ⛓️  Пытка: {i + 1}/{total_attempts} | {host[:15]} OK")
             
-            # Если это не последняя попытка — спим минуту
+            # Интервал между ударами
             if i < total_attempts - 1:
                 time.sleep(60) 
         except Exception as e:
-            print(f"❌ [ПРОВАЛ] Попытка {i+1}: {e}")
+            print(f"❌ [ПРОВАЛ] {host[:15]} на шаге {i+1}: {e}")
             return False
     return True
 
 def main_torturer():
-    # Проверка на дубликаты процесса
+    # 1. Проверка на дубликаты
     current_pid = os.getpid()
     for proc in psutil.process_iter(['pid', 'cmdline']):
         try:
@@ -106,10 +102,10 @@ def main_torturer():
                 return
         except: continue
 
-    # Загружаем конфиг и данные
     stress_config = load_stress_config()
-    print(f"⚙️ Пытки будут идти с таймаутом {stress_config['timeout']}s")
+    print(f"⚙️ Пытки с таймаутом {stress_config['timeout']}s")
     
+    # 2. Загрузка БД
     ranking_db = {}
     if os.path.exists(RANK_FILE):
         with open(RANK_FILE, 'r', encoding='utf-8') as f:
@@ -117,23 +113,20 @@ def main_torturer():
 
     if not ranking_db: return
 
-    # Загружаем списки исключений
-    vetted_set = set()
-    if os.path.exists(VETTED_FILE):
-        with open(VETTED_FILE, 'r', encoding='utf-8') as f:
-            vetted_set = {l.split('#')[0].strip() for l in f if 'vless://' in l}
+    # 3. Списки исключений
+    def load_set(path):
+        if not os.path.exists(path): return set()
+        with open(path, 'r', encoding='utf-8') as f:
+            return {l.split('#')[0].strip() for l in f if 'vless://' in l}
 
-    pinned_set = set()
-    if os.path.exists(PINNED_FILE):
-        with open(PINNED_FILE, 'r', encoding='utf-8') as f:
-            pinned_set = {l.split('#')[0].strip() for l in f if 'vless://' in l}
+    vetted_set = load_set(VETTED_FILE)
+    pinned_set = load_set(PINNED_FILE)
 
-    # Отбор кандидатов
+    # 4. Отбор кандидатов
     candidates = []
     for base, data in ranking_db.items():
         rank = data.get("rank", 0) if isinstance(data, dict) else data
         link = data.get("link", base) if isinstance(data, dict) else base
-        
         if (rank >= THRESHOLD or rank <= 0) and base not in vetted_set and base not in pinned_set:
             candidates.append((base, link))
 
@@ -143,52 +136,64 @@ def main_torturer():
 
     print(f"🔥 Инквизиция: {len(candidates)} серверов.")
 
+    # Внутренняя функция для потока
     def run_torture(item):
         base, full_link = item
-        host, _ = extract_host_port(base)
+        host, port = extract_host_port(base)
+        try:
+            resolved_ip = socket.gethostbyname(host)
+        except socket.gaierror:
+            return base, full_link, False, "DNS_ERROR"
+
+        if "type=ws" in full_link.lower() or "type=grpc" in full_link.lower():
+            return base, full_link, False, "WEAK_PROTOCOL"
         
-        # Предварительная проверка ГЕО
         country = get_country(host)
         if country not in ALLOWED_COUNTRIES and country != "??":
             return base, full_link, False, "WRONG_GEO"
         
-        # Запуск пытки с передачей конфига
-        success = torture_check(full_link, stress_config)
+        success = torture_check(full_link, stress_config, resolved_ip)
         return base, full_link, success, "DONE"
 
-    with ThreadPoolExecutor(max_workers=10) as executor:
+    # --- ЗАПУСК ПОТОКОВ (Тут была ошибка) ---
+    with ThreadPoolExecutor(max_workers=5) as executor: # 5 потоков достаточно для 20-минутных пыток
         results = list(executor.map(run_torture, candidates))
 
-    # Обработка результатов
+    # 5. Обработка результатов
     for base, full_link, success, status in results:
-        if status == "WRONG_GEO":
+        if status in ["WRONG_GEO", "WEAK_PROTOCOL", "DNS_ERROR"]:
             if base in ranking_db: del ranking_db[base]
-            print(f"🌍 Удален (Гео: {base[:15]})")
+            print(f"🧹 Чистка: {status} ({base[:15]})")
             continue
 
         if success:
-            # В элиту!
             vetted_entry = f"{full_link} # Rank: ELITE | {time.strftime('%Y-%m-%d')}"
             with file_lock:
                 with open(VETTED_FILE, 'a', encoding='utf-8') as f:
                     f.write(vetted_entry + "\n")
             if base in ranking_db:
-                ranking_db[base]['rank'] = 0 # Сбрасываем ранг, так как он уже в vetted
+                ranking_db[base]['rank'] = 0
                 ranking_db[base]['last_torture'] = "PASS"
+            print(f"🏆 ЭЛИТА: {base[:15]}")
         else:
-            # Наказание
             if base in ranking_db:
                 old_rank = ranking_db[base].get('rank', 0)
                 if old_rank <= 0:
                     del ranking_db[base]
-                    print(f"🧹 Удален навсегда: {base[:15]}")
+                    print(f"💀 СМЕРТЬ: {base[:15]}")
                 else:
                     ranking_db[base]['rank'] = max(0, old_rank - 30)
                     ranking_db[base]['last_torture'] = "FAIL"
+                    print(f"📉 ШТРАФ: {base[:15]} ({old_rank}->{ranking_db[base]['rank']})")
 
-    # Сохраняем обновленный рейтинг
+    # 6. Авто-удаление "гнилых" (кто давно на нуле и провалил пытку)
+    rotten = [b for b, d in ranking_db.items() 
+              if isinstance(d, dict) and d.get('rank', 0) <= 0 and d.get('last_torture') == "FAIL"]
+    for b in rotten: del ranking_db[b]
+    if rotten: print(f"♻️ Утилизировано гнилых: {len(rotten)}")
+
     with open(RANK_FILE, 'w', encoding='utf-8') as f:
         json.dump(ranking_db, f, ensure_ascii=False, indent=4)
-
+        
 if __name__ == "__main__":
     main_torturer()
