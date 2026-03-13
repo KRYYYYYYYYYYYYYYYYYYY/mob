@@ -122,6 +122,7 @@ def main_monitor():
     # --- ЗАГРУЗКА РЕЙТИНГА ---
     ranking_db = {}
     RANK_FILE = 'test1/ranking.json'
+    VETTED_FILE = 'test1/vetted.txt'
     
     if os.path.exists(RANK_FILE):
         try:
