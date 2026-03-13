@@ -94,6 +94,7 @@ def download_raw_data(urls):
     return all_links
 
 def rebuild_link_name(link: str, new_name: str) -> str:
+    return link
     base, _, fragment = link.partition("#")
 
     # Если это уже закреп — не трогаем
@@ -113,8 +114,6 @@ def rebuild_link_name(link: str, new_name: str) -> str:
         prefix = match.group(0).strip()
         return f"{base}#{urllib.parse.quote(prefix + ' ' + new_name)}"
 
-    return f"{base}#{urllib.parse.quote(new_name)}"
-    
     return f"{base}#{urllib.parse.quote(new_name)}"
 
 def remove_from_input_file(base_to_remove: str):
@@ -475,24 +474,25 @@ def main():
             seen_parts.add(base_part)
         
             # 1. Достаём только флаг из старого имени
-            raw_pinned_name = found_pinned_full.split("#")[-1].strip()
-            original_label = urllib.parse.unquote(raw_pinned_name)
+            #raw_pinned_name = found_pinned_full.split("#")[-1].strip()
+            #original_label = urllib.parse.unquote(raw_pinned_name)
         
-            emoji_match = re.match(r'^([^\w\s\d]+)', original_label)
-            flag = emoji_match.group(1).strip() if emoji_match else ""
-        
+            #emoji_match = re.match(r'^([^\w\s\d]+)', original_label)
+            #flag = emoji_match.group(1).strip() if emoji_match else ""
+            final_linkk = found_pinned_full.strip()
             # 2. Полностью перезаписываем имя
-            new_name = f"{flag} 💎 [PINNED] {counter}"
+            #new_name = f"{flag} 💎 [PINNED] {counter}"
         
             # 3. Чистим базу
-            clean_base = base_part.split("#")[0].strip()
+            #clean_base = base_part.split("#")[0].strip()
         
             # 4. Собираем финальную ссылку
-            final_linkk = f"{clean_base}#{urllib.parse.quote(new_name)}"
+            #final_linkk = f"{clean_base}#{urllib.parse.quote(new_name)}"
         
             working_for_sub.append(final_linkk)
-            print(f"💎 [PINNED] {counter} с флагом '{flag}' готов")
-        
+            #print(f"💎 [PINNED] {counter} с флагом '{flag}' готов")
+            print(f"💎 [PINNED] {counter} добавлен без изменений")
+            
             counter += 1
             continue
             
@@ -582,14 +582,16 @@ def main():
             remove_from_input_file(base_part)
     
             working_for_base.append(base_part)
-            ip_str = f"[{resolved_ip}]" if is_ipv6(resolved_ip) else resolved_ip
-            sub_link = base_part.replace(endpoint, f"@{ip_str}:{port}", 1)
+            # ip_str = f"[{resolved_ip}]" if is_ipv6(resolved_ip) else resolved_ip
+            # sub_link = base_part.replace(endpoint, f"@{ip_str}:{port}", 1)
+            sub_link = base_part
             
             if "sni=" not in sub_link.lower() and not is_ipv6(host):
                 sep = "&" if "?" in sub_link else "?"
                 sub_link += f"{sep}sni={host}"
             
-            final_link = rebuild_link_name(sub_link, f"wifi {counter}")
+            # final_link = rebuild_link_name(sub_link, f"wifi {counter}")
+            final_link = link.strip()
             working_for_sub.append(final_link)
             
             print(f"✅ ОК {len(working_for_sub)}/200 ({country}): {host} -> {resolved_ip} (wifi {counter})")
