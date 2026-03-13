@@ -65,10 +65,13 @@ def process_pin_commands(token, repo, vetted_list):
         body = json.loads(pin_read)[0]['body']
         
         # --- ПЕРВАЯ ГАЛОЧКА: [x] -> В ЗАКРЕПЫ (PINNED) ---
-        to_pin = re.findall(r'- \[x\] (vless://[^\s#\s]+)', body)
-        
-        # --- ВТОРАЯ ГАЛОЧКА: [v] -> В БАН (BLACKLIST) ---
-        to_ban = re.findall(r'- \[v\] (vless://[^\s#\s]+)', body)
+        # Улучшенная регулярка: ищет [x] или [v], игнорирует регистр, допускает отсутствие пробела
+        to_pin = re.findall(r'- \[[xX]\]\s*(vless://[^\s?#]+)', body)
+        to_ban = re.findall(r'- \[[vV]\]\s*(vless://[^\s?#]+)', body)
+
+        print(f"DEBUG: Текст из Issue: {body[:150]}...") 
+        print(f"DEBUG: Найдено для PIN: {len(to_pin)}")
+        print(f"DEBUG: Найдено для BAN: {len(to_ban)}")
 
         affected_bases = set()
 
@@ -199,7 +202,7 @@ def main_torturer():
             vetted_for_sync = [l.strip() for l in f if 'vless' in l]
 
     # ВЫЗЫВАЕМ ТУТ И ПЕРЕДАЕМ СПИСОК, А НЕ ПУСТЫЕ СКОБКИ []
-    process_pin_commands(token, repo, vetted_for_sync) 
+    vetted_for_sync = process_pin_commands(token, repo, vetted_for_sync)
     print("✅ Команды GitHub выполнены")
 
     if not os.path.exists(RANK_FILE): return
