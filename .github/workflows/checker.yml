@@ -14,8 +14,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 360  # Даем инквизитору 6 часов (максимум для GitHub)
     permissions:
-      contents: write
-      issues: read
+      contents: write  # Чтобы пушить изменения в файлы
+      issues: write    # Чтобы бот мог редактировать Issue (снимать галки)
 
     steps:
       - name: 📂 Checkout Code
