@@ -191,25 +191,31 @@ def main_torturer():
     # --- ВОТ СЮДА ВСТАВЛЯЕМ ГИТХАБ-КОНТРОЛЬ ---
     token = os.getenv("GH_TOKEN")
     repo = os.getenv("GITHUB_REPOSITORY")
-    
-    # Загружаем текущий vetted для синхронизации
+
+        # Загружаем текущий vetted для синхронизации
     vetted_for_sync = []
     if os.path.exists(VETTED_FILE):
         with open(VETTED_FILE, 'r', encoding='utf-8') as f:
             vetted_for_sync = [l.strip() for l in f if 'vless' in l]
 
-    # Запускаем обработку команд (закрепы и баны)
-    process_pin_commands(token, repo, vetted_for_sync)
-    
+    # ВЫЗЫВАЕМ ТУТ И ПЕРЕДАЕМ СПИСОК, А НЕ ПУСТЫЕ СКОБКИ []
+    process_pin_commands(token, repo, vetted_for_sync) 
+    print("✅ Команды GitHub выполнены")
+
+    if not os.path.exists(RANK_FILE): return
+
     # 2. Загрузка БД
     ranking_db = {}
     if os.path.exists(RANK_FILE):
         with open(RANK_FILE, 'r', encoding='utf-8') as f:
             ranking_db = json.load(f)
 
-    if not ranking_db: return
+# Вместо резкого return используем проверку
+    if not ranking_db: 
+        print("⌛ База пуста. Пытки отменяются, но команды GitHub выполнены.")
+        return
 
-    # 3. Списки исключений
+        # 3. Списки исключений
     def load_set(path):
         if not os.path.exists(path): return set()
         with open(path, 'r', encoding='utf-8') as f:
@@ -218,7 +224,7 @@ def main_torturer():
     vetted_set = load_set(VETTED_FILE)
     pinned_set = load_set(PINNED_FILE)
 
-    # 4. Отбор кандидатов
+    # Проверка кандидатов
     candidates = []
     for base, data in ranking_db.items():
         rank = data.get("rank", 0) if isinstance(data, dict) else data
@@ -229,6 +235,7 @@ def main_torturer():
     if not candidates:
         print("⌛ Нет кандидатов для Инквизиции.")
         return
+
 
     print(f"🔥 Инквизиция: {len(candidates)} серверов.")
 
