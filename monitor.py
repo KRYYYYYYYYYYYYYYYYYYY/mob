@@ -151,7 +151,7 @@ def main_monitor():
         valid_others = []
         for link in others_in_wifi:
             base = link.split("#")[0].strip()
-            is_ok, status_code = deep_kill_check(link)
+            is_ok, status_code = deep_kill_check(link, stress_config)
             
             if is_ok:
                 valid_others.append(link)
