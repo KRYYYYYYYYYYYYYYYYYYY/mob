@@ -510,6 +510,17 @@ def main():
     with open('test1/ranking.json', "w") as f: json.dump(ranking_db, f)
     with open(CACHE_FILE, 'w') as f: json.dump(countries_cache, f)
 
+    # --- 8.1 СОХРАНЕНИЕ КАНДИДАТОВ В ЗАКРЕП (vetted.txt) ---
+    # Допустим, твои отобранные 4 сервера лежат в списке vetted_candidates
+    # Если список называется иначе, подставь свое имя переменной
+    with open('test1/vetted.txt', "w", encoding="utf-8") as f:
+        if 'vetted_candidates' in locals() and vetted_candidates:
+            f.write("\n".join(vetted_candidates))
+            print(f"💾 Сохранено кандидатов в vetted.txt: {len(vetted_candidates)}")
+        else:
+            f.write("") # Очищаем файл, если новых кандидатов нет
+            print("💾 Файл vetted.txt очищен (нет новых кандидатов).")
+
     print(f"🏁 Готово! В подписке: {len(final_to_sub)}")
 
     # --- ОБНОВЛЕНИЕ ИНТЕРФЕЙСА В GITHUB ISSUES ---
@@ -536,33 +547,41 @@ def main():
                 subprocess.run(['gh', 'issue', 'edit', issue_number, '--repo', repo, '--body-file', 'issue_body.txt'], env=env_gh)
                 print(f"📝 Панель Control #{issue_number} обновлена.")
 
-            # --- ПАНЕЛЬ 2: КАНДИДАТЫ В ЗАКРЕП (Источник: vetted.txt) ---
+            # --- ПАНЕЛЬ 2: КАНДИДАТЫ В ЗАКРЕП ---
             if data_pin:
                 num_pin = str(data_pin[0]['number'])
                 update_time = time.strftime('%d.%m.%Y %H:%M:%S')
                 
-                # Заголовок
+                # ЧИТАЕМ ФАЙЛ ПРЯМО ЗДЕСЬ, ЧТОБЫ ИСКЛЮЧИТЬ ОШИБКУ
+                current_vetted = []
+                if os.path.exists('test1/vetted.txt'):
+                    with open('test1/vetted.txt', 'r', encoding='utf-8') as f:
+                        # Берем только ссылки и сразу чистим их от хвостов типа (wifi 42)
+                        for line in f:
+                            if 'vless://' in line:
+                                clean_link = line.split('#')[0].strip()
+                                if clean_link not in current_vetted:
+                                    current_vetted.append(clean_link)
+
+                # Формируем текст
                 body_pin = f"### 💎 Кандидаты в закреп (PIN)\n"
                 body_pin += f"🕒 Обновлено: `{update_time}`\n\n"
                 
-                if not vetted_candidates:
+                if not current_vetted:
                     body_pin += "_Пока нет новых кандидатов в vetted.txt..._"
                 else:
-                    # ПЕРЕБИРАЕМ ТОЛЬКО СПИСОК ИЗ VETTED.TXT
-                    for i, link in enumerate(vetted_candidates, 1):
-                        # Отрезаем всё после # для красоты, если нужно
-                        display_link = link.split('#')[0].strip()
-                        
-                        body_pin += f"📡 **Кандидат {i}:** `{display_link}`\n"
-                        body_pin += f"- [ ] PIN_{display_link}\n"
-                        body_pin += f"- [ ] BAN_{display_link}\n\n---\n\n"
-            
-                # --- 3. ЗАПИСЬ И ОТПРАВКА ---
+                    # Используем только свежепрочитанный список current_vetted
+                    for i, link in enumerate(current_vetted, 1):
+                        body_pin += f"📡 **Кандидат {i}:** `{link}`\n"
+                        body_pin += f"- [ ] PIN_{link}\n"
+                        body_pin += f"- [ ] BAN_{link}\n\n---\n\n"
+                
+                # Записываем и отправляем
                 with open("pin_body.txt", "w", encoding="utf-8") as f:
                     f.write(body_pin)
                 
-                # Отправка через gh CLI
                 subprocess.run(['gh', 'issue', 'edit', num_pin, '--body-file', 'pin_body.txt'], env=env_gh)
+                print(f"💎 Панель PIN #{num_pin} обновлена. Найдено кандидатов: {len(current_vetted)}")
 
             # 3. ПАНЕЛЬ UNPIN (Текущие закрепы)
             unpin_cmd = ['gh', 'issue', 'list', '--repo', repo, '--label', 'unpin_control', '--json', 'number', '--limit', '1']
