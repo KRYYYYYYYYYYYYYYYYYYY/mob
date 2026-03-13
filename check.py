@@ -6,7 +6,7 @@ import json
 import urllib.parse
 import urllib.request
 import time
-import requests  # если используешь для других нужд, но для стран у нас urllib
+import subprocess
 
 # Настройки путей
 INPUT_FILE = 'test1/1.txt'
@@ -34,6 +34,39 @@ HEADER = """# profile-title: 🏳️Мобильный инет🏳️
 """
 
 ALLOWED_COUNTRIES = {"US", "DE", "NL", "GB", "FR", "FI", "SG", "JP", "PL", "TR", "RU"}
+
+def download_raw_data(urls):
+    """
+    Этап 1: Огороженная загрузка. 
+    Пытаемся выкачать списки любой ценой, прежде чем начнем 'шуметь' проверками.
+    """
+    all_links = []
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+    
+    print("📥 ЭТАП 1: Загрузка сырых данных (Огороженный режим)")
+    
+    for url in urls:
+        success = False
+        for attempt in range(5):  # 5 попыток на каждый файл
+            try:
+                print(f"📡 Попытка {attempt+1}: {url.split('/')[-1]}...", end=" ")
+                req = urllib.request.Request(url.strip(), headers=headers)
+                # Ставим большой таймаут на случай лагов DNS
+                with urllib.request.urlopen(req, timeout=30) as response:
+                    content = response.read().decode("utf-8")
+                    found = [line.strip() for line in content.splitlines() if "vless://" in line]
+                    all_links.extend(found)
+                    print(f"✅ Найдено {len(found)} шт.")
+                    success = True
+                    break
+            except Exception as e:
+                print(f"❌ Ошибка: {e}")
+                time.sleep(3) # Короткая пауза перед повтором
+        
+        if not success:
+            print(f"⚠️ Не удалось загрузить источник после 5 попыток. Пропускаем.")
+            
+    return all_links
 
 def rebuild_link_name(link: str, new_name: str) -> str:
     base, _, fragment = link.partition("#")
@@ -269,21 +302,19 @@ def main():
         with open(INPUT_FILE, "r", encoding="utf-8") as f:
             current_base = f.read().splitlines()
 
-    external_servers = fetch_external_servers()
-    
+    raw_external = download_raw_data(EXTERNAL_SOURCE_URL)
     # СОБИРАЕМ ОЧЕРЕДЬ: База + Отложенные + Новые
     # Это гарантирует, что "старички" из очереди проверятся раньше новичков
-    all_lines = pinned_list + deferred_base + external_servers + current_base
+    combined_queue = pinned_local + deferred_local + raw_external
 
     # Убираем дубликаты, сохраняя этот новый приоритетный порядок
     unique_links = []
-    seen_parts = set()
-    for l in all_lines:
-        if not l or "vless://" not in l: continue
-        base = l.split("#")[0].strip()
-        if base not in seen_parts:
-            unique_links.append(l)
-            seen_parts.add(base)
+    seen_bases = set()
+    for link in combined_queue:
+        base = link.split('#')[0].strip()
+        if base not in seen_bases:
+            unique_links.append(link)
+            seen_bases.add(base)
 
     # --- БЛОК ЧТЕНИЯ КОМАНД ИЗ GITHUB (В начале main) ---
     if token and repo:
@@ -542,6 +573,7 @@ def main():
         # --- ЭТАП 3: ЕСЛИ СЕРВЕР НЕ ОТВЕЧАЕТ ---
         else:
             print(f"💀 МЕРТВ: Не удалось подключиться или таймаут ({host})")
+            # Чистим из активных списков, так как сейчас он не работает
             if base_part in ranking_db:
                 del ranking_db[base_part]
             if base_part in vetted_list:
@@ -550,18 +582,29 @@ def main():
             fail_time = history.get(base_part, now)
             
             if now - fail_time > 86400: 
-                print(f"🗑️ УДАЛЕН И ЗАБЛОКИРОВАН (1 день оффлайн): {host}")
+                print(f"🗑️ УДАЛЕН И ЗАБЛОКИРОВАН (оффлайн > 24ч): {host}")
+                # Пишем в блэклист, чтобы чекер больше его никогда не трогал
                 with open('test1/blacklist.txt', 'a') as bl:
                     bl.write(base_part + "\n")
-                continue 
+                # continue прерывает работу с этой ссылкой. 
+                # Она НЕ попадет в working_for_base и working_for_sub -> ИСЧЕЗНЕТ из файлов.
+                continue
     
+            # 3. СЦЕНАРИЙ: "ШАНС" (Упал недавно, попадает в GRACE_PERIOD)
             if now - fail_time < GRACE_PERIOD:
                 country = get_country_code(host, countries_cache)
+                # Оставляем только если страна нам подходит
                 if country in ALLOWED_COUNTRIES:
+                    # Сохраняем в базу (1.txt), чтобы проверить в следующий раз
                     working_for_base.append(base_part)
+                    # Записываем в новую историю время падения (чтобы счетчик тикал дальше)
                     new_history[base_part] = fail_time
-                    working_for_sub.append(rebuild_link_name(link, f"⏳ wifi {counter}"))
-                    print(f"⏳ DOWN ({country}): {host} (оставлен с меткой ⏳)")
+                    
+                    # Добавляем в подписку с меткой ожидания
+                    temp_link = rebuild_link_name(link, f"⏳ wifi {counter}")
+                    working_for_sub.append(temp_link)
+                    
+                    print(f"⏳ DOWN ({country}): {host} (оставлен шанс, wifi {counter})")
                     counter += 1
             else:
                 print(f"🗑️ Удален (тайм-аут): {host}")
