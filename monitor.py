@@ -183,22 +183,6 @@ def main_monitor():
                 elif status_code == 1001:
                     print(f"🐢 ТОРМОЗ (>1000ms): {base[:30]}")
 
-        # Сохраняем прогресс рейтинга после каждого круга
-        with open(RANK_FILE, 'w', encoding='utf-8') as f:
-            json.dump(ranking_db, f, ensure_ascii=False, indent=4)
-
-        final_list = pinned_in_wifi + valid_others
-        final_list = final_list[:200] 
-
-        with open(WIFI_FILE, 'w', encoding='utf-8') as f:
-            f.write("# profile-title: 🏴WIFI🏴\n\n" + "\n".join(final_list))
-        
-        print(f"📊 Монитор: {len(pinned_in_wifi)} закрепов, {len(valid_others)} живых. Рейтинг обновлен.")
-        time.sleep(60)
-
-if __name__ == "__main__":
-    main_monitor()
-
         # Сохраняем прогресс рейтинга
         with open(RANK_FILE, 'w', encoding='utf-8') as f:
             json.dump(ranking_db, f, ensure_ascii=False, indent=4)
