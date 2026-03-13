@@ -64,10 +64,10 @@ def process_pin_commands(token, repo, vetted_list):
         
         body = json.loads(pin_read)[0]['body']
         
-        # --- ПЕРВАЯ ГАЛОЧКА: [x] -> В ЗАКРЕПЫ (PINNED) ---
-        # Улучшенная регулярка: ищет [x] или [v], игнорирует регистр, допускает отсутствие пробела
-        to_pin = re.findall(r'- \[[xX]\]\s*(vless://[^\s?#]+)', body)
-        to_ban = re.findall(r'- \[[vV]\]\s*(vless://[^\s?#]+)', body)
+        # Ищем [x] или [v] в любом месте строки, после чего идет vless
+        # Регулярка теперь не привязана к началу строки и дефису
+        to_pin = re.findall(r'\[[xX]\]\s*(vless://[^\s#`]+)', body)
+        to_ban = re.findall(r'\[[vV]\]\s*(vless://[^\s#`]+)', body)
 
         print(f"DEBUG: Текст из Issue: {body[:150]}...") 
         print(f"DEBUG: Найдено для PIN: {len(to_pin)}")
