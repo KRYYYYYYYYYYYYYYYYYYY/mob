@@ -305,7 +305,7 @@ def main():
     raw_external = download_raw_data(EXTERNAL_SOURCE_URL)
     # СОБИРАЕМ ОЧЕРЕДЬ: База + Отложенные + Новые
     # Это гарантирует, что "старички" из очереди проверятся раньше новичков
-    combined_queue = pinned_local + deferred_local + raw_external
+    combined_queue = pinned_list + deferred_base + raw_external + current_base
 
     # Убираем дубликаты, сохраняя этот новый приоритетный порядок
     unique_links = []
