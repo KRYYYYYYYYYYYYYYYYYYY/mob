@@ -547,41 +547,35 @@ def main():
                 subprocess.run(['gh', 'issue', 'edit', issue_number, '--repo', repo, '--body-file', 'issue_body.txt'], env=env_gh)
                 print(f"📝 Панель Control #{issue_number} обновлена.")
 
-            # --- ПАНЕЛЬ 2: КАНДИДАТЫ В ЗАКРЕП ---
-            if data_pin:
-                num_pin = str(data_pin[0]['number'])
-                update_time = time.strftime('%d.%m.%Y %H:%M:%S')
+            # --- ПАНЕЛЬ 2: КАНДИДАТЫ В ЗАКРЕП (ТОЛЬКО ИЗ VETTED.TXT) ---
+            pin_cmd = ['gh', 'issue', 'list', '--repo', repo, '--label', 'pin_control', '--json', 'number', '--limit', '1']
+            out_pin = subprocess.check_output(pin_cmd, env={**os.environ, "GH_TOKEN": token}).decode()
+            
+            if out_pin and out_pin != "[]":
+                num_pin = str(json.loads(out_pin)[0]['number'])
+                body_pin = f"### 💎 Кандидаты в закреп и бан\n🕒 Обновлено: `{update_time}`\n\n"
                 
-                # ЧИТАЕМ ФАЙЛ ПРЯМО ЗДЕСЬ, ЧТОБЫ ИСКЛЮЧИТЬ ОШИБКУ
-                current_vetted = []
+                # ЧИТАЕМ ТОЛЬКО ФАЙЛ VETTED.TXT
+                vetted_for_issue = []
                 if os.path.exists('test1/vetted.txt'):
                     with open('test1/vetted.txt', 'r', encoding='utf-8') as f:
-                        # Берем только ссылки и сразу чистим их от хвостов типа (wifi 42)
-                        for line in f:
-                            if 'vless://' in line:
-                                clean_link = line.split('#')[0].strip()
-                                if clean_link not in current_vetted:
-                                    current_vetted.append(clean_link)
+                        vetted_for_issue = [line.split('#')[0].strip() for line in f if 'vless://' in line]
 
-                # Формируем текст
-                body_pin = f"### 💎 Кандидаты в закреп (PIN)\n"
-                body_pin += f"🕒 Обновлено: `{update_time}`\n\n"
-                
-                if not current_vetted:
-                    body_pin += "_Пока нет новых кандидатов в vetted.txt..._"
+                if not vetted_for_issue:
+                    body_pin += "_Пока элитных кандидатов нет..._"
                 else:
-                    # Используем только свежепрочитанный список current_vetted
-                    for i, link in enumerate(current_vetted, 1):
-                        body_pin += f"📡 **Кандидат {i}:** `{link}`\n"
-                        body_pin += f"- [ ] PIN_{link}\n"
-                        body_pin += f"- [ ] BAN_{link}\n\n---\n\n"
+                    for i, base_only in enumerate(vetted_for_issue, 1):
+                        # ВОТ ТУТ СТРОИМ ДВЕ ГАЛОЧКИ ДЛЯ КАЖДОГО
+                        body_pin += f"📡 **Элита {i}:** `{base_only}`\n"
+                        body_pin += f"- [ ] PIN_{base_only}\n"
+                        body_pin += f"- [ ] BAN_{base_only}\n\n---\n\n"
                 
-                # Записываем и отправляем
-                with open("pin_body.txt", "w", encoding="utf-8") as f:
+                with open("pin_body.txt", "w", encoding="utf-8") as f: 
                     f.write(body_pin)
                 
-                subprocess.run(['gh', 'issue', 'edit', num_pin, '--body-file', 'pin_body.txt'], env=env_gh)
-                print(f"💎 Панель PIN #{num_pin} обновлена. Найдено кандидатов: {len(current_vetted)}")
+                subprocess.run(['gh', 'issue', 'edit', num_pin, '--repo', repo, '--body-file', 'pin_body.txt'], 
+                               env={**os.environ, "GH_TOKEN": token})
+                print(f"💎 Панель Pin/Ban #{num_pin} обновлена из vetted.txt.")
 
             # 3. ПАНЕЛЬ UNPIN (Текущие закрепы)
             unpin_cmd = ['gh', 'issue', 'list', '--repo', repo, '--label', 'unpin_control', '--json', 'number', '--limit', '1']
