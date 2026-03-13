@@ -3,10 +3,12 @@ import re
 import os
 import ssl
 import json
+from urllib.parse import urlparse, urlunparse, quote, unquote
 import urllib.parse
 import urllib.request
 import time
 import subprocess
+
 
 # Настройки путей
 INPUT_FILE = 'test1/1.txt'
@@ -93,28 +95,27 @@ def download_raw_data(urls):
             
     return all_links
 
-def rebuild_link_name(link: str, new_name: str) -> str:
-    return link
-    base, _, fragment = link.partition("#")
-
-    # Если это уже закреп — не трогаем
-    if fragment:
-        frag = urllib.parse.unquote(fragment).upper()
-        if "PINNED" in frag:
-            return link
-
-    if not fragment:
-        return f"{base}#{urllib.parse.quote(new_name)}"
-
-    fragment_dec = urllib.parse.unquote(fragment)
-
-    # Пытаемся сохранить флаг/эмодзи
-    match = re.match(r"^([^\w\s\d]|[^\x00-\x7F])+", fragment_dec)
-    if match:
-        prefix = match.group(0).strip()
-        return f"{base}#{urllib.parse.quote(prefix + ' ' + new_name)}"
-
-    return f"{base}#{urllib.parse.quote(new_name)}"
+def rebuild_link_name(link: str, new_label: str) -> str:
+    try:
+        parsed = urlparse(link.strip())
+        # Вытаскиваем старое название (фрагмент)
+        old_fragment = unquote(parsed.fragment)
+        
+        # Пытаемся сохранить флаг, если он был в начале старого названия
+        # Ищем эмодзи флагов (региональные индикаторы)
+        import re
+        emoji_match = re.match(r'^([\U0001F1E6-\U0001F1FF]{2})', old_fragment)
+        flag = emoji_match.group(1) if emoji_match else ""
+        
+        # Собираем новое имя: флаг (если нашли) + твой текст
+        full_new_name = f"{flag} {new_label}".strip()
+        
+        # Заменяем только фрагмент, остальное (хост, параметры) не трогаем
+        new_link_obj = parsed._replace(fragment=full_new_name)
+        return urlunparse(new_link_obj)
+    except Exception as e:
+        print(f"⚠️ Ошибка парсинга ссылки: {e}")
+        return link # В случае ошибки возвращаем оригинал, чтобы не потерять сервер
 
 def remove_from_input_file(base_to_remove: str):
     """Удаляет конкретную ссылку из 1.txt по её базовой части"""
@@ -241,108 +242,64 @@ def safe_gh_call(cmd, token):
 
 def main():
     import subprocess
+    import os
+    import json
+    import time
+    import re
+    import socket
+    import ssl
+    import urllib.parse
+
     token = os.getenv("GH_TOKEN")
     repo = os.getenv("GITHUB_REPOSITORY")
+    now = time.time()
+    counter = 1  # Счётчик для названий (wifi 1, wifi 2...)
 
-    # --- ЗАГРУЗКА КЭША СТРАН (важно для get_country_code) ---
-    countries_cache = {}
-    if os.path.exists(CACHE_FILE):
-        try:
-            with open(CACHE_FILE, 'r') as f: countries_cache = json.load(f)
-        except: countries_cache = {}
-    
-    # --- НАСТРОЙКИ СТРЕСС-ТЕСТА (ИМИТАЦИЯ ГЛУШЕНИЯ) ---
-    stress_config = {
-        "timeout": 2.5,
-        "dpi_sleep": 0.1
-    }
-    if os.path.exists('test1/stress_profile.json'):
-        try:
-            with open('test1/stress_profile.json', 'r') as f:
-                data = json.load(f)
-                # max_handshake_ms из конфига переводим в секунды
-                stress_config["timeout"] = data.get("max_handshake_ms", 2500) / 1000
-                stress_config["dpi_sleep"] = 0.1 if data.get("mimic_dpi_delay") else 0
-        except: 
-            pass
+    # --- 1. ЗАГРУЗКА ВСЕХ ФАЙЛОВ ---
+    def load_json(path, default):
+        if os.path.exists(path):
+            try:
+                with open(path, 'r') as f: return json.load(f)
+            except: return default
+        return default
 
-    blacklist = set()
-    pinned_list = []
-    deferred_base = []
-    current_base = []
-    external_servers = []
-    ranking_db = {}
-    vetted_list = []
-    
+    countries_cache = load_json(CACHE_FILE, {})
+    ranking_db = load_json('test1/ranking.json', {})
+    history = load_json(STATUS_FILE, {})
+
     blacklist = set()
     if os.path.exists('test1/blacklist.txt'):
         with open('test1/blacklist.txt', 'r') as f:
             blacklist = {line.strip() for line in f if line.strip()}
 
-        # Загружаем "рейтинг выслуги"
-    ranking_file = 'test1/ranking.json'
-    ranking_db = {}
-    if os.path.exists(ranking_file):
-        try:
-            with open(ranking_file, "r") as f: ranking_db = json.load(f)
-        except: ranking_db = {}
-
-    # Загружаем текущих проверенных (чтобы не дублировать)
-    vetted_list = []
-    if os.path.exists('test1/vetted.txt'):
-        with open('test1/vetted.txt', 'r') as f:
-            vetted_list = [line.strip() for line in f if line.strip()]
-
-
-    # --- ДОБАВЛЯЕМ ЗАГРУЗКУ СПЕЦФАЙЛОВ ТУТ ---
-    
-    # 1. Загружаем Закрепленные (Pinned)
     pinned_list = []
     if os.path.exists('test1/pinned.txt'):
         with open('test1/pinned.txt', 'r', encoding='utf-8') as f:
-            # Читаем всё целиком, убираем пустые строки
             pinned_list = [line.strip() for line in f if "vless://" in line]
-    
-    print(f"📦 Загружено закрепов из файла: {len(pinned_list)}")
 
-    clean_pinned = {}
-    for p in pinned_list:
-        base = p.split("#")[0].strip()
-        clean_pinned[base] = p  # последний вариант перезапишет предыдущий
-
-    pinned_list = list(clean_pinned.values())
-
-    # 2. Загружаем Отложенные (Deferred)
     deferred_base = []
     if os.path.exists('test1/deferred.txt'):
         with open('test1/deferred.txt', 'r', encoding='utf-8') as f:
             deferred_base = [line.strip() for line in f if line.strip()]
 
-    # ------------------------------------------
-
-    # Дальше твоя стандартная загрузка
     current_base = []
     if os.path.exists(INPUT_FILE):
         with open(INPUT_FILE, "r", encoding="utf-8") as f:
             current_base = f.read().splitlines()
+    
+    # --- 3. НАСТРОЙКИ СТРЕСС-ТЕСТА ---
+    stress_config = {
+        "timeout": 2.5,
+        "dpi_sleep": 0.5 if load_json('test1/stress_profile.json', {}).get("mimic_dpi_delay") else 0.1,
+        "target_mtu": 1280
+    }
+    profile = load_json('test1/stress_profile.json', {})
+    if profile:
+        stress_config["timeout"] = profile.get("max_handshake_ms", 2500) / 1000
+        stress_config["target_mtu"] = profile.get("target_mtu", 1280)
 
-    raw_external = download_raw_data(EXTERNAL_SOURCE_URL)
-    # СОБИРАЕМ ОЧЕРЕДЬ: База + Отложенные + Новые
-    # Это гарантирует, что "старички" из очереди проверятся раньше новичков
-    combined_queue = pinned_list + deferred_base + raw_external + current_base
-
-    # Убираем дубликаты, сохраняя этот новый приоритетный порядок
-    unique_links = []
-    seen_bases = set()
-    for link in combined_queue:
-        base = link.split('#')[0].strip()
-        if base not in seen_bases:
-            unique_links.append(link)
-            seen_bases.add(base)
-
-    # --- БЛОК ЧТЕНИЯ КОМАНД ИЗ GITHUB (В начале main) ---
+    # --- БЛОК ЧТЕНИЯ КОМАНД ИЗ GITHUB ---
     if token and repo:
-        # 1. ЧЕРНЫЙ СПИСОК (CONTROL)
         try:
             print("🔍 Проверка черного списка в GitHub...")
             cmd_control = ['gh', 'issue', 'list', '--repo', repo, '--label', 'control', '--json', 'body', '--limit', '1']
@@ -355,11 +312,9 @@ def main():
                         blacklist.add(s.split('#')[0].strip())
                     with open('test1/blacklist.txt', 'w') as f:
                         f.write("\n".join(list(blacklist)))
-                    print(f"🚫 Обновлено: {len(checked)} серверов в блэклисте.")
-        except Exception as e:
-            print(f"⚠️ Ошибка Blacklist: {e}")
+                    print(f"🚫 Обновлено: {len(checked)} в блэклисте.")
+        except Exception as e: print(f"⚠️ Ошибка Blacklist: {e}")
 
-        # 2. НОВЫЕ ЗАКРЕПЫ (PIN_CONTROL)
         try:
             print("🔍 Проверка новых закрепов...")
             cmd_pin = ['gh', 'issue', 'list', '--repo', repo, '--label', 'pin_control', '--json', 'body', '--limit', '1']
@@ -375,10 +330,8 @@ def main():
                                 pf.write(s.strip() + "\n")
                                 pinned_list.append(s.strip())
                     print(f"💎 Добавлено {len(to_pin)} новых закрепов.")
-        except Exception as e:
-            print(f"⚠️ Ошибка Pin: {e}")
+        except Exception as e: print(f"⚠️ Ошибка Pin: {e}")
 
-        # 3. РАЗЗАКРЕПЛЕНИЕ (UNPIN_CONTROL)
         try:
             print("🔍 Проверка раззакрепления...")
             cmd_unpin = ['gh', 'issue', 'list', '--repo', repo, '--label', 'unpin_control', '--json', 'body', '--limit', '1']
@@ -392,343 +345,137 @@ def main():
                     with open('test1/pinned.txt', 'w', encoding='utf-8') as pf:
                         pf.write("\n".join(pinned_list) + ("\n" if pinned_list else ""))
                     print(f"🔓 Убрано из закрепов: {len(to_unpin)}")
-        except Exception as e:
-            print(f"⚠️ Ошибка Unpin: {e}")
+        except Exception as e: print(f"⚠️ Ошибка Unpin: {e}")
 
-    # --- ПЕРЕЗАГРУЗКА ИСТОРИИ ПЕРЕД ПРОВЕРКОЙ ---
-    history = {}
-    if os.path.exists(STATUS_FILE):
-        try:
-            with open(STATUS_FILE, "r") as f: history = json.load(f)
-        except: history = {}
+    # --- 5. ФОРМИРОВАНИЕ ОЧЕРЕДИ ---
+    raw_external = download_raw_data(EXTERNAL_SOURCE_URL)
+    combined_queue = pinned_list + deferred_base + raw_external + current_base
+    unique_links = []
+    seen_bases = set()
+    for link in combined_queue:
+        base = link.split('#')[0].strip()
+        if base not in seen_bases:
+            unique_links.append(link)
+            seen_bases.add(base)
 
-    all_lines = pinned_list + deferred_base + external_servers + current_base
-
-    # 1. Загрузка базы и истории
-    current_base = []
-    if os.path.exists(INPUT_FILE):
-        with open(INPUT_FILE, "r", encoding="utf-8") as f:
-            current_base = f.read().splitlines()
-
-    history = {}
-    if os.path.exists(STATUS_FILE):
-        try:
-            with open(STATUS_FILE, "r") as f: history = json.load(f)
-        except: history = {}
-    
-    working_for_base = []
+    # --- 6. ЦИКЛ ПРОВЕРКИ ---
     working_for_sub = []
-    new_deferred = []   # <--- ДОБАВЬ ЭТО (сюда пойдут те, кто не влез в лимит)
+    working_for_base = []
     new_history = {}
-    now = time.time()
-    counter = 1
-    checked_today = 0   # <--- ДОБАВЬ ЭТО (счетчик реальных проверок)
-    MAX_TO_CHECK = 300  # <--- ДОБАВЬ ЭТО (лимит, чтобы скрипт не шел до конца очереди вечно)
     seen_ips = set()
-    # ----------------------------------------------------------
-# --- ЦИКЛ ПРОВЕРКИ (ИЩЕМ 200 РАБОЧИХ) ---
-    print(f"📡 Начинаю проверку. Цель: 200 серверов. Всего в очереди: {len(unique_links)}")
-    
-    seen_parts = set()
-    
     idx = 0
+    checked_today = 0
+    MAX_TO_CHECK = 300
+    TARGET_ALIVE = 200
 
-    # --- НАСТРОЙКИ СТРЕСС-ТЕСТА (Интеграция твоего JSON) ---
-    stress_config = {
-        "timeout": 2.5,        # Дефолт
-        "dpi_sleep": 0.1,      # Дефолт
-        "target_mtu": 1280     # Для мобильных сетей
-    }
-    
-    if os.path.exists('test1/stress_profile.json'):
-        try:
-            with open('test1/stress_profile.json', 'r') as f:
-                data = json.load(f)
-                # Берем 1800ms из твоего конфига и превращаем в секунды (1.8)
-                stress_config["timeout"] = data.get("max_handshake_ms", 2500) / 1000
-                # Если mimic_dpi_delay: true, ставим паузу 0.5 сек (имитация лага мобилы)
-                stress_config["dpi_sleep"] = 0.5 if data.get("mimic_dpi_delay") else 0
-                stress_config["target_mtu"] = data.get("target_mtu", 1280)
-        except: 
-            pass
-    # Работаем, пока не набрали 200 в подписку ИЛИ пока не кончились ссылки в unique_links
-    while len(working_for_sub) < 200 and idx < len(unique_links):
+    print(f"📡 Старт: Цель {TARGET_ALIVE}, Лимит {MAX_TO_CHECK}")
+
+    while len(working_for_sub) < TARGET_ALIVE and idx < len(unique_links) and checked_today < MAX_TO_CHECK:
         link = unique_links[idx]
-        idx += 1 # Сдвигаем указатель
+        idx += 1
+        base_part = link.split("#")[0].strip()
         
-        clean_link = link.strip()
-        base_part = clean_link.split("#", 1)[0].strip()
-
-        endpoint, host, port = extract_host_port(base_part)
-        
-        if base_part in seen_parts and not any(base_part in p for p in pinned_list):
-            continue
-        
-        # --- БЛОК ЗАКРЕПОВ (PINNED) ---
-        # --- БЛОК ЗАКРЕПОВ (PINNED) ---
-        found_pinned_full = None
-        for p in pinned_list:
-            if base_part == p.split("#")[0].strip():
-                found_pinned_full = p
-                break
-
-        if found_pinned_full:
-            seen_parts.add(base_part)
-        
-            # 1. Достаём только флаг из старого имени
-            #raw_pinned_name = found_pinned_full.split("#")[-1].strip()
-            #original_label = urllib.parse.unquote(raw_pinned_name)
-        
-            #emoji_match = re.match(r'^([^\w\s\d]+)', original_label)
-            #flag = emoji_match.group(1).strip() if emoji_match else ""
-            final_linkk = found_pinned_full.strip()
-            # 2. Полностью перезаписываем имя
-            #new_name = f"{flag} 💎 [PINNED] {counter}"
-        
-            # 3. Чистим базу
-            #clean_base = base_part.split("#")[0].strip()
-        
-            # 4. Собираем финальную ссылку
-            #final_linkk = f"{clean_base}#{urllib.parse.quote(new_name)}"
-        
-            working_for_sub.append(final_linkk)
-            #print(f"💎 [PINNED] {counter} с флагом '{flag}' готов")
-            print(f"💎 [PINNED] {counter} добавлен без изменений")
-            
+        # 1. Проверка на закреп
+        found_pinned = next((p for p in pinned_list if base_part == p.split("#")[0].strip()), None)
+        if found_pinned:
+            # Закрепы переименовываем отдельно для красоты
+            final_pinned = rebuild_link_name(found_pinned, f"💎 FIXED {counter}")
+            working_for_sub.append(final_pinned)
+            working_for_base.append(base_part)
             counter += 1
             continue
             
-        # --- ФИЛЬТРЫ И ПРОВЕРКИ ---
-        if base_part in blacklist:
-            print(f"🚫 Пропуск: Сервер в черном списке ({host})")
-            continue
+        # 2. Фильтры
+        if base_part in blacklist: continue
+        if any(x in base_part.lower() for x in ["type=ws", "type=grpc"]): continue
 
-        if "type=ws" in base_part.lower() or "type=grpc" in base_part.lower():
-            print(f"📡 Пропуск: Протокол WS/gRPC временно отключен ({host})")
-            continue 
-
-        if not re.search(r'[a-f0-9\-]{36}@', base_part):
-            print(f"❓ Пропуск: Неверный формат UUID или ссылки ({host if host else 'unknown'})")
-            continue
-    
+        # 3. ТЕСТ
+        checked_today += 1
         endpoint, host, port = extract_host_port(base_part)
-        if not endpoint or not host or not port:
-            print(f"❌ Ошибка: Не удалось извлечь хост/порт из ссылки")
-            continue
+        if not host: continue
 
-        # --- ПРОВЕРКА СОЕДИНЕНИЯ ---
-        print(f"🔍 Тестирую: {host}...", end=" ", flush=True) # Печатаем без переноса строки
-
-        # --- ЭТАП 1: РЕЗОЛВИНГ И ПРОВЕРКА ПОД "ГЛУШИЛКУ" ---
-        resolved_ip = None
         is_alive = False
         try:
-            # Проверка DNS (то, что у тебя падает на мобиле)
             resolved_ip = socket.gethostbyname(host) if not is_ipv6(host) else host
-            
-            if resolved_ip in seen_ips:
-                continue 
+            if resolved_ip in seen_ips: continue 
     
-            # Установка соединения с учетом таймаута из stress_profile (1.8s)
             with socket.create_connection((resolved_ip, int(port)), timeout=stress_config["timeout"]) as sock:
-                # Имитируем малый MTU, характерный для забитых каналов или мобильных VPN
-                # sock.setsockopt(socket.IPPROTO_IP, socket.IP_MTU_DISCOVER, socket.IP_PMTUDISC_DO) 
-                
                 use_tls = "security=tls" in base_part.lower() or "security=reality" in base_part.lower()
-                
                 if use_tls:
                     context = ssl.create_default_context()
                     context.check_hostname = False
                     context.verify_mode = ssl.CERT_NONE
-                    
                     with context.wrap_socket(sock, server_hostname=host) as ssock:
-                        # ОТПРАВЛЯЕМ ДАННЫЕ (Важно! Глушилки смотрят на первый пакет после Handshake)
-                        # Эмулируем обычный браузерный запрос
-                        request = f"GET / HTTP/1.1\r\nHost: {host}\r\nUser-Agent: Mozilla/5.0\r\n\r\n"
-                        ssock.sendall(request.encode())
-                        
-                        # ПАУЗА DPI (из конфига)
-                        if stress_config["dpi_sleep"] > 0:
-                            time.sleep(stress_config["dpi_sleep"])
-                        
-                        # Ждем ответа. Если ТСПУ оборвал связь — тут выпадет ConnectionResetError
+                        ssock.sendall(f"GET / HTTP/1.1\r\nHost: {host}\r\n\r\n".encode())
+                        if stress_config["dpi_sleep"] > 0: time.sleep(stress_config["dpi_sleep"])
                         ssock.settimeout(1.5) 
-                        response = ssock.recv(1) 
-                        if response:
-                            is_alive = True
+                        if ssock.recv(1): is_alive = True
                 else:
-                    # Для SOCKS5/Shadowsocks имитируем рукопожатие
                     sock.sendall(b'\x05\x01\x00')
-                    if sock.recv(2):
-                        is_alive = True
+                    if sock.recv(2): is_alive = True
+        except: is_alive = False
 
-        except (socket.timeout, ConnectionResetError, ssl.SSLError, socket.error):
-            # Если DNS не нашелся или связь оборвалась после отправки данных — сервер в утиль
-            is_alive = False
-                
-            if is_alive:
-                seen_ips.add(resolved_ip) 
-
-        # --- ЭТАП 2: ЕСЛИ СЕРВЕР РАБОТАЕТ ---
         if is_alive:
-            # Твоя логика сохранения (БЕЗ ИЗМЕНЕНИЙ СИСТЕМЫ ЗАКРЕПОВ)
-            if "security=none" in base_part.lower():
-                print(f"❌ НЕТ ШИФРОВАНИЯ: {host}")
-                continue
-    
+            seen_ips.add(resolved_ip)
             country = get_country_code(host, countries_cache)
-            if country not in ALLOWED_COUNTRIES:
-                print(f"🌍 МИМО: Страна {country} не в белом списке ({host})")
-                continue
+            if country not in ALLOWED_COUNTRIES: continue
 
-            remove_from_input_file(base_part)
-    
-            working_for_base.append(base_part)
-            # ip_str = f"[{resolved_ip}]" if is_ipv6(resolved_ip) else resolved_ip
-            # sub_link = base_part.replace(endpoint, f"@{ip_str}:{port}", 1)
+            # Чиним SNI
             sub_link = base_part
-            
             if "sni=" not in sub_link.lower() and not is_ipv6(host):
                 sep = "&" if "?" in sub_link else "?"
                 sub_link += f"{sep}sni={host}"
-            
-            # final_link = rebuild_link_name(sub_link, f"wifi {counter}")
-            final_link = link.strip()
-            working_for_sub.append(final_link)
-            
-            print(f"✅ ОК {len(working_for_sub)}/200 ({country}): {host} -> {resolved_ip} (wifi {counter})")
-            counter += 1
-    
-        # --- ЭТАП 3: ЕСЛИ СЕРВЕР НЕ ОТВЕЧАЕТ ---
-        else:
-            print(f"💀 МЕРТВ: Не удалось подключиться или таймаут ({host})")
-            # Чистим из активных списков, так как сейчас он не работает
-            if base_part in ranking_db:
-                del ranking_db[base_part]
-            if base_part in vetted_list:
-                vetted_list.remove(base_part)
-            
-            fail_time = history.get(base_part, now)
-            
-            if now - fail_time > 86400: 
-                print(f"🗑️ УДАЛЕН И ЗАБЛОКИРОВАН (оффлайн > 24ч): {host}")
-                # Пишем в блэклист, чтобы чекер больше его никогда не трогал
-                with open('test1/blacklist.txt', 'a') as bl:
-                    bl.write(base_part + "\n")
-                # continue прерывает работу с этой ссылкой. 
-                # Она НЕ попадет в working_for_base и working_for_sub -> ИСЧЕЗНЕТ из файлов.
-                continue
-    
-            # 3. СЦЕНАРИЙ: "ШАНС" (Упал недавно, попадает в GRACE_PERIOD)
-            if now - fail_time < GRACE_PERIOD:
-                country = get_country_code(host, countries_cache)
-                # Оставляем только если страна нам подходит
-                if country in ALLOWED_COUNTRIES:
-                    # Сохраняем в базу (1.txt), чтобы проверить в следующий раз
-                    working_for_base.append(base_part)
-                    # Записываем в новую историю время падения (чтобы счетчик тикал дальше)
-                    new_history[base_part] = fail_time
-                    
-                    # Добавляем в подписку с меткой ожидания
-                    temp_link = rebuild_link_name(link, f"⏳ wifi {counter}")
-                    working_for_sub.append(temp_link)
-                    
-                    print(f"⏳ DOWN ({country}): {host} (оставлен шанс, wifi {counter})")
-                    counter += 1
-            else:
-                print(f"🗑️ Удален (тайм-аут): {host}")
 
-        # --- ВСЕ, ЧТО НЕ УСПЕЛИ ПРОВЕРИТЬ (если набрали 200 раньше конца списка) ---
-        new_deferred = unique_links[idx:] 
-    # --- КОНЕЦ ЦИКЛА ПРОВЕРКИ ---
-    # --- ЛОГИКА ОЧЕРЕДИ И ЛИМИТОВ (ИСПРАВЛЕНО) ---
-        
-     #   1. Разделяем то, что нашли, на две кучи
-    all_pinned = [l for l in working_for_sub if "💎 [PINNED]" in l]
-    all_others = [l for l in working_for_sub if "💎 [PINNED]" not in l]
+            final_link = rebuild_link_name(sub_link, f"wifi {counter}")
+            working_for_sub.append(final_link)
+            working_for_base.append(base_part)
+            new_history[base_part] = now
+            print(f"✅ ОК {len(working_for_sub)}: {host}")
+            counter += 1
+        else:
+            fail_time = history.get(base_part, now)
+            if now - fail_time > 86400: # Сгнил
+                with open('test1/blacklist.txt', 'a') as bl: bl.write(base_part + "\n")
+            elif now - fail_time < 3600: # Шанс
+                temp_link = rebuild_link_name(base_part, f"⏳ wifi {counter}")
+                working_for_sub.append(temp_link)
+                working_for_base.append(base_part)
+                new_history[base_part] = fail_time
+                counter += 1
+
+    # --- 7. ФИНАЛЬНЫЙ СБОР И ЛИМИТЫ ---
+    new_deferred = unique_links[idx:]
+    all_pinned = [l for l in working_for_sub if "💎" in l]
+    all_others = [l for l in working_for_sub if "💎" not in l]
     
     final_to_sub = []
-    seen_in_final = set()# То самое "сито" для адресов
+    seen_in_final = set()
     
-    # 2. Сначала берем закрепы (Приоритет №1)
-    # Лимит 50 штук
-    for l in all_pinned:
-        if len(final_to_sub) >= 50: break
-        base = l.split("#")[0].strip()
-        if base not in seen_in_final:
-            final_to_sub.append(l)
-            seen_in_final.add(base)
-    # 3. Добираем обычные сервера, пока не станет 200 (Приоритет №2)
-    # Но только те, которых еще НЕТ в закрепах
+    # Лимит закрепов 50, добираем обычными до 200
+    for l in all_pinned[:50]:
+        final_to_sub.append(l)
+        seen_in_final.add(l.split("#")[0].strip())
+        
     for l in all_others:
         if len(final_to_sub) >= 200: break
-        base = l.split("#")[0].strip()
-        if base not in seen_in_final: # ВОТ ОНА — ЗАЩИТА ОТ ДУБЛЯ
+        if l.split("#")[0].strip() not in seen_in_final:
             final_to_sub.append(l)
-            seen_in_final.add(base)
-    
-    # 4. Формируем deferred.txt (остатки)
-    # Сюда идет то, что не влезло + то, что вообще не проверялось 
-    leftover_from_others = [l for l in all_others if l.split("#")[0].strip() not in seen_in_final]
-    deferred_final = new_deferred + leftover_from_others
-    
-# 5. Сохраняем результат
-    
-    # Сначала сохраняем deferred.txt (очередь на потом)
+            seen_in_final.add(l.split("#")[0].strip())
+
+    # --- 8. СОХРАНЕНИЕ ---
     with open('test1/deferred.txt', "w", encoding="utf-8") as f:
-        f.write("\n".join(deferred_final))
-    
-    # ФОРМИРУЕМ ПРАВИЛЬНЫЙ ТЕКСТ ДЛЯ ПОДПИСКИ
-    # .strip() убирает случайные пробелы в начале/конце хедера
-    # \n\n гарантирует, что между командами и ссылками будет пустая строка (важно для iPhone)
-    final_content = HEADER.strip() + "\n\n" + "\n".join(final_to_sub)
+        f.write("\n".join(new_deferred + [l for l in all_others if l.split("#")[0].strip() not in seen_in_final]))
 
-    # ЗАПИСЫВАЕМ В ОСНОВНОЙ ФАЙЛ (kr/mob/wifi.txt)
     os.makedirs(os.path.dirname(OUTPUT_FILE), exist_ok=True)
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
-        f.write(final_content)
+        f.write(HEADER.strip() + "\n\n" + "\n".join(final_to_sub))
         
-    # Сохраняем рабочую базу ссылок для следующего запуска чекера
-    os.makedirs(os.path.dirname(INPUT_FILE), exist_ok=True)
-    with open(INPUT_FILE, "w", encoding="utf-8") as f: 
-        f.write("\n".join(working_for_base))
-    
-    # Сохраняем историю и рейтинги
-    with open(STATUS_FILE, "w") as f: 
-        json.dump(new_history, f)
-    with open('test1/ranking.json', "w") as f:
-        json.dump(ranking_db, f)
+    with open(INPUT_FILE, "w", encoding="utf-8") as f: f.write("\n".join(working_for_base))
+    with open(STATUS_FILE, "w") as f: json.dump(new_history, f)
+    with open('test1/ranking.json', "w") as f: json.dump(ranking_db, f)
+    with open(CACHE_FILE, 'w') as f: json.dump(countries_cache, f)
 
-    print(f"🏁 План выполнен: {len(final_to_sub)} в подписке. Остаток в базе: {len(deferred_final)}")
-    # Базовые части закрепов
-    pinned_bases = {p.split("#")[0].strip() for p in pinned_list}
-    
-    # Сколько закрепов реально попало в подписку
-    count_pinned = sum(
-        1 for l in final_to_sub
-        if l.split("#")[0].strip() in pinned_bases
-    )
-    
-    print(f"💎 Закрепленных в подписке: {count_pinned} (из лимита 50)")
-    print(f"✅ Всего в wifi.txt: {len(final_to_sub)} (из лимита 200)")
-    
-    # 3. Сохранение (ТВОЙ БЛОК БЕЗ ИЗМЕНЕНИЙ НАДПИСЕЙ)
-    os.makedirs(os.path.dirname(INPUT_FILE), exist_ok=True)
-    with open(INPUT_FILE, "w", encoding="utf-8") as f: 
-        f.write("\n".join(working_for_base))
-    
-    with open(STATUS_FILE, "w") as f: 
-        json.dump(new_history, f)
-
-    os.makedirs(os.path.dirname(OUTPUT_FILE), exist_ok=True)
-    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
-        # ЗАМЕНИ ТУТ working_for_sub на final_to_sub
-        f.write(HEADER + "\n".join(final_to_sub))
-
-    with open(CACHE_FILE, 'w') as f:
-        json.dump(countries_cache, f)
-
-    print(f"🏁 Готово! Подписка обновлена.")
+    print(f"🏁 Готово! В подписке: {len(final_to_sub)}")
     # --- ОБНОВЛЕНИЕ ИНТЕРФЕЙСА С ГАЛОЧКАМИ ---
  # --- ОБНОВЛЕНИЕ ИНТЕРФЕЙСА С ГАЛОЧКАМИ ---
     if token and repo:
