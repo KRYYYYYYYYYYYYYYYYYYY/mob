@@ -37,8 +37,7 @@ ALLOWED_COUNTRIES = {"US", "DE", "NL", "GB", "FR", "FI", "SG", "JP", "PL", "TR",
 
 def download_raw_data(urls):
     """
-    Этап 1: Огороженная загрузка. 
-    Пытаемся выкачать списки любой ценой, прежде чем начнем 'шуметь' проверками.
+    Этап 1: Огороженная загрузка с защитой от сбоев DNS.
     """
     all_links = []
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
@@ -47,11 +46,25 @@ def download_raw_data(urls):
     
     for url in urls:
         success = False
-        for attempt in range(5):  # 5 попыток на каждый файл
+        # Извлекаем домен (например, raw.githubusercontent.com)
+        try:
+            hostname = urllib.parse.urlparse(url).netloc
+        except:
+            hostname = None
+            
+        for attempt in range(5): 
             try:
+                # 1. Прогреваем DNS (пробиваем Errno -3)
+                if hostname:
+                    try:
+                        socket.gethostbyname(hostname)
+                    except:
+                        pass # Если не вышло тут, попробует urllib
+
                 print(f"📡 Попытка {attempt+1}: {url.split('/')[-1]}...", end=" ")
                 req = urllib.request.Request(url.strip(), headers=headers)
-                # Ставим большой таймаут на случай лагов DNS
+                
+                # 2. Загружаем данные
                 with urllib.request.urlopen(req, timeout=30) as response:
                     content = response.read().decode("utf-8")
                     found = [line.strip() for line in content.splitlines() if "vless://" in line]
@@ -60,11 +73,13 @@ def download_raw_data(urls):
                     success = True
                     break
             except Exception as e:
-                print(f"❌ Ошибка: {e}")
-                time.sleep(3) # Короткая пауза перед повтором
+                # 3. Нарастающая пауза: 5с, 10с, 15с, 20с
+                wait_time = (attempt + 1) * 5
+                print(f"❌ Ошибка: {e}. Ждем {wait_time}с...")
+                time.sleep(wait_time)
         
         if not success:
-            print(f"⚠️ Не удалось загрузить источник после 5 попыток. Пропускаем.")
+            print(f"⚠️ КРИТИЧЕСКАЯ ОШИБКА: Не удалось загрузить {url}")
             
     return all_links
 
