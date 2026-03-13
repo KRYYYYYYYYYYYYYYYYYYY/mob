@@ -444,6 +444,8 @@ def main():
         
         clean_link = link.strip()
         base_part = clean_link.split("#", 1)[0].strip()
+
+        endpoint, host, port = extract_host_port(base_part)
         
         if base_part in seen_parts and not any(base_part in p for p in pinned_list):
             continue
