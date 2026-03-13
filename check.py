@@ -284,7 +284,7 @@ def main():
         with open(INPUT_FILE, "r", encoding="utf-8") as f:
             current_base = f.read().splitlines()
     
-    # --- 3. НАСТРОЙКИ СТРЕСС-ТЕСТА ---
+    # --- 2. НАСТРОЙКИ СТРЕСС-ТЕСТА ---
     stress_config = {
         "timeout": 2.5,
         "dpi_sleep": 0.5 if load_json('test1/stress_profile.json', {}).get("mimic_dpi_delay") else 0.1,
@@ -297,6 +297,7 @@ def main():
 
     # --- БЛОК ЧТЕНИЯ КОМАНД ИЗ GITHUB ---
     if token and repo:
+        # 1. ПАНЕЛЬ CONTROL (Обычный черный список)
         try:
             print("🔍 Проверка черного списка в GitHub...")
             cmd_control = ['gh', 'issue', 'list', '--repo', repo, '--label', 'control', '--json', 'body', '--limit', '1']
@@ -307,18 +308,22 @@ def main():
                 if checked:
                     for s in checked:
                         blacklist.add(s.split('#')[0].strip())
-                    with open('test1/blacklist.txt', 'w') as f:
+                    with open('test1/blacklist.txt', 'w', encoding='utf-8') as f:
                         f.write("\n".join(list(blacklist)))
                     print(f"🚫 Обновлено: {len(checked)} в блэклисте.")
         except Exception as e: print(f"⚠️ Ошибка Blacklist: {e}")
 
+        # 2. ПАНЕЛЬ PIN/BAN (Двойные галочки из Кандидатов)
         try:
-            print("🔍 Проверка новых закрепов...")
+            print("🔍 Проверка панели кандидатов (PIN/BAN)...")
             cmd_pin = ['gh', 'issue', 'list', '--repo', repo, '--label', 'pin_control', '--json', 'body', '--limit', '1']
             out = safe_gh_call(cmd_pin, token)
             data = json.loads(out)
             if data:
-                to_pin = re.findall(r'- \[x\] (vless://[^\s#\s]+)', data[0]['body'])
+                body = data[0]['body']
+                
+                # Ищем [x] PIN_vless://...
+                to_pin = re.findall(r'- \[x\] PIN_(vless://[^\s\n]+)', body)
                 if to_pin:
                     with open('test1/pinned.txt', 'a', encoding='utf-8') as pf:
                         for s in to_pin:
@@ -326,16 +331,28 @@ def main():
                             if all(base != p.split("#")[0].strip() for p in pinned_list):
                                 pf.write(s.strip() + "\n")
                                 pinned_list.append(s.strip())
-                    print(f"💎 Добавлено {len(to_pin)} новых закрепов.")
-        except Exception as e: print(f"⚠️ Ошибка Pin: {e}")
+                    print(f"💎 Добавлено закрепов: {len(to_pin)}")
 
+                # Ищем [x] BAN_vless://...
+                to_ban = re.findall(r'- \[x\] BAN_(vless://[^\s\n]+)', body)
+                if to_ban:
+                    with open('test1/blacklist.txt', 'a', encoding='utf-8') as bf:
+                        for s in to_ban:
+                            base = s.split("#")[0].strip()
+                            if base not in blacklist:
+                                bf.write(base + "\n")
+                                blacklist.add(base)
+                    print(f"🚫 Отправлено в бан через панель кандидатов: {len(to_ban)}")
+        except Exception as e: print(f"⚠️ Ошибка Pin/Ban: {e}")
+
+        # 3. ПАНЕЛЬ UNPIN (Раззакрепление)
         try:
             print("🔍 Проверка раззакрепления...")
             cmd_unpin = ['gh', 'issue', 'list', '--repo', repo, '--label', 'unpin_control', '--json', 'body', '--limit', '1']
             out = safe_gh_call(cmd_unpin, token)
             data = json.loads(out)
             if data:
-                to_unpin = re.findall(r'- \[x\] (vless://[^\s#\s]+)', data[0]['body'])
+                to_unpin = re.findall(r'- \[x\] (vless://[^\s]+)', data[0]['body'])
                 if to_unpin:
                     to_unpin_bases = [u.split("#")[0].strip() for u in to_unpin]
                     pinned_list = [s for s in pinned_list if s.split("#")[0].strip() not in to_unpin_bases]
@@ -507,19 +524,19 @@ def main():
                 subprocess.run(['gh', 'issue', 'edit', issue_number, '--repo', repo, '--body-file', 'issue_body.txt'], env=env_gh)
                 print(f"📝 Панель Control #{issue_number} обновлена.")
 
-            # 2. ПАНЕЛЬ PIN (Кандидаты)
-            pin_cmd = ['gh', 'issue', 'list', '--repo', repo, '--label', 'pin_control', '--json', 'number', '--limit', '1']
-            out_pin = subprocess.check_output(pin_cmd, env=env_gh).decode()
-            data_pin = json.loads(out_pin)
-            
+            # --- ПАНЕЛЬ 2: КАНДИДАТЫ В ЗАКРЕП (PIN + BAN) ---
             if data_pin:
                 num_pin = str(data_pin[0]['number'])
-                body_pin = f"### 💎 Кандидаты в закреп\n🕒 Обновлено: `{update_time}`\n\n"
-                # Исправлено: используем working_for_base вместо несуществующего vetted_list
+                body_pin = f"### 💎 Управление кандидатами\n🕒 Обновлено: `{update_time}`\n\n"
+                body_pin += "Инструкция: [x] в 'PIN' — закрепить, [x] в 'BAN' — в черный список.\n\n---\n\n"
+                
                 for i, link in enumerate(working_for_base, 1):
-                    base_only = link.split("#")[0].strip()
-                    if all(base_only != p.split("#")[0].strip() for p in pinned_list):
-                        body_pin += f"- [ ] {link} (wifi {i})\n\n---\n\n"
+                    # Проверяем, что его еще нет в закрепах
+                    if all(link != p.split("#")[0].strip() for p in pinned_list):
+                        body_pin += f"📡 **Сервер {i}:** `{link}`\n"
+                        body_pin += f"- [ ] PIN_{link}\n"  # Тэг для закрепа
+                        body_pin += f"- [ ] BAN_{link}\n"  # Тэг для бана
+                        body_pin += "\n---\n\n"
                 
                 with open("pin_body.txt", "w", encoding="utf-8") as f: f.write(body_pin)
                 subprocess.run(['gh', 'issue', 'edit', num_pin, '--repo', repo, '--body-file', 'pin_body.txt'], env=env_gh)
