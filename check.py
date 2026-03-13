@@ -247,6 +247,7 @@ def main():
     import ssl
     import urllib.parse
 
+    vetted_list = []
     token = os.getenv("GH_TOKEN")
     repo = os.getenv("GITHUB_REPOSITORY")
     now = time.time()
@@ -283,6 +284,13 @@ def main():
     if os.path.exists(INPUT_FILE):
         with open(INPUT_FILE, "r", encoding="utf-8") as f:
             current_base = f.read().splitlines()
+    
+    vetted_list = []
+    if os.path.exists('test1/vetted.txt'):
+        with open('test1/vetted.txt', 'r', encoding='utf-8') as f:
+            # Читаем только уникальные vless ссылки
+            vetted_from_file = list(set(line.strip() for line in f if "vless://" in line))
+    print(f"📥 Загружено из vetted.txt: {len(vetted_from_file)} серверов")
     
     # --- 2. НАСТРОЙКИ СТРЕСС-ТЕСТА ---
     stress_config = {
@@ -529,23 +537,31 @@ def main():
                 subprocess.run(['gh', 'issue', 'edit', issue_number, '--repo', repo, '--body-file', 'issue_body.txt'], env=env_gh)
                 print(f"📝 Панель Control #{issue_number} обновлена.")
 
-            # --- ПАНЕЛЬ 2: КАНДИДАТЫ В ЗАКРЕП (PIN + BAN) ---
+            # --- ПАНЕЛЬ 2: КАНДИДАТЫ В ЗАКРЕП (Источник: vetted.txt) ---
             if data_pin:
                 num_pin = str(data_pin[0]['number'])
-                body_pin = f"### 💎 Управление кандидатами\n🕒 Обновлено: `{update_time}`\n\n"
-                body_pin += "Инструкция: [x] в 'PIN' — закрепить, [x] в 'BAN' — в черный список.\n\n---\n\n"
+                body_pin = f"### 💎 Кандидаты из vetted.txt\n🕒 Обновлено: `{update_time}`\n\n"
+                body_pin += "> **Инструкция:** Эти серверы прислал другой бот. Выбери PIN для закрепа или BAN для удаления.\n\n"
                 
-                for i, link in enumerate(working_for_base, 1):
-                    # Проверяем, что его еще нет в закрепах
-                    if all(link != p.split("#")[0].strip() for p in pinned_list):
-                        body_pin += f"📡 **Сервер {i}:** `{link}`\n"
-                        body_pin += f"- [ ] PIN_{link}\n"  # Тэг для закрепа
-                        body_pin += f"- [ ] BAN_{link}\n"  # Тэг для бана
-                        body_pin += "\n---\n\n"
+                # Берем серверы именно из загруженного vetted.txt
+                for i, link in enumerate(vetted_from_file, 1):
+                    base_only = link.split("#")[0].strip()
+                    
+                    # Фильтр 1: Не показывать то, что УЖЕ в закрепе
+                    is_pinned = any(base_only == p.split("#")[0].strip() for p in pinned_list)
+                    # Фильтр 2: Не показывать то, что в черном списке
+                    is_banned = base_only in blacklist
+                    
+                    if not is_pinned and not is_banned:
+                        body_pin += f"📡 **Кандидат {i}:** `{base_only}`\n"
+                        body_pin += f"- [ ] PIN_{base_only}\n"
+                        body_pin += f"- [ ] BAN_{base_only}\n\n---\n\n"
                 
+                if not vetted_from_file:
+                    body_pin += "_Список кандидатов пуст (файл vetted.txt пуст или не найден)._"
+
                 with open("pin_body.txt", "w", encoding="utf-8") as f: f.write(body_pin)
                 subprocess.run(['gh', 'issue', 'edit', num_pin, '--repo', repo, '--body-file', 'pin_body.txt'], env=env_gh)
-                print(f"💎 Панель Pin #{num_pin} обновлена.")
 
             # 3. ПАНЕЛЬ UNPIN (Текущие закрепы)
             unpin_cmd = ['gh', 'issue', 'list', '--repo', repo, '--label', 'unpin_control', '--json', 'number', '--limit', '1']
