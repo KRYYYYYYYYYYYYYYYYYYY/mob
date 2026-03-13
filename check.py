@@ -295,6 +295,11 @@ def main():
         stress_config["timeout"] = profile.get("max_handshake_ms", 2500) / 1000
         stress_config["target_mtu"] = profile.get("target_mtu", 1280)
 
+    data_pin = None
+    data_ctrl = None
+    data_unp = None
+    working_for_base = []
+
     # --- БЛОК ЧТЕНИЯ КОМАНД ИЗ GITHUB ---
     if token and repo:
         # 1. ПАНЕЛЬ CONTROL (Обычный черный список)
