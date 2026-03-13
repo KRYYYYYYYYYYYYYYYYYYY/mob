@@ -460,47 +460,54 @@ def main():
             seen_in_final.add(l.split("#")[0].strip())
 
     # --- 8. СОХРАНЕНИЕ ---
+    # Формируем очередь из того, что не влезло в лимит 200
+    leftover_from_others = [l for l in all_others if l.split("#")[0].strip() not in seen_in_final]
+    deferred_final = new_deferred + leftover_from_others
+    
     with open('test1/deferred.txt', "w", encoding="utf-8") as f:
-        f.write("\n".join(new_deferred + [l for l in all_others if l.split("#")[0].strip() not in seen_in_final]))
+        f.write("\n".join(deferred_final))
 
+    # Записываем основной файл подписки (wifi.txt)
     os.makedirs(os.path.dirname(OUTPUT_FILE), exist_ok=True)
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
         f.write(HEADER.strip() + "\n\n" + "\n".join(final_to_sub))
         
-    with open(INPUT_FILE, "w", encoding="utf-8") as f: f.write("\n".join(working_for_base))
+    # Сохраняем рабочую базу для следующего запуска
+    with open(INPUT_FILE, "w", encoding="utf-8") as f: 
+        f.write("\n".join(working_for_base))
+    
+    # Сбрасываем кэши и историю
     with open(STATUS_FILE, "w") as f: json.dump(new_history, f)
     with open('test1/ranking.json', "w") as f: json.dump(ranking_db, f)
     with open(CACHE_FILE, 'w') as f: json.dump(countries_cache, f)
 
     print(f"🏁 Готово! В подписке: {len(final_to_sub)}")
-    # --- ОБНОВЛЕНИЕ ИНТЕРФЕЙСА С ГАЛОЧКАМИ ---
- # --- ОБНОВЛЕНИЕ ИНТЕРФЕЙСА С ГАЛОЧКАМИ ---
+
+    # --- ОБНОВЛЕНИЕ ИНТЕРФЕЙСА В GITHUB ISSUES ---
     if token and repo:
         try:
             update_time = time.strftime("%d.%m.%Y %H:%M:%S")
             env_gh = {**os.environ, "GH_TOKEN": token}
 
-            # --- ПАНЕЛЬ 1: ЧЕРНЫЙ СПИСОК (CONTROL) ---
+            # 1. ПАНЕЛЬ CONTROL (Blacklist)
             find_cmd = ['gh', 'issue', 'list', '--repo', repo, '--label', 'control', '--json', 'number', '--limit', '1']
             out = subprocess.check_output(find_cmd, env=env_gh).decode()
             data = json.loads(out)
             
-            if data:  # Проверка: если список не пуст
+            if data:
                 issue_number = str(data[0]['number'])
                 issue_body = f"### 🎮 Панель управления серверами\n🕒 Последнее обновление: `{update_time}`\n\n"
                 issue_body += "Отметь [x] и сохрани, чтобы отправить в черный список:\n\n---\n\n"
                 
                 for i, link in enumerate(working_for_base, 1):
                     status = "[x]" if link in blacklist else "[ ]"
-                    issue_body += f"- {status} {link} (wifi {i})\n\n---\n\n"
+                    issue_body += f f"- {status} {link} (wifi {i})\n\n---\n\n"
                 
                 with open("issue_body.txt", "w", encoding="utf-8") as f: f.write(issue_body)
                 subprocess.run(['gh', 'issue', 'edit', issue_number, '--repo', repo, '--body-file', 'issue_body.txt'], env=env_gh)
                 print(f"📝 Панель Control #{issue_number} обновлена.")
-            else:
-                print("⚠️ Issue с меткой 'control' не найдено.")
 
-            # --- ПАНЕЛЬ 2: КАНДИДАТЫ В ЗАКРЕП (PIN) ---
+            # 2. ПАНЕЛЬ PIN (Кандидаты)
             pin_cmd = ['gh', 'issue', 'list', '--repo', repo, '--label', 'pin_control', '--json', 'number', '--limit', '1']
             out_pin = subprocess.check_output(pin_cmd, env=env_gh).decode()
             data_pin = json.loads(out_pin)
@@ -508,15 +515,17 @@ def main():
             if data_pin:
                 num_pin = str(data_pin[0]['number'])
                 body_pin = f"### 💎 Кандидаты в закреп\n🕒 Обновлено: `{update_time}`\n\n"
-                for i, link in enumerate(vetted_list, 1):
-                    if link not in pinned_list:
+                # Исправлено: используем working_for_base вместо несуществующего vetted_list
+                for i, link in enumerate(working_for_base, 1):
+                    base_only = link.split("#")[0].strip()
+                    if all(base_only != p.split("#")[0].strip() for p in pinned_list):
                         body_pin += f"- [ ] {link} (wifi {i})\n\n---\n\n"
                 
                 with open("pin_body.txt", "w", encoding="utf-8") as f: f.write(body_pin)
                 subprocess.run(['gh', 'issue', 'edit', num_pin, '--repo', repo, '--body-file', 'pin_body.txt'], env=env_gh)
                 print(f"💎 Панель Pin #{num_pin} обновлена.")
 
-            # --- ПАНЕЛЬ 3: УПРАВЛЕНИЕ ЗАКРЕПАМИ (UNPIN) ---
+            # 3. ПАНЕЛЬ UNPIN (Текущие закрепы)
             unpin_cmd = ['gh', 'issue', 'list', '--repo', repo, '--label', 'unpin_control', '--json', 'number', '--limit', '1']
             out_unp = subprocess.check_output(unpin_cmd, env=env_gh).decode()
             data_unp = json.loads(out_unp)
