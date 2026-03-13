@@ -152,53 +152,65 @@ def main_monitor():
             base = link.split("#")[0].strip()
             host, port = extract_host_port(base)
             
-            if not host:
-                continue
+            if not host: continue
 
             print(f"🔍 Проверка {host[:20]}...", end=" ", flush=True)
-
             is_ok, status_code = deep_kill_check(link, stress_config)
 
-            # Инициализируем данные
+            # Получаем данные или создаем новые
             data = ranking_db.get(base, {"rank": 0, "fails": 0, "link": link, "geo": "??"})
             if not isinstance(data, dict): data = {"rank": data, "fails": 0, "link": link, "geo": "??"}
             
             if is_ok:
-                # Определяем гео, если его еще нет
+                # 1. ПОВЫШАЕМ РЕЙТИНГ
+                data["rank"] += 1
+                data["fails"] = 0 # Сбрасываем ошибки, если ожил
+                
+                # Гео-проверка (как у тебя была)
                 if data.get("geo") in ["??", None, ""]:
                     data["geo"] = get_country(host)
                 
-                # ЖЕСТКИЙ ФИЛЬТР: Удаляем сразу, если страны нет в белом списке
-                # Убрал условие != "??", чтобы неопознанные тоже не висели в топе
                 if data["geo"] not in ALLOWED_COUNTRIES:
-                    print(f"🌍 МИМО ({data['geo']}) -> МГНОВЕННОЕ УДАЛЕНИЕ")
+                    print(f"🌍 МИМО ({data['geo']})")
                     if base in ranking_db: del ranking_db[base]
                     remove_from_all(base)
-                    continue 
+                    continue
 
-                # Если всё ок — начисляем баллы
-                data["rank"] += 1
-                data["fails"] = 0 
                 ranking_db[base] = data
                 valid_others.append(link)
-                print(f"✅ ГУД (Баллы: {data['rank']} | {data['geo']})")
-            else:
-                data["fails"] += 1
-                if data["fails"] >= 3:
-                    # --- ДОБАВЬ ЭТИ ТРИ СТРОКИ ---
-                    if base in ranking_db: del ranking_db[base] # Чистим JSON
-                    remove_from_all(base)                      # Чистим .txt файлы
+                print(f"✅ +1 (Всего: {data['rank']})")
+
+                # --- ЛОГИКА ОТПРАВКИ В RANKED ---
+                # Если набрал 3 балла, он достоин попасть в список Кандидатов
+                if data["rank"] >= 3:
+                    VETTED_FILE = 'test1/vetted.txt'
+                    # Читаем текущий vetted, чтобы не дублировать
+                    vetted_content = ""
+                    if os.path.exists(VETTED_FILE):
+                        with open(VETTED_FILE, 'r') as vr: vetted_content = vr.read()
                     
-                    if status_code == 404: 
-                        add_to_blacklist(base)
-                        print(f"💀 БАН (Статус: {status_code})")
-                    else:
-                        print(f"🗑️ КИК (Осечки: {data['fails']})")
+                    if base not in vetted_content:
+                        with open(VETTED_FILE, 'a', encoding='utf-8') as vf:
+                            vf.write(link + "\n")
+                        print(f"🚀 [RANKED CANDIDATE] Добавлен в vetted.txt")
+
+            else:
+                # 2. ШТРАФУЕМ ВМЕСТО УДАЛЕНИЯ
+                data["fails"] += 1
+                data["rank"] = max(0, data["rank"] - 2) # Снимаем 2 балла за провал
+                
+                print(f"⚠️ ПРОВАЛ (Ранг: {data['rank']} | Ошибки: {data['fails']}/3)")
+
+                # Удаляем только если совсем "сгнил" или 3 раза подряд упал
+                if data["rank"] <= 0 or data["fails"] >= 3:
+                    if base in ranking_db: del ranking_db[base]
+                    remove_from_all(base)
+                    if status_code == 404: add_to_blacklist(base)
+                    print(f"💀 УДАЛЕН ИЗ БАЗЫ")
                 else:
                     ranking_db[base] = data
+                    # Пока он не сдох окончательно, оставляем его в wifi.txt
                     valid_others.append(link)
-                    # --- И ЭТОТ ПРИНТ ТОЖЕ ---
-                    print(f"⚠️ FAIL {data['fails']}/3 (Код: {status_code})")
 
         # Сохраняем прогресс рейтинга
         with open(RANK_FILE, 'w', encoding='utf-8') as f:
@@ -210,7 +222,7 @@ def main_monitor():
 
         with open(WIFI_FILE, 'w', encoding='utf-8') as f:
             # Используем твой стандартный хедер
-            header = "# profile-title: 🏴WIFI🏴\n# profile-update-interval: 2\n\n"
+            header = "# profile-title: 🏴Мобильный инет🏴\n# profile-update-interval: 2\n\n"
             f.write(header + "\n".join(final_list))
         
         print(f"📊 ИТОГ: {len(pinned_in_wifi)} закрепов, {len(valid_others)} живых. Жду минуту...")
