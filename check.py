@@ -8,7 +8,7 @@ import urllib.parse
 import urllib.request
 import time
 import subprocess
-
+ 
 
 # Настройки путей
 INPUT_FILE = 'test1/1.txt'
