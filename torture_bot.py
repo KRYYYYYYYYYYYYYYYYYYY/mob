@@ -297,11 +297,21 @@ def main_torturer():
 
     # Проверка кандидатов
     candidates = []
+    seen_addresses = set() # Сюда пишем хост:порт
+
     for base, data in ranking_db.items():
         rank = data.get("rank", 0) if isinstance(data, dict) else data
         link = data.get("link", base) if isinstance(data, dict) else base
-        if (rank >= THRESHOLD or rank <= 0) and base not in vetted_set and base not in pinned_set:
-            candidates.append((base, link))
+        
+        host, port = extract_host_port(base)
+        addr = f"{host}:{port}"
+
+        if (rank >= THRESHOLD) and base not in vetted_set and base not in pinned_set:
+            if addr not in seen_addresses:
+                candidates.append((base, link))
+                seen_addresses.add(addr)
+            else:
+                print(f"♻️ Пропуск дубля по IP: {addr}")
 
     if candidates:
         def run_torture(item):
