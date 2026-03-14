@@ -7,6 +7,7 @@ import urllib.parse
 import urllib.request
 import time
 import subprocess
+import ipaddress
 
 # Настройки путей
 INPUT_FILE = 'test1/1.txt'
@@ -16,20 +17,7 @@ CACHE_FILE = 'test1/countries_cache.json' # Добавь эту констант
 RANKING_FILE = 'test1/ranking.json'
 
 EXTERNAL_SOURCE_URL = [
-    "https://raw.githubusercontent.com/zieng2/wl/main/vless_lite.txt",
-    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-CIDR-RU-checked.txt",
-    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-CIDR-RU-all.txt",
-    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile.txt",
-    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile-2.txt",
-    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS_mobile.txt",
-    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS.txt",
-    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_SS%2BAll_RUS.txt",
-    "https://raw.githubusercontent.com/makitaltdriddim-web/vpn-configs-for-russia-/refs/heads/main/WHITE-CIDR-RU-checked.txt",
-    "https://raw.githubusercontent.com/makitaltdriddim-web/vpn-configs-for-russia-/refs/heads/main/WHITE-CIDR-RU-all.txt",
-    "https://raw.githubusercontent.com/makitaltdriddim-web/vpn-configs-for-russia-/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile.txt",
-    "https://raw.githubusercontent.com/makitaltdriddim-web/vpn-configs-for-russia-/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile-2.txt",
-    "https://raw.githubusercontent.com/makitaltdriddim-web/vpn-configs-for-russia-/refs/heads/main/BLACK_VLESS_RUS_mobile.txt",
-    "https://raw.githubusercontent.com/makitaltdriddim-web/vpn-configs-for-russia-/refs/heads/main/BLACK_VLESS_RUS.txt"
+    "https://raw.githubusercontent.com/KRYYYYYYYYYYYYYYYYYYY/crazy_xray_checker/refs/heads/main/result/working.txt",
 ]
 
 GRACE_PERIOD = 2 * 24 * 60 * 60 # 48 часов
@@ -134,85 +122,72 @@ def remove_from_input_file(base_to_remove: str):
         print(f"⚠️ Ошибка при очистке {INPUT_FILE}: {e}")
 
 def is_ipv6(host: str) -> bool:
+    """
+    Проверяет, является ли строка IPv6.
+    Работает и со скобками (для URL), и без них (после парсинга).
+    """
+    if not host: return False
     return ":" in host
 
 def extract_host_port(link: str):
-    # Поиск для обычного хоста или домена
-    match = re.search(r"(@)([\w.-]+):(\d+)", link)
+    """
+    Извлекает хост и порт. 
+    Если это IPv6 в скобках, вернет чистый адрес без скобок.
+    """
+    pattern = r"@(?:\[([0-9a-fA-F:]+)\]|([\w.-]+)):(\d+)"
+    match = re.search(pattern, link)
     if match:
-        # group(0) содержит '@host:port', group(2) - host, group(3) - port
-        return match.group(0), match.group(2), match.group(3)
-    
-    # Поиск для IPv6 в скобках
-    ipv6_match = re.search(r"(@)\[([0-9a-fA-F:]+)\]:(\d+)", link)
-    if ipv6_match:
-        return ipv6_match.group(0), ipv6_match.group(2), ipv6_match.group(3)
-        
+        # group(1) — адрес из скобок, group(2) — обычный адрес
+        host = match.group(1) or match.group(2)
+        port = match.group(3)
+        return match.group(0), host, port
     return None, None, None
 
-
 def format_uri_host(host: str) -> str:
+    """Упаковывает IPv6 в скобки для использования в ссылке vless."""
     if is_ipv6(host) and not host.startswith("["):
         return f"[{host}]"
     return host
 
 def get_country_code(host, cache):
-    # Если это домен, резолвим в IP для кэша (страна привязана к IP)
-    try:
-        ip = socket.gethostbyname(host)
-    except:
-        ip = host
+    # 1. Определяем IP. 
+    # Если это домен — резолвим. Если IPv6 или IPv4 — оставляем как есть.
+    ip = host
+    if not is_ipv6(host):
+        try:
+            # Пытаемся резолвить только если это похоже на домен (нет двоеточий)
+            # и это не чистый IPv4
+            if not re.match(r"^\d{1,3}(\.\d{1,3}){3}$", host):
+                ip = socket.gethostbyname(host)
+        except:
+            ip = host
 
-    # Проверяем кэш
+    # 2. Проверяем кэш (используем IP как ключ)
     if ip in cache:
         return cache[ip]
 
-    # Если в кэше нет, идем в API (не забываем про лимит 45 зап/мин)
+    # 3. Запрос к API
     try:
-        # Добавляем небольшую паузу, чтобы не спамить (0.5 сек даст ~120 зап/мин, чуть рискованно, но для 200 серверов пойдет)
+        # Пауза 0.5с — это хорошо, защищает от 429 Too Many Requests
         time.sleep(0.5) 
-        url = f"http://ip-api.com/json/{ip}?fields=status,countryCode"
-        with urllib.request.urlopen(url, timeout=3) as response:
+        
+        # Для IPv6 в URL скобки не нужны, ip-api кушает их просто как строку
+        clean_ip = ip.replace("[", "").replace("]", "")
+        url = f"http://ip-api.com/json/{clean_ip}?fields=status,countryCode"
+        
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=3) as response:
             data = json.loads(response.read().decode("utf-8"))
             if data.get("status") == "success":
                 code = data.get("countryCode", "Unknown")
-                cache[ip] = code # Сохраняем в память
+                cache[ip] = code 
                 return code
-    except: 
+    except Exception as e:
+        # Печатаем ошибку только для отладки, если нужно
+        # print(f"GeoIP Error: {e}")
         pass
-    return "Unknown"
-
-def fetch_external_servers() -> list:
-    # Приводим к списку в любом случае
-    urls = EXTERNAL_SOURCE_URL if isinstance(EXTERNAL_SOURCE_URL, list) else [EXTERNAL_SOURCE_URL]
-    
-    all_configs = []
-    print(f"🌐 Начинаю сбор из {len(urls)} источников...")
-
-    for url in urls:
-        url = url.strip()
-        if not url: continue
         
-        try:
-            # Увеличиваем таймаут и добавляем User-Agent, чтобы GitHub не блокировал
-            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-            with urllib.request.urlopen(req, timeout=15) as response:
-                content = response.read().decode("utf-8")
-                configs = [line.strip() for line in content.splitlines() if "vless://" in line]
-                
-                if configs:
-                    all_configs.extend(configs)
-                    print(f"✅ {url.split('/')[-1]}: Найдено {len(configs)} шт.")
-                else:
-                    print(f"⚠️ {url.split('/')[-1]}: Файл пуст или нет vless")
-                    
-        except Exception as e:
-            # Если один URL упал, просто пишем ошибку и идем дальше
-            print(f"❌ Ошибка на источнике {url.split('/')[-1]}: {e}")
-            continue 
-
-    print(f"📊 Итого загружено извне: {len(all_configs)} потенциальных серверов")
-    return all_configs
+    return "Unknown"
 
 def safe_gh_call(cmd, token):
     """Безопасно вызывает gh cli, пробуя 3 раза при сетевых сбоях."""
@@ -524,7 +499,7 @@ def main():
         is_alive = False
         try:
             # Проверка DNS (то, что у тебя падает на мобиле)
-            resolved_ip = socket.gethostbyname(host) if not is_ipv6(host) else host
+            resolved_ip = host if is_ipv6(host) else socket.gethostbyname(host)
             
             if resolved_ip in seen_ips:
                 continue 
@@ -605,8 +580,6 @@ def main():
             # Чистим из активных списков, так как сейчас он не работает
             if base_part in ranking_db:
                 del ranking_db[base_part]
-            if base_part in vetted_list:
-                vetted_list.remove(base_part)
             
             fail_time = history.get(base_part, now)
             
