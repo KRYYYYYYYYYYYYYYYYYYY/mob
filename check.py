@@ -326,18 +326,30 @@ def main():
             out = safe_gh_call(cmd_pin, token)
             data = json.loads(out)
             if data:
-                to_pin = re.findall(r'- \[x\] (vless://[^\s#\s]+)', data[0]['body'])
+                # ИСПРАВЛЕНО: ищем [x] PIN_vless...
+                to_pin = re.findall(r'\[[xX]\]\s*PIN_(vless://[^\s#`]+)', data[0]['body'])
+                
                 if to_pin:
                     with open('test1/pinned.txt', 'a', encoding='utf-8') as pf:
                         for s in to_pin:
                             base = s.split("#")[0].strip()
+                            # Проверяем, нет ли его уже в списке закрепов
                             if all(base != p.split("#")[0].strip() for p in pinned_list):
                                 pf.write(s.strip() + "\n")
                                 pinned_list.append(s.strip())
                     print(f"💎 Добавлено {len(to_pin)} новых закрепов.")
-        except Exception as e:
-            print(f"⚠️ Ошибка Pin: {e}")
+                
+                # ДОБАВЬ ТАКЖЕ ОБРАБОТКУ BAN, если её нет в этом блоке:
+                to_ban = re.findall(r'\[[xX]\]\s*BAN_(vless://[^\s#`]+)', data[0]['body'])
+                if to_ban:
+                    for s in to_ban:
+                        base = s.split("#")[0].strip()
+                        add_to_blacklist(base) # Твоя функция добавления в бан
+                        remove_from_all(base)   # Удаление из активных списков
+                    print(f"🚫 Забанено {len(to_ban)} серверов.")
 
+        except Exception as e:
+            print(f"⚠️ Ошибка Pin/Ban: {e}")
         # 3. РАЗЗАКРЕПЛЕНИЕ (UNPIN_CONTROL)
         try:
             print("🔍 Проверка раззакрепления...")
@@ -424,7 +436,6 @@ def main():
         if base_part in seen_parts and not any(base_part in p for p in pinned_list):
             continue
         
-        # --- БЛОК ЗАКРЕПОВ (PINNED) ---
         # --- БЛОК ЗАКРЕПОВ (PINNED) ---
         found_pinned_full = None
         for p in pinned_list:
