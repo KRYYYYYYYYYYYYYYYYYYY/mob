@@ -319,34 +319,43 @@ def main():
         except Exception as e:
             print(f"⚠️ Ошибка Blacklist: {e}")
 
-        # 2. НОВЫЕ ЗАКРЕПЫ (PIN_CONTROL)
+        # 2. НОВЫЕ ЗАКРЕПЫ И БАНЫ (PIN_CONTROL)
         try:
-            print("🔍 Проверка новых закрепов...")
+            print("🔍 Проверка новых команд в Issue...")
             cmd_pin = ['gh', 'issue', 'list', '--repo', repo, '--label', 'pin_control', '--json', 'body', '--limit', '1']
-            out = safe_gh_call(cmd_pin, token)
+            out = subprocess.check_output(cmd_pin, env={**os.environ, "GH_TOKEN": token}).decode()
             data = json.loads(out)
+        
             if data:
-                # ИСПРАВЛЕНО: ищем [x] PIN_vless...
-                to_pin = re.findall(r'\[[xX]\]\s*PIN_(vless://[^\s#`]+)', data[0]['body'])
+                body = data[0]['body']
                 
-                if to_pin:
-                    with open('test1/pinned.txt', 'a', encoding='utf-8') as pf:
-                        for s in to_pin:
+                # --- БЛОК ЗАЩИТЫ: Проверяем мастер-галочку ---
+                if re.search(r'\[[xX]\]\s*✅\s*ПРИМЕНИТЬ', body):
+                    print("🛡️ Мастер-галочка нажата! Выполняю команды...")
+                    
+                    # Ищем PIN и BAN
+                    to_pin = re.findall(r'\[[xX]\]\s*PIN_(vless://[^\s#`]+)', body)
+                    to_ban = re.findall(r'\[[xX]\]\s*BAN_(vless://[^\s#`]+)', body)
+        
+                    # Обработка PIN
+                    if to_pin:
+                        with open(PINNED_FILE, 'a', encoding='utf-8') as pf:
+                            for s in to_pin:
+                                base = s.split("#")[0].strip()
+                                if all(base != p.split("#")[0].strip() for p in pinned_list):
+                                    pf.write(base + "\n")
+                                    pinned_list.append(base)
+                        print(f"📌 Закреплено: {len(to_pin)} серверов.")
+        
+                    # Обработка BAN
+                    if to_ban:
+                        for s in to_ban:
                             base = s.split("#")[0].strip()
-                            # Проверяем, нет ли его уже в списке закрепов
-                            if all(base != p.split("#")[0].strip() for p in pinned_list):
-                                pf.write(s.strip() + "\n")
-                                pinned_list.append(s.strip())
-                    print(f"💎 Добавлено {len(to_pin)} новых закрепов.")
-                
-                # ДОБАВЬ ТАКЖЕ ОБРАБОТКУ BAN, если её нет в этом блоке:
-                to_ban = re.findall(r'\[[xX]\]\s*BAN_(vless://[^\s#`]+)', data[0]['body'])
-                if to_ban:
-                    for s in to_ban:
-                        base = s.split("#")[0].strip()
-                        add_to_blacklist(base) # Твоя функция добавления в бан
-                        remove_from_all(base)   # Удаление из активных списков
-                    print(f"🚫 Забанено {len(to_ban)} серверов.")
+                            add_to_blacklist(base)
+                            remove_from_all(base)
+                        print(f"🚫 Забанено: {len(to_ban)} серверов.")
+                else:
+                    print("🛡️ Команды PIN/BAN проигнорированы: мастер-галочка не нажата.")
 
         except Exception as e:
             print(f"⚠️ Ошибка Pin/Ban: {e}")
@@ -731,21 +740,26 @@ def main():
             
             if out_pin and out_pin != "[]":
                 num_pin = str(json.loads(out_pin)[0]['number'])
-                body_pin = f"### 💎 Кандидаты в закреп и бан\n🕒 Обновлено: `{update_time}`\n\n"
+                update_time = time.strftime('%d.%m.%Y %H:%M:%S')
                 
-                # ЧИТАЕМ ТОЛЬКО ФАЙЛ VETTED.TXT
+                # Формируем заголовок и КНОПКУ ЗАЩИТЫ
+                body_pin = f"### 💎 Кандидаты в закреп и бан\n🕒 Обновлено: `{update_time}`\n\n"
+                body_pin += "🚨 **ПОДТВЕРЖДЕНИЕ:**\n"
+                body_pin += "- [ ] ✅ **ПРИМЕНИТЬ ВЫБРАННЫЕ PIN/BAN**\n"
+                body_pin += "> _Нажмите на эту галочку, чтобы бот выполнил выбранные действия._\n\n---\n\n"
+                
+                # Читаем только VETTED.TXT
                 vetted_for_issue = []
-                if os.path.exists('test1/vetted.txt'):
-                    with open('test1/vetted.txt', 'r', encoding='utf-8') as f:
+                if os.path.exists(VETTED_FILE):
+                    with open(VETTED_FILE, 'r', encoding='utf-8') as f:
                         vetted_for_issue = [line.split('#')[0].strip() for line in f if 'vless://' in line]
-
+        
                 if not vetted_for_issue:
                     body_pin += "_Пока элитных кандидатов нет..._"
                 else:
                     for i, base_only in enumerate(vetted_for_issue, 1):
                         body_pin += f"📡 **Элита {i}:**\n"
-                        # Добавляем метку PIN или BAN прямо перед ссылкой, чтобы регулярка их различала
-                        body_pin += f"- [ ] PIN_{base_only}\n" # Если нажать тут, регулярка должна искать PIN_vless...
+                        body_pin += f"- [ ] PIN_{base_only}\n"
                         body_pin += f"- [ ] BAN_{base_only}\n\n---\n\n"
                 
                 with open("pin_body.txt", "w", encoding="utf-8") as f: 
@@ -753,7 +767,7 @@ def main():
                 
                 subprocess.run(['gh', 'issue', 'edit', num_pin, '--repo', repo, '--body-file', 'pin_body.txt'], 
                                env={**os.environ, "GH_TOKEN": token})
-                print(f"💎 Панель Pin/Ban #{num_pin} обновлена из vetted.txt.")
+                print(f"💎 Панель #{num_pin} обновлена. Защита включена.")
 
             # --- ПАНЕЛЬ 3: УПРАВЛЕНИЕ ЗАКРЕПАМИ (UNPIN) ---
             unpin_cmd = ['gh', 'issue', 'list', '--repo', repo, '--label', 'unpin_control', '--json', 'number', '--limit', '1']
