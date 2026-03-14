@@ -67,16 +67,15 @@ def process_pin_commands(token, repo, vetted_list, ranking_db):
         pin_read = subprocess.check_output(cmd, env={**os.environ, "GH_TOKEN": token}).decode()
         
         if not pin_read or pin_read == "[]": return vetted_list
-        
         body = json.loads(pin_read)[0]['body']
         
-        # Регулярки с игнорированием регистра (флаг re.I)
-        to_pin = re.findall(r'\[[xX]\]\s*(vless://[^\s#`]+)', body)
-        to_ban = re.findall(r'\[[vV]\]\s*(vless://[^\s#`]+)', body)
+        # ОБНОВЛЕННЫЕ РЕГУЛЯРКИ ПОД НОВУЮ ПАНЕЛЬ
+        to_pin = re.findall(r'\[[xX]\]\s*PIN_(vless://[^\s#`]+)', body)
+        to_ban = re.findall(r'\[[xX]\]\s*BAN_(vless://[^\s#`]+)', body)
 
         if not to_pin and not to_ban: return vetted_list
 
-        print(f"🕵️ Pin-Control: Найдено {len(to_pin)} PIN и {len(to_ban)} BAN")
+        print(f"🕵️ Pin-Control: Найдено {len(to_pin)} PIN и {len(to_ban)} BAN (через клики [x])")
         affected_bases = set()
 
         # --- ОБРАБОТКА PIN (В закрепы) ---
