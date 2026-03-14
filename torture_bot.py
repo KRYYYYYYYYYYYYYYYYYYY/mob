@@ -247,6 +247,10 @@ def torture_check(link, stress_config, resolved_ip):
             return False
     return True
 
+def is_ipv6(host):
+    """Проверяет наличие двоеточия, что характерно для IPv6"""
+    return ":" in host
+
 def main_torturer():
     # Проверка на дубликаты процесса
     for proc in psutil.process_iter(['pid', 'cmdline']):
@@ -303,11 +307,23 @@ def main_torturer():
         def run_torture(item):
             base, full_link = item
             host, port = extract_host_port(base)
+
+            # --- ЖЕСТКИЙ ФИЛЬТР IPv6 В ИНСПЕКТОРЕ ---
+            if host and is_ipv6(host):
+                print(f"🚫 [INSPECTOR BANNED IPv6]: {host}")
+                add_to_blacklist(base)
+                remove_from_all(base)
+                return base, full_link, False, "IPv6_BAN"
+            # ----------------------------------------
+            
             try:
                 resolved_ip = socket.gethostbyname(host)
-                if get_country(resolved_ip) not in ALLOWED_COUNTRIES: return base, full_link, False, "GEO"
+                if get_country(resolved_ip) not in ALLOWED_COUNTRIES: 
+                    return base, full_link, False, "GEO"
+                
                 return base, full_link, torture_check(full_link, stress_config, resolved_ip), "OK"
-            except: return base, full_link, False, "ERROR"
+            except: 
+                return base, full_link, False, "ERROR"
 
         with ThreadPoolExecutor(max_workers=5) as executor:
             results = list(executor.map(run_torture, candidates))
@@ -320,9 +336,15 @@ def main_torturer():
                 if base in ranking_db: del ranking_db[base]
                 print(f"🏆 ЭЛИТА: {base[:15]}")
             else:
-                if base in ranking_db and status == "OK":
-                    ranking_db[base]['rank'] = max(0, ranking_db[base].get('rank', 50) - 30)
-                    ranking_db[base]['last_torture'] = "FAIL"
+                # Если это был IPv6 или ошибка ГЕО — вычищаем из базы рейтинга полностью
+                if status in ["IPv6_BAN", "GEO", "ERROR"]:
+                    if base in ranking_db: del ranking_db[base]
+                
+                # Если сервер просто не прошел пытку (статус OK, но success False)
+                elif status == "OK":
+                    if base in ranking_db:
+                        ranking_db[base]['rank'] = max(0, ranking_db[base].get('rank', 50) - 30)
+                        ranking_db[base]['last_torture'] = "FAIL"
 
         with open(RANK_FILE, 'w', encoding='utf-8') as f:
             json.dump(ranking_db, f, ensure_ascii=False, indent=4)
