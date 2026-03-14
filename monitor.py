@@ -99,9 +99,10 @@ def remove_from_all(base_part):
                 print(f" 🧹 [УДАЛЕНИЕ] Сервер {base_part[:20]}... вырезан из {path}")
 
 def is_ip(host):
-    """Проверяет, является ли хост IP-адресом (v4 или v6)"""
+    """Проверяет, является ли хост IPv4 или IPv6"""
     if not host: return False
-    return re.match(r'^(\d{1,3}\.){3}\d{1,3}$', host) or ':' in host
+    # IPv4 или IPv6 (наличие двоеточия)
+    return re.match(r'^(\d{1,3}\.){3}\d{1,3}$', host) or ":" in host
 
 def deep_kill_check(link, stress_config, pinned_bases): # <-- Добавили pinned_bases
     base_part = link.split("#")[0].strip()
@@ -111,6 +112,11 @@ def deep_kill_check(link, stress_config, pinned_bases): # <-- Добавили p
     
     host, port = extract_host_port(base_part)
     if not host or not port: return False, 404
+
+    # --- ФИЛЬТР IPv6 (БАН) ---
+    if is_ipv6(host):
+        print(f"🚫 [IPv6 DETECTED] {host} - отправляем в бан")
+        return False, 666  # Используем свой код для идентификации IPv6
 
     # Твой оригинальный запрос
     request_data = f"GET / HTTP/1.1\r\nHost: {host}\r\nUser-Agent: Mozilla/5.0\r\n\r\n".encode()
@@ -230,7 +236,11 @@ def main_monitor():
                 remove_from_all(base)
                 print(f"🧊 {base[:20]}... упал. Удален.")
                 
-                if status_code == 404:
+                # Если это наш "забаненный" IPv6 или сервер не отвечает
+                if status_code == 666:
+                    add_to_blacklist(base)
+                    print(f"💀 БАН (IPv6): {base[:30]}")
+                elif status_code == 404:
                     add_to_blacklist(base)
                     print(f"💀 БАН (Н/Д): {base[:30]}")
 
