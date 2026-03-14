@@ -199,8 +199,6 @@ def torture_check(link, stress_config, resolved_ip):
     return True
 
 def main_torturer():
-    # 1. Проверка на дубликаты
-    def main_torturer():
     # Проверка на дубликаты процесса
     for proc in psutil.process_iter(['pid', 'cmdline']):
         try:
