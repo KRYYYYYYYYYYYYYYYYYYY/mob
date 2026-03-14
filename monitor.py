@@ -247,19 +247,26 @@ def main_monitor():
         if os.path.exists(WIFI_FILE):
             with open(WIFI_FILE, 'r', encoding='utf-8') as f:
                 for line in f:
-                    # Собираем все строки в начале файла, которые начинаются с #
                     if line.strip().startswith('#'):
                         header_to_keep.append(line.rstrip())
                     elif line.strip(): 
-                        # Как только пошли ссылки (не решетки), стопаем сбор хедера
+                        # Как только пошли ссылки (vless://), хедер закончился
                         break
         
-        # Если вдруг файл был пустой, создаем минимальный дефолт, чтобы не сломать подписку
+        # Если хедер пустой, создаем твой полный эталонный вариант
         if not header_to_keep:
-            header_to_keep = ["# profile-title: 🏴Мобильный инет🏴", "# profile-update-interval: 2"]
+            header_to_keep = [
+                "# profile-title: 🏳️Мобильный инет🏳️",
+                "# remark: 🏳️Мобильный инет🏳️",
+                "# announce: Подписка для использования ТОЛЬКО на мобильном интернете в условиях БЕЛЫХ СПИСКОВ!",
+                "# profile-update-interval: 2",
+                "# subscription-userinfo: upload=0; download=0; expire=0",
+                "# shadowrocket-userinfo: upload=0; download=0; expire=0"
+            ]
 
-        # Записываем обратно: твой хедер + пустая строка + новые ссылки
+        # Записываем всё обратно
         with open(WIFI_FILE, 'w', encoding='utf-8') as f:
+            # Склеиваем строки хедера через перенос строки, добавляем отступ и вставляем ссылки
             f.write("\n".join(header_to_keep) + "\n\n")
             f.write("\n".join(final_list))
         
