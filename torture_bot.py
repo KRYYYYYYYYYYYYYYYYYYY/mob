@@ -248,6 +248,8 @@ def main_torturer():
         except: continue
 
     stress_config = load_stress_config()
+    token = os.getenv("GH_TOKEN")
+    repo = os.getenv("GITHUB_REPOSITORY")
 
     # Загрузка базы
     ranking_db = {}
@@ -289,44 +291,37 @@ def main_torturer():
         if (rank >= THRESHOLD or rank <= 0) and base not in vetted_set and base not in pinned_set:
             candidates.append((base, link))
 
-    if not candidates:
-        print("⌛ Нет кандидатов."); return
+    if candidates:
+        def run_torture(item):
+            base, full_link = item
+            host, port = extract_host_port(base)
+            try:
+                resolved_ip = socket.gethostbyname(host)
+                if get_country(resolved_ip) not in ALLOWED_COUNTRIES: return base, full_link, False, "GEO"
+                return base, full_link, torture_check(full_link, stress_config, resolved_ip), "OK"
+            except: return base, full_link, False, "ERROR"
 
-    # Внутренняя функция для потока
-    def run_torture(item):
-        base, full_link = item
-        host, port = extract_host_port(base)
-        try:
-            resolved_ip = socket.gethostbyname(host)
-            if get_country(resolved_ip) not in ALLOWED_COUNTRIES: return base, full_link, False, "GEO"
-            return base, full_link, torture_check(full_link, stress_config, resolved_ip), "OK"
-        except: return base, full_link, False, "ERROR"
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            results = list(executor.map(run_torture, candidates))
 
-    # --- ЗАПУСК ПОТОКОВ (Тут была ошибка) ---
-    with ThreadPoolExecutor(max_workers=5) as executor: # 5 потоков достаточно для 20-минутных пыток
-        results = list(executor.map(run_torture, candidates))
+        for base, full_link, success, status in results:
+            if success:
+                with file_lock:
+                    with open(VETTED_FILE, 'a', encoding='utf-8') as f:
+                        f.write(f"{full_link} # Rank: ELITE | {time.strftime('%Y-%m-%d')}\n")
+                if base in ranking_db: del ranking_db[base]
+                print(f"🏆 ЭЛИТА: {base[:15]}")
+            else:
+                if base in ranking_db and status == "OK":
+                    ranking_db[base]['rank'] = max(0, ranking_db[base].get('rank', 50) - 30)
+                    ranking_db[base]['last_torture'] = "FAIL"
 
-    # 5. Обработка результатов
-    for base, full_link, success, status in results:
-        if success:
-            with file_lock:
-                with open(VETTED_FILE, 'a', encoding='utf-8') as f:
-                    f.write(f"{full_link} # Rank: ELITE | {time.strftime('%Y-%m-%d')}\n")
-            if base in ranking_db: del ranking_db[base]
-            print(f"🏆 ЭЛИТА: {base[:15]}")
-        else:
-            if base in ranking_db and status == "OK":
-                ranking_db[base]['rank'] = max(0, ranking_db[base].get('rank', 50) - 30)
-                ranking_db[base]['last_torture'] = "FAIL"
+        with open(RANK_FILE, 'w', encoding='utf-8') as f:
+            json.dump(ranking_db, f, ensure_ascii=False, indent=4)
+    else:
+        print("⌛ Нет новых кандидатов для пыток.")
 
-    with open(RANK_FILE, 'w', encoding='utf-8') as f:
-        json.dump(ranking_db, f, ensure_ascii=False, indent=4)
-
-    # 2. Теперь, когда файлы на диске актуальны, обновляем панель управления в GitHub
-    # Используем GITHUB_REPOSITORY (стандартная переменная экшена)
-    token = os.getenv("GH_TOKEN")
-    repo = os.getenv("GITHUB_REPOSITORY")
-    
+    # 5. ФИНАЛЬНЫЙ ШАГ: Всегда обновляем панель в конце
     if token and repo:
         refresh_control_panel(token, repo)
     else:
