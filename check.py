@@ -15,6 +15,8 @@ OUTPUT_FILE = 'kr/mob/wifi.txt'
 STATUS_FILE = 'test1/status.json'
 CACHE_FILE = 'test1/countries_cache.json' # Добавь эту константу для порядка
 RANKING_FILE = 'test1/ranking.json'
+VETTED_FILE = 'test1/vetted.txt'
+PINNED_FILE = 'test1/pinned.txt'
 
 EXTERNAL_SOURCE_URL = [
     "https://raw.githubusercontent.com/KRYYYYYYYYYYYYYYYYYYY/crazy_xray_checker/refs/heads/main/result/working.txt",
@@ -213,6 +215,17 @@ def safe_gh_call(cmd, token):
             print(f"❌ Ошибка GH CLI: {err_output[:100]}")
             break
     return "[]"
+
+def add_to_blacklist(base_part):
+    """Добавляет сервер в файл blacklist.txt, если его там нет."""
+    current_bl = set()
+    if os.path.exists('test1/blacklist.txt'):
+        with open('test1/blacklist.txt', 'r') as f:
+            current_bl = {line.strip() for line in f if line.strip()}
+    
+    if base_part not in current_bl:
+        with open('test1/blacklist.txt', 'a') as f:
+            f.write(base_part + "\n")
 
 def main():
     import subprocess
@@ -494,6 +507,13 @@ def main():
         endpoint, host, port = extract_host_port(base_part)
         if not endpoint or not host or not port:
             print(f"❌ Ошибка: Не удалось извлечь хост/порт из ссылки")
+            continue
+
+        # --- ЖЕСТКИЙ ФИЛЬТР IPv6 ---
+        if is_ipv6(host):
+            print(f"🚫 БАН (IPv6): {host} запрещен в мобильной сети.")
+            add_to_blacklist(base_part) # Отправляем в черный список сразу
+            remove_from_input_file(base_part) # Чистим из 1.txt
             continue
 
         # --- ПРОВЕРКА СОЕДИНЕНИЯ ---
