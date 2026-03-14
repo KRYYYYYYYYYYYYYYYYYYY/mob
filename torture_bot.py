@@ -331,14 +331,21 @@ def main_torturer():
         for base, full_link, success, status in results:
             if success:
                 with file_lock:
-                    with open(VETTED_FILE, 'a', encoding='utf-8') as f:
-                        f.write(f"{full_link} # Rank: ELITE | {time.strftime('%Y-%m-%d')}\n")
-                if base in ranking_db: del ranking_db[base]
-                print(f"🏆 ЭЛИТА: {base[:15]}")
-            else:
-                # Если это был IPv6 или ошибка ГЕО — вычищаем из базы рейтинга полностью
-                if status in ["IPv6_BAN", "GEO", "ERROR"]:
-                    if base in ranking_db: del ranking_db[base]
+                    # Считываем текущих элитариев, чтобы не плодить дубли
+                    existing_vetted = set()
+                    if os.path.exists(VETTED_FILE):
+                        with open(VETTED_FILE, 'r', encoding='utf-8') as vf:
+                            existing_vetted = {l.split('#')[0].strip() for l in vf if 'vless' in l}
+                    
+                    if base not in existing_vetted:
+                        with open(VETTED_FILE, 'a', encoding='utf-8') as f:
+                            f.write(f"{full_link} # Rank: ELITE | {time.strftime('%Y-%m-%d')}\n")
+                        print(f"🏆 НОВАЯ ЭЛИТА: {base[:15]}")
+                    else:
+                        print(f"♻️ СЕРВЕР УЖЕ В ЭЛИТЕ: {base[:15]}")
+
+                if base in ranking_db: 
+                    del ranking_db[base]
                 
                 # Если сервер просто не прошел пытку (статус OK, но success False)
                 elif status == "OK":
