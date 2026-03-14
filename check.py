@@ -714,21 +714,35 @@ def main():
             else:
                 print("⚠️ Issue с меткой 'control' не найдено.")
 
-            # --- ПАНЕЛЬ 2: КАНДИДАТЫ В ЗАКРЕП (PIN) ---
+            # --- ПАНЕЛЬ 2: КАНДИДАТЫ В ЗАКРЕП (ТОЛЬКО ИЗ VETTED.TXT) ---
             pin_cmd = ['gh', 'issue', 'list', '--repo', repo, '--label', 'pin_control', '--json', 'number', '--limit', '1']
-            out_pin = subprocess.check_output(pin_cmd, env=env_gh).decode()
-            data_pin = json.loads(out_pin)
+            out_pin = subprocess.check_output(pin_cmd, env={**os.environ, "GH_TOKEN": token}).decode()
             
-            if data_pin:
-                num_pin = str(data_pin[0]['number'])
-                body_pin = f"### 💎 Кандидаты в закреп\n🕒 Обновлено: `{update_time}`\n\n"
-                for i, link in enumerate(vetted_list, 1):
-                    if link not in pinned_list:
-                        body_pin += f"- [ ] {link} (wifi {i})\n\n---\n\n"
+            if out_pin and out_pin != "[]":
+                num_pin = str(json.loads(out_pin)[0]['number'])
+                body_pin = f"### 💎 Кандидаты в закреп и бан\n🕒 Обновлено: `{update_time}`\n\n"
                 
-                with open("pin_body.txt", "w", encoding="utf-8") as f: f.write(body_pin)
-                subprocess.run(['gh', 'issue', 'edit', num_pin, '--repo', repo, '--body-file', 'pin_body.txt'], env=env_gh)
-                print(f"💎 Панель Pin #{num_pin} обновлена.")
+                # ЧИТАЕМ ТОЛЬКО ФАЙЛ VETTED.TXT
+                vetted_for_issue = []
+                if os.path.exists('test1/vetted.txt'):
+                    with open('test1/vetted.txt', 'r', encoding='utf-8') as f:
+                        vetted_for_issue = [line.split('#')[0].strip() for line in f if 'vless://' in line]
+
+                if not vetted_for_issue:
+                    body_pin += "_Пока элитных кандидатов нет..._"
+                else:
+                    for i, base_only in enumerate(vetted_for_issue, 1):
+                        body_pin += f"📡 **Элита {i}:**\n"
+                        # Добавляем метку PIN или BAN прямо перед ссылкой, чтобы регулярка их различала
+                        body_pin += f"- [ ] PIN_{base_only}\n" # Если нажать тут, регулярка должна искать PIN_vless...
+                        body_pin += f"- [ ] BAN_{base_only}\n\n---\n\n"
+                
+                with open("pin_body.txt", "w", encoding="utf-8") as f: 
+                    f.write(body_pin)
+                
+                subprocess.run(['gh', 'issue', 'edit', num_pin, '--repo', repo, '--body-file', 'pin_body.txt'], 
+                               env={**os.environ, "GH_TOKEN": token})
+                print(f"💎 Панель Pin/Ban #{num_pin} обновлена из vetted.txt.")
 
             # --- ПАНЕЛЬ 3: УПРАВЛЕНИЕ ЗАКРЕПАМИ (UNPIN) ---
             unpin_cmd = ['gh', 'issue', 'list', '--repo', repo, '--label', 'unpin_control', '--json', 'number', '--limit', '1']
