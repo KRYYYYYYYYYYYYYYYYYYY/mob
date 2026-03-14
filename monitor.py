@@ -147,6 +147,10 @@ def deep_kill_check(link, stress_config, pinned_bases): # <-- Добавили p
             return True, 200
     except:
         return False, 404
+
+def is_ipv6(host):
+    """Проверяет, является ли хост IPv6 адресом"""
+    return ":" in host
     
 def main_monitor():
     start_run = time.time()
