@@ -225,21 +225,6 @@ def main():
         try:
             with open(CACHE_FILE, 'r') as f: countries_cache = json.load(f)
         except: countries_cache = {}
-    
-    # --- НАСТРОЙКИ СТРЕСС-ТЕСТА (ИМИТАЦИЯ ГЛУШЕНИЯ) ---
-    stress_config = {
-        "timeout": 2.5,
-        "dpi_sleep": 0.1
-    }
-    if os.path.exists('test1/stress_profile.json'):
-        try:
-            with open('test1/stress_profile.json', 'r') as f:
-                data = json.load(f)
-                # max_handshake_ms из конфига переводим в секунды
-                stress_config["timeout"] = data.get("max_handshake_ms", 2500) / 1000
-                stress_config["dpi_sleep"] = 0.1 if data.get("mimic_dpi_delay") else 0
-        except: 
-            pass
 
     blacklist = set()
     pinned_list = []
@@ -411,7 +396,7 @@ def main():
     # --- НАСТРОЙКИ СТРЕСС-ТЕСТА (Интеграция твоего JSON) ---
     stress_config = {
         "timeout": 2.5,        # Дефолт
-        "dpi_sleep": 0.1,      # Дефолт
+        "dpi_sleep": 0.5,      # Дефолт
         "target_mtu": 1280     # Для мобильных сетей
     }
     
