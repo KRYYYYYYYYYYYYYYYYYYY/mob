@@ -9,68 +9,113 @@ PINNED_FILE = 'test1/pinned.txt'
 
 ALLOWED_COUNTRIES = {"US", "DE", "NL", "GB", "FR", "FI", "SG", "JP", "PL", "TR", "RU"}
 
-def get_country(host):
-    """Определяет страну сервера (быстрая проверка)"""
+# В начало файла к остальным переменным
+COUNTRY_CACHE_FILE = 'test1/countries_cache.json'
+country_cache = {}
+
+# Загружаем кэш при старте
+if os.path.exists(COUNTRY_CACHE_FILE):
     try:
-        # Ограничиваем таймаут, чтобы монитор не зависал на одном сервере
-        resp = requests.get(f"http://ip-api.com/json/{host}?fields=status,countryCode", timeout=2)
+        with open(COUNTRY_CACHE_FILE, 'r') as f:
+            country_cache = json.load(f)
+    except: pass
+
+def get_country(host):
+    """Определяет страну с использованием локального кэша"""
+    # 1. Сначала ищем в памяти
+    if host in country_cache:
+        return country_cache[host]
+    
+    # 2. Если нет в кэше, идем в API (только если хост похож на IP/домен)
+    try:
+        # Не стучимся в API, если это локальный адрес или мусор
+        if not host or host == "127.0.0.1": return "??"
+        
+        resp = requests.get(
+            f"http://ip-api.com/json/{host}?fields=status,countryCode", 
+            timeout=2
+        )
+        
         if resp.status_code == 200:
             data = resp.json()
             if data.get("status") == "success":
-                return data.get("countryCode", "??")
-    except: pass
+                code = data.get("countryCode", "??")
+                # Сохраняем в кэш
+                country_cache[host] = code
+                # Периодически сбрасываем кэш на диск (можно делать реже, но для надежности здесь)
+                with open(COUNTRY_CACHE_FILE, 'w') as f:
+                    json.dump(country_cache, f)
+                return code
+        elif resp.status_code == 429:
+            print("⚠️ Лимит запросов к IP-API исчерпан (429)")
+    except: 
+        pass
+    
     return "??"
 
 def extract_host_port(link):
-    match = re.search(r'@([\w\.-]+):(\d+)', link)
+    """Извлекает хост и порт, игнорируя всё, что идет после порта"""
+    # 1. Сначала ищем стандартный формат @host:port
+    # [\w\.-]+ — хост, (\d+) — порт, (?=[/?#]|$) — проверка, что дальше разделитель или конец
+    match = re.search(r'@([\w\.-]+):(\d+)(?=[/?#]|$)', link)
+    
     if not match:
-        match = re.search(r'@\[([0-9a-fA-F:]+)\]:(\d+)', link)
-    return (match.group(1), int(match.group(2))) if match else (None, None)
-
-def is_pinned(base_part):
-    if not os.path.exists(PINNED_FILE): return False
-    with open(PINNED_FILE, 'r', encoding='utf-8') as f:
-        # Читаем файл и для каждой строки берем только часть до знака #
-        pinned_bases = [line.split('#')[0].strip() for line in f if 'vless://' in line]
-        return base_part in pinned_bases
+        # 2. Ищем формат со скобками для IPv6: @[addr]:port
+        match = re.search(r'@\[([0-9a-fA-F:]+)\]:(\d+)(?=[/?#]|$)', link)
+    
+    if match:
+        host = match.group(1)
+        port = int(match.group(2))
+        return host, port
+    
+    return None, None
         
 def add_to_blacklist(base_part):
+    """Добавляет сервер в черный список, защищая от дублей и ошибок кодировки"""
     existing = set()
     if os.path.exists(BLACKLIST_FILE):
-        with open(BLACKLIST_FILE, 'r') as f:
-            existing = {line.strip() for line in f}
+        # Добавляем encoding='utf-8', чтобы не было проблем с системными символами
+        with open(BLACKLIST_FILE, 'r', encoding='utf-8') as f:
+            # strip() обязателен, чтобы не плодить пустые строки и невидимые пробелы
+            existing = {line.strip() for line in f if line.strip()}
+    
     if base_part not in existing:
-        with open(BLACKLIST_FILE, 'a') as f:
+        with open(BLACKLIST_FILE, 'a', encoding='utf-8') as f:
             f.write(base_part + "\n")
+        print(f"🚫 [BLACKLIST] Добавлен: {base_part[:30]}...")
 
 def remove_from_all(base_part):
-    # Список файлов, из которых нужно вырезать мертвый сервер
     for path in [WIFI_FILE, DEFERRED_FILE]: 
         if os.path.exists(path):
             with open(path, 'r', encoding='utf-8') as f:
                 lines = f.readlines()
             
-            # Оставляем только те строки, где НЕТ этого сервера
-            new_lines = [l for l in lines if base_part not in l]
+            # Сравниваем только левую часть до знака #
+            new_lines = [l for l in lines if l.split('#')[0].strip() != base_part]
             
-            # Если что-то удалили — перезаписываем файл
             if len(lines) != len(new_lines):
                 with open(path, 'w', encoding='utf-8') as f:
                     f.writelines(new_lines)
-                print(f" 🧹 [УДАЛЕНИЕ] Сервер вырезан из {path}")
+                print(f" 🧹 [УДАЛЕНИЕ] Сервер {base_part[:20]}... вырезан из {path}")
 
-def deep_kill_check(link, stress_config):
+def is_ip(host):
+    """Проверяет, является ли хост IP-адресом (v4 или v6)"""
+    if not host: return False
+    return re.match(r'^(\d{1,3}\.){3}\d{1,3}$', host) or ':' in host
+
+def deep_kill_check(link, stress_config, pinned_bases): # <-- Добавили pinned_bases
     base_part = link.split("#")[0].strip()
-    if is_pinned(base_part): return True, 200 
+    
+    # ВМЕСТО is_pinned(base_part) используем быструю проверку по памяти
+    if base_part in pinned_bases: return True, 200 
     
     host, port = extract_host_port(base_part)
     if not host or not port: return False, 404
 
-    # Имитируем запрос как в основном чекере
+    # Твой оригинальный запрос
     request_data = f"GET / HTTP/1.1\r\nHost: {host}\r\nUser-Agent: Mozilla/5.0\r\n\r\n".encode()
 
     try:
-        start = time.time()
         with socket.create_connection((host, int(port)), timeout=stress_config["timeout"]) as s:
             if "security=tls" in link.lower() or "security=reality" in link.lower():
                 sni_match = re.search(r'sni=([^&?#]+)', link)
@@ -86,11 +131,10 @@ def deep_kill_check(link, stress_config):
                     if stress_config["dpi_sleep"] > 0:
                         time.sleep(stress_config["dpi_sleep"])
                         
-                    ssock.settimeout(2.0) # Ждем ответ строго
-                    data = ssock.recv(1)  # Пытаемся прочитать 1 байт
+                    ssock.settimeout(2.0) 
+                    data = ssock.recv(1)  
                     if not data: return False, 403
             else:
-                # Для обычных соединений
                 s.sendall(b'\x05\x01\x00')
                 if not s.recv(2): return False, 403
             
@@ -104,7 +148,7 @@ def main_monitor():
     # --- ЧИТАЕМ СТРЕСС-ПРОФИЛЬ (КАК В ОСНОВНОМ БОТЕ) ---
     stress_config = {
         "timeout": 2.5,        # Дефолт, если файла нет
-        "dpi_sleep": 0.1       # Дефолт
+        "dpi_sleep": 0.5      # Дефолт
     }
     
     if os.path.exists('test1/stress_profile.json'):
@@ -132,6 +176,15 @@ def main_monitor():
 
     # Цикл работает 10 минут (600 сек)
     while time.time() - start_run < 600:
+        # --- ШАГ 1: СОЗДАЕМ "ПАМЯТЬ" ЗАКРЕПОВ ---
+        pinned_bases = set()
+        if os.path.exists(PINNED_FILE):
+            try:
+                with open(PINNED_FILE, 'r', encoding='utf-8') as f:
+                    # Загружаем только чистую часть vless (до #)
+                    pinned_bases = {line.split('#')[0].strip() for line in f if 'vless://' in line}
+            except: pass
+        
         print(f"\n🕵️ ОБХОД В {time.strftime('%H:%M:%S')}")
         
         if not os.path.exists(WIFI_FILE):
@@ -142,59 +195,73 @@ def main_monitor():
         with open(WIFI_FILE, 'r', encoding='utf-8') as f:
             lines = [l.strip() for l in f if 'vless://' in l]
 
-        pinned_in_wifi = [l for l in lines if is_pinned(l.split("#")[0].strip())]
-        others_in_wifi = [l for l in lines if not is_pinned(l.split("#")[0].strip())]
-        
-        # Берем только первые 50 закрепов (лимит)
+        # --- ШАГ 2: РАСПРЕДЕЛЯЕМ СЕРВЕРЫ (БЕЗ ДИСКА) ---
+        pinned_in_wifi = []
+        others_in_wifi = []
+
+        for l in lines:
+            base = l.split("#")[0].strip()
+            if base in pinned_bases:
+                pinned_in_wifi.append(l)
+            else:
+                others_in_wifi.append(l)
+
+        # Берем только первые 50 закрепов
         pinned_in_wifi = pinned_in_wifi[:50]
         
         valid_others = []
         for link in others_in_wifi:
             base = link.split("#")[0].strip()
-            is_ok, status_code = deep_kill_check(link, stress_config)
+            # ПЕРЕДАЕМ ПАМЯТЬ В ЧЕКЕР
+            is_ok, status_code = deep_kill_check(link, stress_config, pinned_bases)
             
             if is_ok:
                 valid_others.append(link)
 
-                # --- БЕЗОПАСНОЕ ПОЛУЧЕНИЕ РАНГА ---
+                # Безопасное обновление рейтинга
                 old_data = ranking_db.get(base, 0)
-                if isinstance(old_data, dict):
-                    old_rank = old_data.get("rank", 0)
-                else:
-                    old_rank = old_data # Если там было просто число
-                
+                old_rank = old_data.get("rank", 0) if isinstance(old_data, dict) else old_data
                 new_rank = old_rank + 1
-                
-                # --- СОХРАНЕНИЕ В ПРАВИЛЬНОМ ФОРМАТЕ ---
                 ranking_db[base] = {"rank": new_rank, "link": link}
-                
-                print(f"📈 {base[:20]}... живет. Баллы: {new_rank}")
-                
+                print(f"📈 {base[:20]}... +1 балл ({new_rank})")
             else:
-                # Если сервер упал — удаляем его из рейтинга совсем
-                if base in ranking_db:
-                    del ranking_db[base]
+                # Если упал — удаляем из рейтинга и из файлов
+                if base in ranking_db: del ranking_db[base]
                 remove_from_all(base)
-                print(f"🧊 {base[:20]}... упал. Рейтинг обнулен.")
+                print(f"🧊 {base[:20]}... упал. Удален.")
                 
                 if status_code == 404:
                     add_to_blacklist(base)
                     print(f"💀 БАН (Н/Д): {base[:30]}")
-                elif status_code == 1001:
-                    print(f"🐢 ТОРМОЗ (>1000ms): {base[:30]}")
 
-        # Сохраняем прогресс рейтинга
+        # Сохраняем рейтинг на диск
         with open(RANK_FILE, 'w', encoding='utf-8') as f:
             json.dump(ranking_db, f, ensure_ascii=False, indent=4)
 
-        # Формируем итоговый список (до 200 серверов)
+        # Формируем итоговый wifi.txt (лимит 200)
         final_list = pinned_in_wifi + valid_others
-        final_list = final_list[:200] 
+        final_list = final_list[:200]
 
+        # --- УМНАЯ ЗАПИСЬ: СОХРАНЯЕМ ТВОЙ ОРИГИНАЛЬНЫЙ ХЕАДЕР ---
+        header_to_keep = []
+        if os.path.exists(WIFI_FILE):
+            with open(WIFI_FILE, 'r', encoding='utf-8') as f:
+                for line in f:
+                    # Собираем все строки в начале файла, которые начинаются с #
+                    if line.strip().startswith('#'):
+                        header_to_keep.append(line.rstrip())
+                    elif line.strip(): 
+                        # Как только пошли ссылки (не решетки), стопаем сбор хедера
+                        break
+        
+        # Если вдруг файл был пустой, создаем минимальный дефолт, чтобы не сломать подписку
+        if not header_to_keep:
+            header_to_keep = ["# profile-title: 🏴Мобильный инет🏴", "# profile-update-interval: 2"]
+
+        # Записываем обратно: твой хедер + пустая строка + новые ссылки
         with open(WIFI_FILE, 'w', encoding='utf-8') as f:
-            # Используем твой стандартный хедер
-            header = "# profile-title: 🏴Мобильный инет🏴\n# profile-update-interval: 2\n\n"
-            f.write(header + "\n".join(final_list))
+            f.write("\n".join(header_to_keep) + "\n\n")
+            f.write("\n".join(final_list))
         
         print(f"📊 ИТОГ: {len(pinned_in_wifi)} закрепов, {len(valid_others)} живых. Жду минуту...")
         time.sleep(60)
