@@ -30,9 +30,6 @@ def add_to_blacklist(base_part):
         print(f"💀 [BLACKLIST] Забанен: {base_part[:30]}...")
 
 def refresh_control_panel(token, repo):
-    """
-    Полностью пересоздает тело Issue на основе актуального vetted.txt
-    """
     if not token or not repo: return
     
     try:
@@ -42,9 +39,14 @@ def refresh_control_panel(token, repo):
             with open(VETTED_FILE, 'r', encoding='utf-8') as f:
                 vetted_links = [l.split('#')[0].strip() for l in f if 'vless://' in l]
 
-        # 2. Формируем новое тело
+        # 2. Формируем новое тело с ЗАЩИТОЙ
         update_time = time.strftime('%d.%m.%Y %H:%M:%S')
         new_body = f"### 💎 Кандидаты в закреп и бан\n🕒 Обновлено: `{update_time}`\n\n"
+        
+        # Добавляем мастер-галочку
+        new_body += "🚨 **ПОДТВЕРЖДЕНИЕ ДЕЙСТВИЙ:**\n"
+        new_body += "- [ ] ✅ **ПРИМЕНИТЬ ВЫБРАННЫЕ PIN/BAN**\n"
+        new_body += "> _Без этой галочки команды будут проигнорированы_\n\n---\n\n"
         
         if not vetted_links:
             new_body += "_Пока элитных кандидатов нет. Все обработаны или список пуст._"
@@ -54,7 +56,7 @@ def refresh_control_panel(token, repo):
                 new_body += f"- [ ] PIN_{link}\n"
                 new_body += f"- [ ] BAN_{link}\n\n---\n\n"
 
-        # 3. Находим номер Issue и обновляем его
+        # 3. Обновление через GH CLI
         cmd_find = ['gh', 'issue', 'list', '--repo', repo, '--label', 'pin_control', '--json', 'number', '--limit', '1']
         issue_data = json.loads(subprocess.check_output(cmd_find, env={**os.environ, "GH_TOKEN": token}))
         
@@ -65,7 +67,7 @@ def refresh_control_panel(token, repo):
             
             subprocess.run(['gh', 'issue', 'edit', num, '--repo', repo, '--body-file', 'new_panel.txt'],
                            env={**os.environ, "GH_TOKEN": token})
-            print(f"♻️ Панель управления синхронизирована с vetted.txt (осталось: {len(vetted_links)})")
+            print(f"♻️ Панель обновлена. Ожидание подтверждения (осталось: {len(vetted_links)})")
 
     except Exception as e:
         print(f"⚠️ Ошибка обновления панели: {e}")
@@ -109,6 +111,12 @@ def process_pin_commands(token, repo, vetted_list, ranking_db):
         
         if not pin_read or pin_read == "[]": return vetted_list
         body = json.loads(pin_read)[0]['body']
+
+        # --- БЛОК ЗАЩИТЫ ---
+        if not re.search(r'\[[xX]\]\s*✅\s*ПРИМЕНИТЬ', body):
+            print("🛡️ Команды PIN/BAN выбраны, но мастер-галочка не нажата. Пропускаю выполнение.")
+            return vetted_list
+        # -------------------
         
         # ОБНОВЛЕННЫЕ РЕГУЛЯРКИ ПОД НОВУЮ ПАНЕЛЬ
         to_pin = re.findall(r'\[[xX]\]\s*PIN_(vless://[^\s#`]+)', body)
