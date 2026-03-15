@@ -16,10 +16,14 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
-    # Запускаем, если это плановый запуск ИЛИ если редактируется Issue с меткой pin_control
+    # Теперь запускаем, если:
+    # 1. Это запуск по расписанию (cron) или вручную (dispatch)
+    # 2. ИЛИ если редактируется любой из наших трех "пультов управления"
     if: |
       github.event_name != 'issues' || 
-      contains(github.event.issue.labels.*.name, 'pin_control')
+      contains(github.event.issue.labels.*.name, 'pin_control') ||
+      contains(github.event.issue.labels.*.name, 'control') ||
+      contains(github.event.issue.labels.*.name, 'unpin_control')
     
     timeout-minutes: 360  
     permissions:
