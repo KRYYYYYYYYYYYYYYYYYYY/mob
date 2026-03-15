@@ -49,35 +49,39 @@ def refresh_all_panels(token, repo, ranking_db, vetted_list, pinned_list):
     update_time = time.strftime("%d.%m.%Y %H:%M:%S")
     env_gh = {**os.environ, "GH_TOKEN": token}
 
-    # 1. ПАНЕЛЬ ЧЕРНОГО СПИСКА
+    # 1. ПАНЕЛЬ ЧЕРНОГО СПИСКА (Кандидаты на бан из общего рейтинга)
     body_ctrl = f"### 🎮 Панель Blacklist\n🕒 `{update_time}`\n\n"
-    body_ctrl += "- [ ] 💀 **ПОДТВЕРДИТЬ_БАН**\n\n---\n\n"
+    body_ctrl += "- [ ] 💀 **ПОДТВЕРДИТЬ_БАН** (Отметь и сохрани для запуска)\n\n---\n\n"
     
+    # Берем первые 50 элементов из рейтинга
+    # Достаем полную ссылку из значения словаря
     for base, data in list(ranking_db.items())[:50]:
         full_link = data.get('link', base) if isinstance(data, dict) else base
-        # Оборачиваем в кавычки, чтобы GitHub не портил ссылку
-        body_ctrl += f"- [ ] '{full_link}'\n" 
+        body_ctrl += f"- [ ] {full_link}\n"
     
     update_issue(repo, 'control', body_ctrl, env_gh)
 
     # 2. ПАНЕЛЬ КАНДИДАТОВ В ЭЛИТУ
     body_pin = f"### 💎 Кандидаты в Элиту\n🕒 `{update_time}`\n\n"
-    body_pin += "- [ ] ✅ **ПРИМЕНИТЬ_PIN_BAN**\n\n---\n\n"
+    body_pin += "- [ ] ✅ **ПРИМЕНИТЬ_PIN_BAN** (Отметь и сохрани для запуска)\n\n---\n\n"
     
+    # Здесь vetted_list уже содержит полные ссылки, 
+    # поэтому просто используем элементы списка целиком
     for full_link in vetted_list:
+        # Для команд PIN/BAN лучше использовать чистую часть ссылки (base), 
+        # чтобы парсеру было проще, но отображать можно красиво
         base = full_link.split('#')[0].strip()
-        # Показываем полную, но команду PIN/BAN крепим к базе
-        body_pin += f"📡 `{full_link}`:\n- [ ] PIN_{base}\n- [ ] BAN_{base}\n\n---\n"
+        body_pin += f"📡 {full_link}:\n- [ ] PIN_{base}\n- [ ] BAN_{base}\n\n---\n"
     
     update_issue(repo, 'pin_control', body_pin, env_gh)
 
     # 3. ПАНЕЛЬ ЗАКРЕПОВ
     body_unp = f"### 👑 Управление Закрепами\n🕒 `{update_time}`\n\n"
-    body_unp += "- [ ] 🔓 **ПОДТВЕРДИТЬ_РАСПИН**\n\n---\n\n"
+    body_unp += "- [ ] 🔓 **ПОДТВЕРДИТЬ_РАСПИН** (Отметь и сохрани для запуска)\n\n---\n\n"
     
+    # pinned_list обычно уже содержит полные ссылки
     for full_link in pinned_list:
-        # Аналогично — в кавычках для удобства
-        body_unp += f"- [ ] '{full_link}'\n"
+        body_unp += f"- [ ] {full_link}\n"
         
     update_issue(repo, 'unpin_control', body_unp, env_gh)
 
@@ -388,6 +392,8 @@ def main_torturer():
     )
 
     # --- ШАГ 3: СОХРАНЕНИЕ И ОБНОВЛЕНИЕ ПАНЕЛЕЙ ---
+    # Если были команды — сохраняем файлы. 
+    # Обновляем GitHub-панели В ЛЮБОМ СЛУЧАЕ (чтобы сбросить галочки или обновить список)
     if executed:
         print("🧹 Команды выполнены, сохраняю файлы...")
         with open(VETTED_FILE, 'w', encoding='utf-8') as vf:
@@ -396,29 +402,9 @@ def main_torturer():
         with open(RANK_FILE, 'w', encoding='utf-8') as f:
             json.dump(ranking_db, f, ensure_ascii=False, indent=4)
 
-    # --- ВНУТРЕННЯЯ ФУНКЦИЯ ДЛЯ СБОРА ПАНЕЛИ БАНА ИЗ WIFI.TXT ---
-    def get_wifi_panel_data(pinned, vetted):
-        all_wifi_links = load_lines(WIFI_FILE)
-        blacklisted_set = set()
-        if os.path.exists(BLACKLIST_FILE):
-            with open(BLACKLIST_FILE, 'r', encoding='utf-8') as f:
-                blacklisted_set = {line.strip() for line in f if line.strip()}
+    print("📝 Обновляю панели в GitHub...")
+    refresh_all_panels(token, repo, ranking_db, vetted_list, pinned_list)
 
-        ignore = {l.split('#')[0].strip() for l in pinned}
-        ignore.update({l.split('#')[0].strip() for l in vetted})
-        ignore.update(blacklisted_set)
-
-        wifi_to_show = {}
-        for link in all_wifi_links:
-            base = link.split('#')[0].strip()
-            if base not in ignore:
-                wifi_to_show[base] = {"link": link}
-            if len(wifi_to_show) >= 70: break
-        return wifi_to_show
-
-    # Первичное обновление панелей перед пытками
-    current_wifi_view = get_wifi_panel_data(pinned_list, vetted_list)
-    refresh_all_panels(token, repo, current_wifi_view, vetted_list, pinned_list)
     # --- ШАГ 4: ПЕРЕХОД К ПЫТКАМ ---
     if not ranking_db:
         print("⌛ База пуста. Пытать некого.")
@@ -528,15 +514,9 @@ def main_torturer():
         with open(VETTED_FILE, 'r', encoding='utf-8') as f:
             vetted_list = [l.strip() for l in f if 'vless' in l]
     
-    # --- ФИНАЛЬНЫЙ СИНХРОН ---
-    if os.path.exists(VETTED_FILE):
-        with open(VETTED_FILE, 'r', encoding='utf-8') as f:
-            vetted_list = [l.strip() for l in f if 'vless' in l]
-    
-    print("🔄 Финальное обновление панелей...")
-    # Снова собираем данные из wifi.txt, так как vetted_list мог измениться
-    final_wifi_view = get_wifi_panel_data(pinned_list, vetted_list)
-    refresh_all_panels(token, repo, final_wifi_view, vetted_list, pinned_list)
+    # ФИНАЛЬНЫЙ СИНХРОН С GITHUB
+    print("🔄 Финальное обновление панелей после инспекции...")
+    refresh_all_panels(token, repo, list(ranking_db.keys()), vetted_list, pinned_list)
     
 if __name__ == "__main__":
     main_torturer()
