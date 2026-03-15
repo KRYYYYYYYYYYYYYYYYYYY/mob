@@ -83,8 +83,79 @@ def download_raw_data(urls):
             
     return all_links
 
+def remove_from_all(base_part: str):
+    """Удаляет сервер по base_part из основных рабочих файлов."""
+    for path in [INPUT_FILE, OUTPUT_FILE, VETTED_FILE, PINNED_FILE]:
+        if not os.path.exists(path):
+            continue
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+
+            new_lines = [line for line in lines if line.split('#')[0].strip() != base_part]
+            if len(new_lines) != len(lines):
+                with open(path, 'w', encoding='utf-8') as f:
+                    f.writelines(new_lines)
+        except Exception as e:
+            print(f"⚠️ Ошибка при очистке {path}: {e}")
+
+
+def probe_server(host: str, port: int, base_part: str, stress_config: dict):
+    """Проверка сервера с повторами, чтобы уменьшить ложные срабатывания."""
+    use_tls = "security=tls" in base_part.lower() or "security=reality" in base_part.lower()
+    attempts = 3
+    success = 0
+    last_ip = None
+
+    for attempt in range(attempts):
+        try:
+            infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+        except socket.gaierror:
+            infos = []
+
+        if not infos:
+            time.sleep(0.2)
+            continue
+
+        attempt_ok = False
+        for info in infos:
+            resolved_ip = info[4][0]
+            last_ip = resolved_ip
+            try:
+                with socket.create_connection((resolved_ip, int(port)), timeout=stress_config["timeout"]) as sock:
+                    if use_tls:
+                        context = ssl.create_default_context()
+                        context.check_hostname = False
+                        context.verify_mode = ssl.CERT_NONE
+                        with context.wrap_socket(sock, server_hostname=host) as ssock:
+                            request = f"GET / HTTP/1.1\r\nHost: {host}\r\nUser-Agent: Mozilla/5.0\r\n\r\n"
+                            ssock.sendall(request.encode())
+                            if stress_config["dpi_sleep"] > 0:
+                                time.sleep(stress_config["dpi_sleep"])
+                            ssock.settimeout(1.5)
+                            if ssock.recv(1):
+                                attempt_ok = True
+                                break
+                    else:
+                        sock.sendall(b'\x05\x01\x00')
+                        sock.settimeout(1.5)
+                        if sock.recv(2):
+                            attempt_ok = True
+                            break
+            except (socket.timeout, ConnectionResetError, ssl.SSLError, socket.error):
+                continue
+
+        if attempt_ok:
+            success += 1
+            if success >= 2:
+                return True, last_ip
+
+        if attempt < attempts - 1:
+            time.sleep(0.3)
+
+    return False, last_ip
+
 def rebuild_link_name(link: str, new_name: str) -> str:
-    return link
     base, _, fragment = link.partition("#")
 
     # Если это уже закреп — не трогаем
@@ -447,6 +518,9 @@ def main():
             pass
     # Работаем, пока не набрали 200 в подписку ИЛИ пока не кончились ссылки в unique_links
     while len(working_for_sub) < 200 and idx < len(unique_links):
+        if checked_today >= MAX_TO_CHECK:
+            print(f"🛑 Достигнут лимит проверок за запуск: {MAX_TO_CHECK}")
+            break
         link = unique_links[idx]
         idx += 1 # Сдвигаем указатель
         
@@ -519,55 +593,15 @@ def main():
         # --- ПРОВЕРКА СОЕДИНЕНИЯ ---
         print(f"🔍 Тестирую: {host}...", end=" ", flush=True) # Печатаем без переноса строки
 
-        # --- ЭТАП 1: РЕЗОЛВИНГ И ПРОВЕРКА ПОД "ГЛУШИЛКУ" ---
-        resolved_ip = None
-        is_alive = False
-        try:
-            # Проверка DNS (то, что у тебя падает на мобиле)
-            resolved_ip = host if is_ipv6(host) else socket.gethostbyname(host)
-            
-            if resolved_ip in seen_ips:
-                continue 
-    
-            # Установка соединения с учетом таймаута из stress_profile (1.8s)
-            with socket.create_connection((resolved_ip, int(port)), timeout=stress_config["timeout"]) as sock:
-                # Имитируем малый MTU, характерный для забитых каналов или мобильных VPN
-                # sock.setsockopt(socket.IPPROTO_IP, socket.IP_MTU_DISCOVER, socket.IP_PMTUDISC_DO) 
-                
-                use_tls = "security=tls" in base_part.lower() or "security=reality" in base_part.lower()
-                
-                if use_tls:
-                    context = ssl.create_default_context()
-                    context.check_hostname = False
-                    context.verify_mode = ssl.CERT_NONE
-                    
-                    with context.wrap_socket(sock, server_hostname=host) as ssock:
-                        # ОТПРАВЛЯЕМ ДАННЫЕ (Важно! Глушилки смотрят на первый пакет после Handshake)
-                        # Эмулируем обычный браузерный запрос
-                        request = f"GET / HTTP/1.1\r\nHost: {host}\r\nUser-Agent: Mozilla/5.0\r\n\r\n"
-                        ssock.sendall(request.encode())
-                        
-                        # ПАУЗА DPI (из конфига)
-                        if stress_config["dpi_sleep"] > 0:
-                            time.sleep(stress_config["dpi_sleep"])
-                        
-                        # Ждем ответа. Если ТСПУ оборвал связь — тут выпадет ConnectionResetError
-                        ssock.settimeout(1.5) 
-                        response = ssock.recv(1) 
-                        if response:
-                            is_alive = True
-                else:
-                    # Для SOCKS5/Shadowsocks имитируем рукопожатие
-                    sock.sendall(b'\x05\x01\x00')
-                    if sock.recv(2):
-                        is_alive = True
+        checked_today += 1
+        is_alive, resolved_ip = probe_server(host, int(port), base_part, stress_config)
 
-        except (socket.timeout, ConnectionResetError, ssl.SSLError, socket.error):
-            # Если DNS не нашелся или связь оборвалась после отправки данных — сервер в утиль
-            is_alive = False
-                
-            if is_alive:
-                seen_ips.add(resolved_ip) 
+        if resolved_ip and resolved_ip in seen_ips and not is_alive:
+            print("♻️ Пропуск: IP уже встречался и сейчас недоступен")
+            continue
+
+        if is_alive and resolved_ip:
+            seen_ips.add(resolved_ip)
 
         # --- ЭТАП 2: ЕСЛИ СЕРВЕР РАБОТАЕТ ---
         if is_alive:
@@ -592,8 +626,7 @@ def main():
                 sep = "&" if "?" in sub_link else "?"
                 sub_link += f"{sep}sni={host}"
             
-            # final_link = rebuild_link_name(sub_link, f"wifi {counter}")
-            final_link = link.strip()
+            final_link = rebuild_link_name(sub_link, f"mob {counter}")
             working_for_sub.append(final_link)
             
             print(f"✅ ОК {len(working_for_sub)}/200 ({country}): {host} -> {resolved_ip} (wifi {counter})")
