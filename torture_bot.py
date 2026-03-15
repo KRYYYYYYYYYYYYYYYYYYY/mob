@@ -124,12 +124,15 @@ def refresh_all_panels(token, repo, ranking_db, vetted_list, pinned_list):
     # Обновляем Issue в GitHub, используя этот файл
     update_issue_from_file(repo, 'control', 'test1/issue_body.txt', env_gh)
 
-    # --- 2. ПАНЕЛЬ КАНДИДАТОВ (как и раньше) ---
+   # --- 2. ПАНЕЛЬ КАНДИДАТОВ ---
     body_pin = f"### 💎 Кандидаты в Элиту\n🕒 `{update_time}`\n\n"
     body_pin += "- [ ] ✅ **ПРИМЕНИТЬ_PIN_BAN**\n\n---\n\n"
     for full_link in vetted_list:
         base = full_link.split('#')[0].strip()
-        body_pin += f"{full_link}:\n- [ ] PIN_{base}\n- [ ] BAN_{base}\n\n---\n"
+        body_pin += f"📡 {full_link}\n"
+        body_pin += f"- [ ] PIN: {base}\n"  # Четкая метка действия
+        body_pin += f"- [ ] BAN: {base}\n"  # Четкая метка действия
+        body_pin += "\n---\n"
     update_issue(repo, 'pin_control', body_pin, env_gh)
 
     # --- 3. ПАНЕЛЬ ЗАКРЕПОВ ---
@@ -222,8 +225,11 @@ def process_all_controls(token, repo, vetted_list, pinned_list, ranking_db):
             body = data[0]['body']
             if "ПРИМЕНИТЬ_PIN_BAN" in body and "[x]" in body:
                 # Здесь используем специфичный поиск для PIN_ и BAN_
-                to_pin = re.findall(r'\[[xX]\]\s+PIN_(vless://[^\s`\'"]+)', body)
-                to_ban = re.findall(r'\[[xX]\]\s+BAN_(vless://[^\s`\'"]+)', body)
+                # Ищем только те, где стоит PIN:
+                to_pin = re.findall(r'\[[xX]\]\s+PIN:\s+(vless://[^\s`\'"]+)', body)
+                
+                # Ищем только те, где стоит BAN:
+                to_ban = re.findall(r'\[[xX]\]\s+BAN:\s+(vless://[^\s`\'"]+)', body)
                 
                 for s in to_pin:
                     base_full = s.strip().rstrip(':')
