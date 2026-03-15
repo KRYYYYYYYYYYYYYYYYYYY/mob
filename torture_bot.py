@@ -44,81 +44,6 @@ def add_to_blacklist(base_part):
             f.write(base_part + "\n")
         print(f"💀 [BLACKLIST] Забанен: {base_part[:30]}...")
 
-def process_all_controls(token, repo, vetted_list, pinned_list, ranking_db):
-    executed_any = False
-    env_gh = {**os.environ, "GH_TOKEN": token}
-
-    # --- 1. ЧЕРНЫЙ СПИСОК (LABEL: control) 💀 ---
-    try:
-        cmd = ['gh', 'issue', 'list', '--repo', repo, '--label', 'control', '--json', 'body,number', '--limit', '1']
-        data = json.loads(subprocess.check_output(cmd, env=env_gh))
-        if data:
-            body = data[0]['body']
-            # Уникальная мастер-галочка для этой панели
-            if re.search(r'\[[xX]\]\s*💀\s*ПОДТВЕРДИТЬ_БАН', body):
-                checked = re.findall(r'-\s*\[[xX]\]\s*\'(vless://[^\s\']+)\'', body)
-                if checked:
-                    for link in checked:
-                        base = link.split('#')[0].strip()
-                        add_to_blacklist(base)
-                        remove_from_all(base)
-                        if base in ranking_db: del ranking_db[base]
-                    print(f"💀 [CONTROL] Забанено {len(checked)} серверов")
-                    executed_any = True
-    except Exception as e: print(f"⚠️ Ошибка Control: {e}")
-
-    # --- 2. ПИН/БАН КАНДИДАТОВ (LABEL: pin_control) 💎 ---
-    try:
-        cmd = ['gh', 'issue', 'list', '--repo', repo, '--label', 'pin_control', '--json', 'body,number', '--limit', '1']
-        data = json.loads(subprocess.check_output(cmd, env=env_gh))
-        if data:
-            body = data[0]['body']
-            if re.search(r'\[[xX]\]\s*✅\s*ПРИМЕНИТЬ_PIN_BAN', body):
-                to_pin = re.findall(r'\[[xX]\]\s*PIN_(vless://[^\s#`]+)', body)
-                to_ban = re.findall(r'\[[xX]\]\s*BAN_(vless://[^\s#`]+)', body)
-                
-                affected = set()
-                if to_pin:
-                    with open(PINNED_FILE, 'a', encoding='utf-8') as pf:
-                        for s in to_pin:
-                            base = s.split("#")[0].strip()
-                            pf.write(base + "\n")
-                            affected.add(base)
-                if to_ban:
-                    for s in to_ban:
-                        base = s.split("#")[0].strip()
-                        add_to_blacklist(base)
-                        remove_from_all(base)
-                        affected.add(base)
-                
-                # Чистим списки
-                if affected:
-                    vetted_list = [v for v in vetted_list if v.split('#')[0].strip() not in affected]
-                    for b in affected: 
-                        if b in ranking_db: del ranking_db[b]
-                
-                print(f"💎 [PIN_CONTROL] Обработано: {len(to_pin)} PIN, {len(to_ban)} BAN")
-                executed_any = True
-    except Exception as e: print(f"⚠️ Ошибка Pin/Ban: {e}")
-
-    # --- 3. РАЗЗАКРЕПЛЕНИЕ (LABEL: unpin_control) 🔓 ---
-    try:
-        cmd = ['gh', 'issue', 'list', '--repo', repo, '--label', 'unpin_control', '--json', 'body,number', '--limit', '1']
-        data = json.loads(subprocess.check_output(cmd, env=env_gh))
-        if data:
-            body = data[0]['body']
-            if re.search(r'\[[xX]\]\s*🔓\s*ПОДТВЕРДИТЬ_РАСПИН', body):
-                to_unpin = re.findall(r'-\s*\[[xX]\]\s*\'(vless://[^\s\']+)\'', body)
-                if to_unpin:
-                    unpin_bases = [u.split("#")[0].strip() for u in to_unpin]
-                    pinned_list = [s for s in pinned_list if s.split("#")[0].strip() not in unpin_bases]
-                    with open(PINNED_FILE, 'w', encoding='utf-8') as pf:
-                        pf.write("\n".join(pinned_list) + ("\n" if pinned_list else ""))
-                    print(f"🔓 [UNPIN] Убрано {len(to_unpin)} серверов")
-                    executed_any = True
-    except Exception as e: print(f"⚠️ Ошибка Unpin: {e}")
-
-    return vetted_list, pinned_list, executed_any
 
 def refresh_all_panels(token, repo, working_for_base, vetted_list, pinned_list):
     update_time = time.strftime("%d.%m.%Y %H:%M:%S")
@@ -151,29 +76,6 @@ def refresh_all_panels(token, repo, working_for_base, vetted_list, pinned_list):
         body_unp += f"- [ ] '{link}'\n"
     update_issue(repo, 'unpin_control', body_unp, env_gh)
 
-def update_issue(repo, label, body, env):
-    try:
-        # Ищем номер issue
-        cmd = ['gh', 'issue', 'list', '--repo', repo, '--label', label, '--json', 'number']
-        result = subprocess.check_output(cmd, env=env)
-        data = json.loads(result)
-        
-        if data:
-            num = str(data[0]['number'])
-            # Записываем тело во временный файл
-            with open("tmp_body.txt", "w", encoding="utf-8") as f: 
-                f.write(body)
-            
-            # Редактируем
-            edit_cmd = ['gh', 'issue', 'edit', num, '--repo', repo, '--body-file', 'tmp_body.txt']
-            subprocess.run(edit_cmd, env=env, check=True)
-            print(f"✅ Панель '{label}' успешно обновлена (Issue #{num})")
-        else:
-            # ВОТ ЗДЕСЬ может быть причина: метка есть в коде, но нет в GitHub
-            print(f"⚠️ Панель '{label}' НЕ НАЙДЕНА в репозитории. Проверь метки (Labels) в GitHub!")
-            
-    except Exception as e:
-        print(f"❌ Ошибка при обновлении панели '{label}': {e}")
 
 # --- ХИРУРГИЧЕСКОЕ УДАЛЕНИЕ ---
 def remove_from_all(base_part):
@@ -291,13 +193,32 @@ def process_all_controls(token, repo, vetted_list, pinned_list, ranking_db):
 def update_issue(repo, label, body, env):
     """Техническая функция для редактирования Issue."""
     try:
+        # 1. Получаем номер issue
         cmd = ['gh', 'issue', 'list', '--repo', repo, '--label', label, '--json', 'number']
-        data = json.loads(subprocess.check_output(cmd, env=env))
+        # Используем decode('utf-8') для безопасности
+        output = subprocess.check_output(cmd, env=env).decode('utf-8')
+        data = json.loads(output)
+        
         if data:
             num = str(data[0]['number'])
-            with open("tmp_body.txt", "w", encoding="utf-8") as f: f.write(body)
-            subprocess.run(['gh', 'issue', 'edit', num, '--repo', repo, '--body-file', 'tmp_body.txt'], env=env)
-    except: pass
+            
+            # 2. Пишем во временный файл
+            tmp_file = f"tmp_body_{label}.txt" # Уникальное имя на случай гонки потоков
+            with open(tmp_file, "w", encoding="utf-8") as f: 
+                f.write(body)
+            
+            # 3. Редактируем через файл
+            subprocess.run([
+                'gh', 'issue', 'edit', num, 
+                '--repo', repo, 
+                '--body-file', tmp_file
+            ], env=env, check=True)
+            
+            # 4. Подчищаем за собой
+            if os.path.exists(tmp_file):
+                os.remove(tmp_file)
+    except Exception as e:
+        print(f"⚠️ Ошибка обновления панели {label}: {e}")
 
 def get_country(host):
     if not os.path.exists(COUNTRY_CACHE_FILE):
@@ -415,17 +336,30 @@ def main_torturer():
     token = os.getenv("GH_TOKEN")
     repo = os.getenv("GITHUB_REPOSITORY")
 
-    # --- ШАГ 0: БЫСТРЫЙ ФИЛЬТР ---
-    # Проверяем команды. Если нажата любая мастер-галочка, executed будет True.
-    _, _, executed = process_all_controls(token, repo, [], [], {})
+    # --- СНАЧАЛА ЗАГРУЖАЕМ ВСЁ ИЗ ФАЙЛОВ ---
+    ranking_db = {}
+    if os.path.exists(RANK_FILE):
+        with open(RANK_FILE, 'r', encoding='utf-8') as f:
+            ranking_db = json.load(f)
+
+    def load_lines(path):
+        if os.path.exists(path):
+            with open(path, 'r', encoding='utf-8') as f:
+                return [l.strip() for l in f if 'vless' in l]
+        return []
+
+    vetted_list = load_lines(VETTED_FILE)
+    pinned_list = load_lines(PINNED_FILE)
+
+    # --- ТЕПЕРЬ ПРОВЕРЯЕМ КОМАНДЫ (Шаг 0 + Шаг 2 вместе) ---
+    # Передаем реальные списки вместо []
+    vetted_list, pinned_list, executed = process_all_controls(
+        token, repo, vetted_list, pinned_list, ranking_db
+    )
     
-    # Если мы зашли по cron (раз в час), а галочки не нажаты — 
-    # мы НЕ выходим сразу, а даем боту шанс обновить списки серверов в панелях.
-    # Выходим только если НЕТ галочек И НЕТ расписания (например, случайный запуск).
     is_scheduled = os.getenv("GITHUB_EVENT_NAME") == "schedule"
-    
     if not executed and not is_scheduled:
-        print("☕ Ни одна мастер-галочка не нажата и это не запуск по расписанию. Выход.")
+        print("☕ Выход: команд нет, расписания нет.")
         return
 
     # --- ШАГ 1: ПОДГОТОВКА ---
@@ -440,22 +374,6 @@ def main_torturer():
         except Exception: continue
 
     stress_config = load_stress_config()
-
-    # Загружаем реальные данные из всех файлов
-    ranking_db = {}
-    if os.path.exists(RANK_FILE):
-        with open(RANK_FILE, 'r', encoding='utf-8') as f:
-            ranking_db = json.load(f)
-
-    vetted_list = []
-    if os.path.exists(VETTED_FILE):
-        with open(VETTED_FILE, 'r', encoding='utf-8') as f:
-            vetted_list = [l.strip() for l in f if 'vless' in l]
-
-    pinned_list = []
-    if os.path.exists(PINNED_FILE):
-        with open(PINNED_FILE, 'r', encoding='utf-8') as f:
-            pinned_list = [l.strip() for l in f if 'vless' in l]
 
     working_for_base = list(ranking_db.keys())
 
@@ -539,7 +457,8 @@ def main_torturer():
                 return base, full_link, False, "ERROR", 0, 0
 
         with ThreadPoolExecutor(max_workers=5) as executor:
-            results = list(executor.map(run_torture, candidates))
+            # Передавай конфиг явно в каждый поток
+            results = list(executor.map(lambda x: run_torture(x, stress_config), candidates))
 
         for base, full_link, success, status, success_hits, total_hits in results:
             if success:
@@ -581,11 +500,15 @@ def main_torturer():
     else:
         print("⌛ Нет новых кандидатов для пыток.")
 
-    # 5. ФИНАЛЬНЫЙ ШАГ: Всегда обновляем панель в конце
-    if token and repo:
-        refresh_control_panel(token, repo)
-    else:
-        print("⚠️ Пропуск обновления панели: нет токена или репозитория в ENV.")
-
+    # ПЕРЕЧИТЫВАЕМ актуальный список элиты, 
+    # потому что туда добавились новые серверы во время пыток
+    if os.path.exists(VETTED_FILE):
+        with open(VETTED_FILE, 'r', encoding='utf-8') as f:
+            vetted_list = [l.strip() for l in f if 'vless' in l]
+    
+    # ФИНАЛЬНЫЙ СИНХРОН С GITHUB
+    print("🔄 Финальное обновление панелей после инспекции...")
+    refresh_all_panels(token, repo, list(ranking_db.keys()), vetted_list, pinned_list)
+    
 if __name__ == "__main__":
     main_torturer()
