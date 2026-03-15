@@ -1,4 +1,11 @@
-import socket, time, os, ssl, re, json, subprocess, requests
+import socket
+import time
+import os
+import ssl
+import re
+import json
+import subprocess
+import requests
 import psutil
 from concurrent.futures import ThreadPoolExecutor
 import threading
@@ -11,11 +18,19 @@ VETTED_FILE = 'test1/vetted.txt'
 BLACKLIST_FILE = 'test1/blacklist.txt'
 WIFI_FILE = 'kr/mob/wifi.txt'
 DEFERRED_FILE = 'test1/deferred.txt'
+INPUT_FILE = 'test1/1.txt'
 PROFILE_FILE = 'test1/stress_profile.json'
-THRESHOLD = 50 
+COUNTRY_CACHE_FILE = 'test1/countries_cache.json'
+THRESHOLD = 50
+
+DEFAULT_MOBILE_USER_AGENTS = [
+    "Mozilla/5.0 (Linux; Android 13; SM-A336B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1",
+]
+DEFAULT_PROBE_PATHS = ["/", "/generate_204", "/favicon.ico"]
 
 file_lock = threading.Lock()
-HOST_PORT_RE = re.compile(r'@(?P<host>[A-Za-z0-9.-]+):(?P<port>\d+)')
 
 def add_to_blacklist(base_part):
     """Добавляет сервер в бан-лист, игнорируя дубликаты"""
@@ -30,7 +45,8 @@ def add_to_blacklist(base_part):
         print(f"💀 [BLACKLIST] Забанен: {base_part[:30]}...")
 
 def refresh_control_panel(token, repo):
-    if not token or not repo: return
+    if not token or not repo:
+        return
     
     try:
         # 1. Считываем свежий список проверенных
@@ -65,8 +81,10 @@ def refresh_control_panel(token, repo):
             with open("new_panel.txt", "w", encoding="utf-8") as f:
                 f.write(new_body)
             
-            subprocess.run(['gh', 'issue', 'edit', num, '--repo', repo, '--body-file', 'new_panel.txt'],
-                           env={**os.environ, "GH_TOKEN": token})
+            subprocess.run(
+                ['gh', 'issue', 'edit', num, '--repo', repo, '--body-file', 'new_panel.txt'],
+                env={**os.environ, "GH_TOKEN": token},
+            )
             print(f"♻️ Панель обновлена. Ожидание подтверждения (осталось: {len(vetted_links)})")
 
     except Exception as e:
@@ -74,7 +92,7 @@ def refresh_control_panel(token, repo):
 
 # --- ХИРУРГИЧЕСКОЕ УДАЛЕНИЕ ---
 def remove_from_all(base_part):
-    for path in [WIFI_FILE, DEFERRED_FILE]: 
+    for path in [WIFI_FILE, DEFERRED_FILE, INPUT_FILE]: 
         if os.path.exists(path):
             with open(path, 'r', encoding='utf-8') as f:
                 lines = f.readlines()
@@ -87,14 +105,38 @@ def remove_from_all(base_part):
 
 # --- НОВАЯ ФУНКЦИЯ ЗАГРУЗКИ КОНФИГА ---
 def load_stress_config():
-    config = {"timeout": 2.5, "dpi_sleep": 0.5} # Дефолты
+    config = {
+        "timeout": 2.5,
+        "dpi_sleep": 0.5,
+        "recv_timeout": 1.7,
+        "between_attempts_sleep": 0.35,
+        "probe_attempts": 4,
+        "min_success": 2,
+        "torture_total_attempts": 20,
+        "torture_min_success": 20,
+        "torture_cycle_sleep": 60,
+        "user_agents": list(DEFAULT_MOBILE_USER_AGENTS),
+        "probe_paths": list(DEFAULT_PROBE_PATHS),
+    }
     if os.path.exists(PROFILE_FILE):
         try:
-            with open(PROFILE_FILE, 'r') as f:
+            with open(PROFILE_FILE, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                config["timeout"] = data.get("max_handshake_ms", 2500) / 1000
-                config["dpi_sleep"] = 0.5 if data.get("mimic_dpi_delay") else 0
-        except: pass
+            config["timeout"] = data.get("max_handshake_ms", 2500) / 1000
+            config["dpi_sleep"] = 0.5 if data.get("mimic_dpi_delay") else 0
+            config["recv_timeout"] = float(data.get("recv_timeout", config["recv_timeout"]))
+            config["between_attempts_sleep"] = float(data.get("between_attempts_sleep", config["between_attempts_sleep"]))
+            config["probe_attempts"] = int(data.get("probe_attempts", config["probe_attempts"]))
+            config["min_success"] = int(data.get("min_success", config["min_success"]))
+            config["torture_total_attempts"] = int(data.get("torture_total_attempts", config["torture_total_attempts"]))
+            config["torture_min_success"] = int(data.get("torture_min_success", config["torture_min_success"]))
+            config["torture_cycle_sleep"] = int(data.get("torture_cycle_sleep", config["torture_cycle_sleep"]))
+            if isinstance(data.get("mobile_user_agents"), list) and data.get("mobile_user_agents"):
+                config["user_agents"] = [str(x) for x in data["mobile_user_agents"] if str(x).strip()]
+            if isinstance(data.get("probe_paths"), list) and data.get("probe_paths"):
+                config["probe_paths"] = [str(x) for x in data["probe_paths"] if str(x).strip()]
+        except Exception:
+            pass
     return config
 
 def process_pin_commands(token, repo, vetted_list, ranking_db):
@@ -102,14 +144,16 @@ def process_pin_commands(token, repo, vetted_list, ranking_db):
     Считывает команды из Issue и переносит серверы между списками, 
     очищая ranking_db от обработанных элементов.
     """
-    if not token or not repo: return vetted_list
+    if not token or not repo:
+        return vetted_list
     
     try:
         # 1. Получаем тело Issue через GitHub CLI
         cmd = ['gh', 'issue', 'list', '--repo', repo, '--label', 'pin_control', '--json', 'body', '--limit', '1']
         pin_read = subprocess.check_output(cmd, env={**os.environ, "GH_TOKEN": token}).decode()
         
-        if not pin_read or pin_read == "[]": return vetted_list
+        if not pin_read or pin_read == "[]":
+            return vetted_list
         body = json.loads(pin_read)[0]['body']
 
         # --- БЛОК ЗАЩИТЫ ---
@@ -122,7 +166,8 @@ def process_pin_commands(token, repo, vetted_list, ranking_db):
         to_pin = re.findall(r'\[[xX]\]\s*PIN_(vless://[^\s#`]+)', body)
         to_ban = re.findall(r'\[[xX]\]\s*BAN_(vless://[^\s#`]+)', body)
 
-        if not to_pin and not to_ban: return vetted_list
+        if not to_pin and not to_ban:
+            return vetted_list
 
         print(f"🕵️ Pin-Control: Найдено {len(to_pin)} PIN и {len(to_ban)} BAN (через клики [x])")
         affected_bases = set()
@@ -179,10 +224,13 @@ def get_country(host):
         cache = {}
     else:
         try:
-            with open(COUNTRY_CACHE_FILE, 'r') as f: cache = json.load(f)
-        except: cache = {}
+            with open(COUNTRY_CACHE_FILE, 'r', encoding='utf-8') as f:
+                cache = json.load(f)
+        except Exception:
+            cache = {}
 
-    if host in cache: return cache[host]
+    if host in cache:
+        return cache[host]
 
     try:
         resp = requests.get(f"http://ip-api.com/json/{host}?fields=status,countryCode", timeout=3)
@@ -191,9 +239,11 @@ def get_country(host):
             if data.get("status") == "success":
                 code = data.get("countryCode", "??")
                 cache[host] = code
-                with open(COUNTRY_CACHE_FILE, 'w') as f: json.dump(cache, f)
+                with open(COUNTRY_CACHE_FILE, 'w', encoding='utf-8') as f:
+                    json.dump(cache, f)
                 return code
-    except: pass
+    except Exception:
+        pass
     return "??"
 
 # --- БРОНЕБОЙНЫЙ ИЗВЛЕКАТЕЛЬ ---
@@ -208,23 +258,40 @@ def extract_host_port(link: str):
         try:
             port = int(match.group(2))
             return (host, port) if 1 <= port <= 65535 else (None, None)
-        except: pass
+        except Exception:
+            pass
     return None, None
 
 # --- ОБНОВЛЕННАЯ ПЫТКА ---
 def torture_check(link, stress_config, resolved_ip):
     host, port = extract_host_port(link)
-    if not host or not port: return False
+    if not host or not port:
+        return False, 0, 0
     is_tls = "security=tls" in link.lower() or "security=reality" in link.lower()
     
     sni = re.search(r"sni=([^&?#]+)", link)
     server_hostname = sni.group(1) if sni else host
 
     # Юзер-агенты для имитации реального трафика
-    payload = b"GET / HTTP/1.1\r\nHost: " + server_hostname.encode() + b"\r\nUser-Agent: Mozilla/5.0\r\n\r\n"
+    user_agents = stress_config.get("user_agents") or DEFAULT_MOBILE_USER_AGENTS
+    probe_paths = stress_config.get("probe_paths") or DEFAULT_PROBE_PATHS
 
-    total_attempts = 20 
+    total_attempts = max(1, int(stress_config.get("torture_total_attempts", 20)))
+    min_success = max(1, int(stress_config.get("torture_min_success", total_attempts)))
+    min_success = min(min_success, total_attempts)
+
+    success = 0
     for i in range(total_attempts):
+        ua = user_agents[i % len(user_agents)]
+        path = probe_paths[i % len(probe_paths)]
+        payload = (
+            f"GET {path} HTTP/1.1\r\n"
+            f"Host: {server_hostname}\r\n"
+            f"User-Agent: {ua}\r\n"
+            "Accept: */*\r\n"
+            "Connection: close\r\n\r\n"
+        ).encode()
+
         try:
             # Коннектимся строго по IP
             with socket.create_connection((resolved_ip, port), timeout=stress_config["timeout"]) as s:
@@ -234,30 +301,45 @@ def torture_check(link, stress_config, resolved_ip):
                     with ctx.wrap_socket(s, server_hostname=server_hostname) as ssock:
                         # Каждую попытку шлем запрос (в тортурере халявы нет)
                         ssock.sendall(payload)
-                        if stress_config["dpi_sleep"] > 0: time.sleep(stress_config["dpi_sleep"])
-                        ssock.settimeout(2.0)
-                        if not ssock.recv(1): raise Exception("Drop")
+                        if stress_config["dpi_sleep"] > 0:
+                            time.sleep(stress_config["dpi_sleep"])
+                        ssock.settimeout(stress_config.get("recv_timeout", 1.7))
+                        if not ssock.recv(8):
+                            raise RuntimeError("Drop")
                 else:
                     s.sendall(b'\x05\x01\x00')
-                    if not s.recv(2): raise Exception("Dead")
-            
-            if (i + 1) % 5 == 0: print(f"    ⛓️  Пытка {host[:15]}: {i+1}/20 OK")
-            if i < 19: time.sleep(60)
-        except:
-            return False
-    return True
+                    s.settimeout(stress_config.get("recv_timeout", 1.7))
+                    if not s.recv(2):
+                        raise RuntimeError("Dead")
+
+            success += 1
+            if (i + 1) % 5 == 0:
+                print(f"    ⛓️  Пытка {host[:15]}: {i + 1}/{total_attempts} OK")
+
+            if success >= min_success:
+                return True, success, total_attempts
+
+            if i < total_attempts - 1:
+                time.sleep(stress_config.get("torture_cycle_sleep", 60))
+        except Exception:
+            if i < total_attempts - 1:
+                time.sleep(stress_config.get("between_attempts_sleep", 0.35))
+
+    return False, success, total_attempts
 
 def is_ipv6(host):
     """Проверяет наличие двоеточия, что характерно для IPv6"""
-    return ":" in host
+    return ":" in host if host else False
 
 def main_torturer():
     # Проверка на дубликаты процесса
     for proc in psutil.process_iter(['pid', 'cmdline']):
         try:
             if proc.info['pid'] != os.getpid() and 'torture_bot.py' in ' '.join(proc.info['cmdline']):
-                print("🛑 Бот уже запущен."); return
-        except: continue
+                print("🛑 Бот уже запущен.")
+                return
+        except Exception:
+            continue
 
     stress_config = load_stress_config()
     token = os.getenv("GH_TOKEN")
@@ -276,23 +358,23 @@ def main_torturer():
             vetted_list = [l.strip() for l in f if 'vless' in l]
 
     # ВЫЗЫВАЕМ ТУТ И ПЕРЕДАЕМ СПИСОК, А НЕ ПУСТЫЕ СКОБКИ []
-    vetted_list = process_pin_commands(os.getenv("GH_TOKEN"), os.getenv("GITHUB_REPOSITORY"), vetted_list, ranking_db)
+    vetted_list = process_pin_commands(token, repo, vetted_list, ranking_db)
 
-    if not ranking_db:
-        print("⌛ База пуста."); return
-
-    # 2. Загрузка БД
-    ranking_db = {}
-    if os.path.exists(RANK_FILE):
-        with open(RANK_FILE, 'r', encoding='utf-8') as f:
-            ranking_db = json.load(f)
+    # Сохраняем возможные правки из process_pin_commands
+    with open(RANK_FILE, 'w', encoding='utf-8') as f:
+        json.dump(ranking_db, f, ensure_ascii=False, indent=4)
 
 # Вместо резкого return используем проверку
     if not ranking_db: 
         print("⌛ База пуста. Пытки отменяются, но команды GitHub выполнены.")
+        if token and repo:
+            refresh_control_panel(token, repo)
         return
 
-    pinned_set = {l.split('#')[0].strip() for l in open(PINNED_FILE, 'r') if 'vless' in l} if os.path.exists(PINNED_FILE) else set()
+    pinned_set = set()
+    if os.path.exists(PINNED_FILE):
+        with open(PINNED_FILE, 'r', encoding='utf-8') as pf:
+            pinned_set = {l.split('#')[0].strip() for l in pf if 'vless' in l}
     vetted_set = {l.split('#')[0].strip() for l in vetted_list}
 
     # Проверка кандидатов
@@ -304,6 +386,8 @@ def main_torturer():
         link = data.get("link", base) if isinstance(data, dict) else base
         
         host, port = extract_host_port(base)
+        if not host or not port:
+            continue
         addr = f"{host}:{port}"
 
         if (rank >= THRESHOLD) and base not in vetted_set and base not in pinned_set:
@@ -316,29 +400,34 @@ def main_torturer():
     if candidates:
         def run_torture(item):
             base, full_link = item
-            host, port = extract_host_port(base)
+            host, _ = extract_host_port(base)
 
             # --- ЖЕСТКИЙ ФИЛЬТР IPv6 В ИНСПЕКТОРЕ ---
             if host and is_ipv6(host):
                 print(f"🚫 [INSPECTOR BANNED IPv6]: {host}")
                 add_to_blacklist(base)
                 remove_from_all(base)
-                return base, full_link, False, "IPv6_BAN"
+                return base, full_link, False, "IPv6_BAN", 0, 0
             # ----------------------------------------
             
             try:
-                resolved_ip = socket.gethostbyname(host)
-                if get_country(resolved_ip) not in ALLOWED_COUNTRIES: 
-                    return base, full_link, False, "GEO"
-                
-                return base, full_link, torture_check(full_link, stress_config, resolved_ip), "OK"
-            except: 
-                return base, full_link, False, "ERROR"
+                infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+                resolved_ip = infos[0][4][0] if infos else None
+                if not resolved_ip:
+                    return base, full_link, False, "ERROR", 0, 0
+
+                if get_country(resolved_ip) not in ALLOWED_COUNTRIES:
+                    return base, full_link, False, "GEO", 0, 0
+
+                ok, success_hits, total_hits = torture_check(full_link, stress_config, resolved_ip)
+                return base, full_link, ok, "OK", success_hits, total_hits
+            except Exception:
+                return base, full_link, False, "ERROR", 0, 0
 
         with ThreadPoolExecutor(max_workers=5) as executor:
             results = list(executor.map(run_torture, candidates))
 
-        for base, full_link, success, status in results:
+        for base, full_link, success, status, success_hits, total_hits in results:
             if success:
                 with file_lock:
                     # Считываем текущих элитариев, чтобы не плодить дубли
@@ -350,12 +439,22 @@ def main_torturer():
                     if base not in existing_vetted:
                         with open(VETTED_FILE, 'a', encoding='utf-8') as f:
                             f.write(f"{full_link} # Rank: ELITE | {time.strftime('%Y-%m-%d')}\n")
-                        print(f"🏆 НОВАЯ ЭЛИТА: {base[:15]}")
+                        print(f"🏆 НОВАЯ ЭЛИТА: {base[:15]} [{success_hits}/{total_hits}]")
                     else:
                         print(f"♻️ СЕРВЕР УЖЕ В ЭЛИТЕ: {base[:15]}")
 
-                if base in ranking_db: 
+                if base in ranking_db:
                     del ranking_db[base]
+            else:
+                if status == "OK" and base in ranking_db and isinstance(ranking_db[base], dict):
+                    ranking_db[base]['rank'] = max(0, ranking_db[base].get('rank', 50) - 30)
+                    ranking_db[base]['last_torture'] = f"FAIL {success_hits}/{total_hits}"
+                elif status in {"IPv6_BAN", "ERROR"}:
+                    if base in ranking_db:
+                        del ranking_db[base]
+                    if status == "IPv6_BAN":
+                        add_to_blacklist(base)
+                    remove_from_all(base)
                 
                 # Если сервер просто не прошел пытку (статус OK, но success False)
                 elif status == "OK":
