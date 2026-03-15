@@ -746,7 +746,7 @@ def main():
                 
                 for i, link in enumerate(working_for_base, 1):
                     status = "[x]" if link in blacklist else "[ ]"
-                    issue_body += f"- {status} {link} (wifi {i})\n\n---\n\n"
+                    issue_body += f"- {status} '{link}' (wifi {i})\n\n---\n\n"
                 
                 with open("issue_body.txt", "w", encoding="utf-8") as f: f.write(issue_body)
                 subprocess.run(['gh', 'issue', 'edit', issue_number, '--repo', repo, '--body-file', 'issue_body.txt'], env=env_gh)
@@ -798,7 +798,7 @@ def main():
                 num_unp = str(data_unp[0]['number'])
                 body_unp = f"### 👑 Ваши закрепленные сервера\n🕒 Обновлено: `{update_time}`\n\n"
                 for i, link in enumerate(pinned_list, 1):
-                    body_unp += f"- [ ] {link} (FIXED {i})\n\n---\n\n"
+                    body_unp += f"- [ ] '{link}' (FIXED {i})\n\n---\n\n"
                 
                 with open("unpin_body.txt", "w", encoding="utf-8") as f: f.write(body_unp)
                 subprocess.run(['gh', 'issue', 'edit', num_unp, '--repo', repo, '--body-file', 'unpin_body.txt'], env=env_gh)
