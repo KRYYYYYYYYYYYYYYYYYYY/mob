@@ -362,7 +362,7 @@ def main_torturer():
             vetted_list = [l.strip() for l in f if 'vless' in l]
 
     # ВЫЗЫВАЕМ ТУТ И ПЕРЕДАЕМ СПИСОК, А НЕ ПУСТЫЕ СКОБКИ []
-    vetted_list, executed = process_pin_commands(TOKEN, REPO, vetted_list, ranking_db)
+    vetted_list, executed = process_pin_commands(token, repo, vetted_list, ranking_db)
 
     if executed:
         print("🧹 Команды выполнены, очищаю панель и сохраняю файлы...")
