@@ -393,21 +393,32 @@ def is_ipv6(host):
     """Проверяет наличие двоеточия, что характерно для IPv6"""
     return ":" in host if host else False
 
+Принял, никакой самодеятельности. Сохраняем твою структуру «Шаг 0 — Шаг 1 — Шаг 2...», просто корректируем логику внутри шагов, чтобы панели обновлялись, когда нужно.
+
+Главная причина, почему у тебя «не редактировалось» — это Шаг 0, который выходил из программы раньше, чем вызывалась функция обновления.
+
+Вот твоя структура с минимальными точечными правками:
+
+Python
 def main_torturer():
     token = os.getenv("GH_TOKEN")
     repo = os.getenv("GITHUB_REPOSITORY")
 
     # --- ШАГ 0: БЫСТРЫЙ ФИЛЬТР ---
-    # Проверяем наличие ЛЮБОЙ нажатой мастер-галочки во всех панелях
-    # ВНИМАНИЕ: Здесь вызываем новую универсальную функцию process_all_controls
+    # Проверяем команды. Если нажата любая мастер-галочка, executed будет True.
     _, _, executed = process_all_controls(token, repo, [], [], {})
     
-    if not executed:
-        print("☕ Ни одна мастер-галочка не нажата. Завершаю работу за 1 секунду.")
+    # Если мы зашли по cron (раз в час), а галочки не нажаты — 
+    # мы НЕ выходим сразу, а даем боту шанс обновить списки серверов в панелях.
+    # Выходим только если НЕТ галочек И НЕТ расписания (например, случайный запуск).
+    is_scheduled = os.getenv("GITHUB_EVENT_NAME") == "schedule"
+    
+    if not executed and not is_scheduled:
+        print("☕ Ни одна мастер-галочка не нажата и это не запуск по расписанию. Выход.")
         return
 
     # --- ШАГ 1: ПОДГОТОВКА ---
-    print("🚀 Команда получена! Начинаю обработку...")
+    print("🚀 Начинаю работу...")
 
     # Проверка на дубликаты процесса
     for proc in psutil.process_iter(['pid', 'cmdline']):
@@ -435,28 +446,26 @@ def main_torturer():
         with open(PINNED_FILE, 'r', encoding='utf-8') as f:
             pinned_list = [l.strip() for l in f if 'vless' in l]
 
-    # Список для панели Blacklist (те, кто сейчас в ranking_db)
     working_for_base = list(ranking_db.keys())
 
     # --- ШАГ 2: РЕАЛЬНОЕ ВЫПОЛНЕНИЕ КОМАНД ---
-    # Вызываем Исполнителя еще раз, но уже с данными для правки
-    vetted_list, pinned_list, _ = process_all_controls(
+    # Если команды были (executed=True), эта функция реально изменит списки в памяти
+    vetted_list, pinned_list, executed = process_all_controls(
         token, repo, vetted_list, pinned_list, ranking_db
     )
 
     # --- ШАГ 3: СОХРАНЕНИЕ И ОБНОВЛЕНИЕ ПАНЕЛЕЙ ---
-    print("🧹 Команды выполнены, сохраняю файлы и обновляю GitHub...")
-    
-    # 1. Сохраняем VETTED
-    with open(VETTED_FILE, 'w', encoding='utf-8') as vf:
-        vf.write("\n".join(vetted_list) + ("\n" if vetted_list else ""))
-    
-    # 2. Сохраняем RANKING_DB
-    with open(RANK_FILE, 'w', encoding='utf-8') as f:
-        json.dump(ranking_db, f, ensure_ascii=False, indent=4)
+    # Если были команды — сохраняем файлы. 
+    # Обновляем GitHub-панели В ЛЮБОМ СЛУЧАЕ (чтобы сбросить галочки или обновить список)
+    if executed:
+        print("🧹 Команды выполнены, сохраняю файлы...")
+        with open(VETTED_FILE, 'w', encoding='utf-8') as vf:
+            vf.write("\n".join(vetted_list) + ("\n" if vetted_list else ""))
+        
+        with open(RANK_FILE, 'w', encoding='utf-8') as f:
+            json.dump(ranking_db, f, ensure_ascii=False, indent=4)
 
-    # 3. Обновляем ВСЕ панели (сбрасываем галочки в GitHub)
-    # Используем новую функцию, которую мы обсуждали
+    print("📝 Обновляю панели в GitHub...")
     refresh_all_panels(token, repo, working_for_base, vetted_list, pinned_list)
 
     # --- ШАГ 4: ПЕРЕХОД К ПЫТКАМ ---
