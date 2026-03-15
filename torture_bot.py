@@ -169,65 +169,73 @@ def load_stress_config():
 def process_all_controls(token, repo, vetted_list, pinned_list, ranking_db):
     executed_any = False
     env_gh = {**os.environ, "GH_TOKEN": token}
-    
-    # --- ШАГ 0: ПАУЗА ДЛЯ API ---
-    # Ждем 3 секунды, чтобы GitHub успел сохранить твои клики в базе
-    if os.getenv("GITHUB_EVENT_NAME") == "issues":
-        print("⏳ Ожидание синхронизации API...")
-        time.sleep(3)
 
     def get_checked_links(body):
-        return re.findall(r'\[[xX]\]\s*.*?\'?(vless://[^\s\'"`#]+)', body)
+        # Ищем строку с [x], за которой где-то дальше идет vless. 
+        # Очищаем ссылку от кавычек и лишних символов в конце.
+        found = re.findall(r'\[[xX]\]\s*.*?\'?(vless://[^\s\'"`#]+)', body)
+        return [l.strip().rstrip(':') for l in found]
 
-    # Вспомогательная функция для получения САМОГО свежего body
-    def get_fresh_body(label_name):
-        try:
-            # Ищем номер issue по лейблу
-            cmd_num = ['gh', 'issue', 'list', '--repo', repo, '--label', label_name, '--json', 'number', '--limit', '1']
-            out_num = json.loads(subprocess.check_output(cmd_num, env=env_gh))
-            if not out_num: return ""
-            
-            num = out_num[0]['number']
-            # Тнем тело напрямую по номеру — это надежнее, чем список
-            cmd_body = ['gh', 'issue', 'view', str(num), '--repo', repo, '--json', 'body']
-            out_body = json.loads(subprocess.check_output(cmd_body, env=env_gh))
-            return out_body.get('body', '')
-        except:
-            return ""
+    # Читаем данные из GitHub один раз
+    try:
+        # Собираем все 3 типа панелей (они могут быть в разных issue или в одном с разными лейблами)
+        # Для примера берем логику, что мы проверяем каждую панель по её лейблу
+        
+        # --- 1. ПАНЕЛЬ ЧЕРНОГО СПИСКА ---
+        cmd = ['gh', 'issue', 'list', '--repo', repo, '--label', 'control', '--json', 'body', '--limit', '1']
+        gh_data = json.loads(subprocess.check_output(cmd, env=env_gh))
+        if gh_data:
+            body = gh_data[0]['body']
+            # Ищем кнопку БАН более гибко (регистронезависимо и с любыми пробелами)
+            if re.search(r'\[[xX]\]\s*.*?(?:ПОДТВЕРДИТЬ_БАН|💀)', body, re.IGNORECASE):
+                links = get_checked_links(body)
+                for base in links:
+                    if "ПОДТВЕРДИТЬ_БАН" in base: continue
+                    add_to_blacklist(base)
+                    remove_from_all(base)
+                    if base in ranking_db: del ranking_db[base]
+                    executed_any = True
 
-    # 1. ПАНЕЛЬ БАНОВ (control)
-    body_ctrl = get_fresh_body('control')
-    if re.search(r'\[[xX]\]\s*💀\s*ПОДТВЕРДИТЬ_БАН', body_ctrl):
-        print("💀 Кнопка БАН нажата! Обработка...")
-        links = get_checked_links(body_ctrl)
-        for link in links:
-            if "ПОДТВЕРДИТЬ_БАН" in link: continue
-            base = link.split('#')[0].strip()
-            add_to_blacklist(base)
-            remove_from_all(base)
-            if base in ranking_db: del ranking_db[base]
-            executed_any = True
+        # --- 2. PIN/BAN КАНДИДАТОВ ---
+        cmd = ['gh', 'issue', 'list', '--repo', repo, '--label', 'pin_control', '--json', 'body', '--limit', '1']
+        data = json.loads(subprocess.check_output(cmd, env=env_gh))
+        if data:
+            body = data[0]['body']
+            if re.search(r'\[[xX]\]\s*.*?(?:ПРИМЕНИТЬ_PIN_BAN|✅)', body, re.IGNORECASE):
+                # Ищем [x] PIN_vless... или [x] BAN_vless...
+                to_pin = re.findall(r'\[[xX]\]\s*PIN_(vless://[^\s#\'"`]+)', body, re.IGNORECASE)
+                to_ban = re.findall(r'\[[xX]\]\s*BAN_(vless://[^\s#\'"`]+)', body, re.IGNORECASE)
+                
+                for s in to_pin:
+                    base = s.strip().rstrip(':')
+                    if all(base != p.split("#")[0].strip() for p in pinned_list):
+                        with open(PINNED_FILE, 'a', encoding='utf-8') as pf:
+                            pf.write(base + "\n")
+                        pinned_list.append(base)
+                    executed_any = True
 
-    # 2. PIN/BAN (pin_control)
-    body_pin = get_fresh_body('pin_control')
-    if re.search(r'\[[xX]\]\s*✅\s*ПРИМЕНИТЬ_PIN_BAN', body_pin):
-        print("✅ Кнопка PIN_BAN нажата!")
-        to_pin = re.findall(r'\[[xX]\]\s*PIN_(vless://[^\s#`\n\r]+)', body_pin)
-        to_ban = re.findall(r'\[[xX]\]\s*BAN_(vless://[^\s#`\n\r]+)', body_pin)
-        # ... (логика PIN/BAN без изменений) ...
-        executed_any = True
+                for s in to_ban:
+                    base = s.strip().rstrip(':')
+                    add_to_blacklist(base)
+                    remove_from_all(base)
+                    executed_any = True
 
-    # 3. UNPIN (unpin_control)
-    body_unp = get_fresh_body('unpin_control')
-    if re.search(r'\[[xX]\]\s*🔓\s*ПОДТВЕРДИТЬ_РАСПИН', body_unp):
-        print("🔓 Кнопка РАСПИН нажата!")
-        links = get_checked_links(body_unp)
-        unp_bases = {l.split("#")[0].strip() for l in links if "ПОДТВЕРДИТЬ_РАСПИН" not in l}
-        if unp_bases:
-            pinned_list = [s for s in pinned_list if s.split("#")[0].strip() not in unp_bases]
-            with open(PINNED_FILE, 'w', encoding='utf-8') as pf:
-                pf.write("\n".join(pinned_list) + ("\n" if pinned_list else ""))
-            executed_any = True
+        # --- 3. РАЗЗАКРЕПЛЕНИЕ ---
+        cmd = ['gh', 'issue', 'list', '--repo', repo, '--label', 'unpin_control', '--json', 'body', '--limit', '1']
+        data = json.loads(subprocess.check_output(cmd, env=env_gh))
+        if data:
+            body = data[0]['body']
+            if re.search(r'\[[xX]\]\s*.*?(?:ПОДТВЕРДИТЬ_РАСПИН|🔓)', body, re.IGNORECASE):
+                links = get_checked_links(body)
+                unp_bases = {l.strip().rstrip(':') for l in links if "ПОДТВЕРДИТЬ_РАСПИН" not in l}
+                if unp_bases:
+                    pinned_list = [s for s in pinned_list if s.split("#")[0].strip() not in unp_bases]
+                    with open(PINNED_FILE, 'w', encoding='utf-8') as pf:
+                        pf.write("\n".join(pinned_list) + ("\n" if pinned_list else ""))
+                    executed_any = True
+
+    except Exception as e:
+        print(f"⚠️ Ошибка при обработке команд: {e}")
 
     return vetted_list, pinned_list, executed_any
 
