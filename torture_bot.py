@@ -410,17 +410,6 @@ def main_torturer():
     vetted_list = load_lines(VETTED_FILE)
     pinned_list = load_lines(PINNED_FILE)
 
-    # --- ТЕПЕРЬ ПРОВЕРЯЕМ КОМАНДЫ (Шаг 0 + Шаг 2 вместе) ---
-    # Передаем реальные списки вместо []
-    vetted_list, pinned_list, executed = process_all_controls(
-        token, repo, vetted_list, pinned_list, ranking_db
-    )
-    
-    is_scheduled = os.getenv("GITHUB_EVENT_NAME") == "schedule"
-    if not executed and not is_scheduled:
-        print("☕ Выход: команд нет, расписания нет.")
-        return
-
     # --- ШАГ 1: ПОДГОТОВКА ---
     print("🚀 Начинаю работу...")
 
@@ -446,15 +435,27 @@ def main_torturer():
     # Если были команды — сохраняем файлы. 
     # Обновляем GitHub-панели В ЛЮБОМ СЛУЧАЕ (чтобы сбросить галочки или обновить список)
     if executed:
-        print("🧹 Команды выполнены, сохраняю файлы...")
+        print("🧹 Команды выполнены, фиксирую изменения в файлы...")
         with open(VETTED_FILE, 'w', encoding='utf-8') as vf:
             vf.write("\n".join(vetted_list) + ("\n" if vetted_list else ""))
-        
         with open(RANK_FILE, 'w', encoding='utf-8') as f:
             json.dump(ranking_db, f, ensure_ascii=False, indent=4)
 
-    print("📝 Обновляю панели в GitHub...")
+    # ОБНОВЛЯЕМ ПАНЕЛИ В ЛЮБОМ СЛУЧАЕ
+    # Теперь даже при ручном запуске без команд ты увидишь актуальный wifi.txt в Blacklist
+    print("📝 Синхронизация панелей с текущим состоянием файлов...")
     refresh_all_panels(token, repo, ranking_db, vetted_list, pinned_list)
+
+    # --- ШАГ 3: УСЛОВНЫЙ ВЫХОД ИЗ ПЫТОК ---
+    is_scheduled = os.getenv("GITHUB_EVENT_NAME") == "schedule"
+    
+    # Если это не расписание и команд не было — на пытки не идем, но панели уже обновлены!
+    if not executed and not is_scheduled:
+        print("☕ Панели обновлены. Пытки пропущены (нет команд/расписания).")
+        return 
+
+    # --- ШАГ 4: ДАЛЬШЕ ИДУТ ПЫТКИ ---
+    print("🚀 Начинаю инспекцию серверов...")
 
     # --- ШАГ 4: ПЕРЕХОД К ПЫТКАМ ---
     if not ranking_db:
