@@ -401,7 +401,7 @@ def main():
             seen_bases.add(base)
 
     # --- БЛОК ЧТЕНИЯ КОМАНД ИЗ GITHUB ---
-if token and repo:
+    if token and repo:
     env_gh = {**os.environ, "GH_TOKEN": token}
 
     # 1. ЧЕРНЫЙ СПИСОК (LABEL: control) 💀
