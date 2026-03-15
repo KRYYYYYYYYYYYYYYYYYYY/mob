@@ -388,8 +388,6 @@ def main_torturer():
     )
 
     # --- ШАГ 3: СОХРАНЕНИЕ И ОБНОВЛЕНИЕ ПАНЕЛЕЙ ---
-    # Если были команды — сохраняем файлы. 
-    # Обновляем GitHub-панели В ЛЮБОМ СЛУЧАЕ (чтобы сбросить галочки или обновить список)
     if executed:
         print("🧹 Команды выполнены, сохраняю файлы...")
         with open(VETTED_FILE, 'w', encoding='utf-8') as vf:
@@ -398,18 +396,29 @@ def main_torturer():
         with open(RANK_FILE, 'w', encoding='utf-8') as f:
             json.dump(ranking_db, f, ensure_ascii=False, indent=4)
 
-    # --- ДИНАМИЧЕСКИЙ ФИЛЬТР ДЛЯ ПАНЕЛИ BLACKLIST ---
-    # Собираем все "защищенные" базы (закрепы + элита)
-    protected = {l.split('#')[0].strip() for l in pinned_list}
-    protected.update({l.split('#')[0].strip() for l in vetted_list})
+    # --- ВНУТРЕННЯЯ ФУНКЦИЯ ДЛЯ СБОРА ПАНЕЛИ БАНА ИЗ WIFI.TXT ---
+    def get_wifi_panel_data(pinned, vetted):
+        all_wifi_links = load_lines(WIFI_FILE)
+        blacklisted_set = set()
+        if os.path.exists(BLACKLIST_FILE):
+            with open(BLACKLIST_FILE, 'r', encoding='utf-8') as f:
+                blacklisted_set = {line.strip() for line in f if line.strip()}
 
-    # Оставляем только те, кого нет в защите
-    blacklist_view = {k: v for k, v in ranking_db.items() if k not in protected}
+        ignore = {l.split('#')[0].strip() for l in pinned}
+        ignore.update({l.split('#')[0].strip() for l in vetted})
+        ignore.update(blacklisted_set)
 
-    print("📝 Обновляю панели в GitHub...")
-    # ВАЖНО: передаем blacklist_view вместо всего ranking_db
-    refresh_all_panels(token, repo, blacklist_view, vetted_list, pinned_list)
+        wifi_to_show = {}
+        for link in all_wifi_links:
+            base = link.split('#')[0].strip()
+            if base not in ignore:
+                wifi_to_show[base] = {"link": link}
+            if len(wifi_to_show) >= 70: break
+        return wifi_to_show
 
+    # Первичное обновление панелей перед пытками
+    current_wifi_view = get_wifi_panel_data(pinned_list, vetted_list)
+    refresh_all_panels(token, repo, current_wifi_view, vetted_list, pinned_list)
     # --- ШАГ 4: ПЕРЕХОД К ПЫТКАМ ---
     if not ranking_db:
         print("⌛ База пуста. Пытать некого.")
@@ -519,16 +528,15 @@ def main_torturer():
         with open(VETTED_FILE, 'r', encoding='utf-8') as f:
             vetted_list = [l.strip() for l in f if 'vless' in l]
     
-    # ФИНАЛЬНЫЙ СИНХРОН С GITHUB
-    print("🔄 Финальное обновление панелей после инспекции...")
+    # --- ФИНАЛЬНЫЙ СИНХРОН ---
+    if os.path.exists(VETTED_FILE):
+        with open(VETTED_FILE, 'r', encoding='utf-8') as f:
+            vetted_list = [l.strip() for l in f if 'vless' in l]
     
-    # Снова фильтруем, так как после пыток ranking_db и vetted_list изменились
-    protected = {l.split('#')[0].strip() for l in pinned_list}
-    protected.update({l.split('#')[0].strip() for l in vetted_list})
-    blacklist_view = {k: v for k, v in ranking_db.items() if k not in protected}
-
-    # Передаем отфильтрованный результат
-    refresh_all_panels(token, repo, blacklist_view, vetted_list, pinned_list)
+    print("🔄 Финальное обновление панелей...")
+    # Снова собираем данные из wifi.txt, так как vetted_list мог измениться
+    final_wifi_view = get_wifi_panel_data(pinned_list, vetted_list)
+    refresh_all_panels(token, repo, final_wifi_view, vetted_list, pinned_list)
     
 if __name__ == "__main__":
     main_torturer()
