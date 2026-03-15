@@ -45,37 +45,45 @@ def add_to_blacklist(base_part):
         print(f"💀 [BLACKLIST] Забанен: {base_part[:30]}...")
 
 
-def refresh_all_panels(token, repo, working_for_base, vetted_list, pinned_list):
+def refresh_all_panels(token, repo, ranking_db, vetted_list, pinned_list):
     update_time = time.strftime("%d.%m.%Y %H:%M:%S")
     env_gh = {**os.environ, "GH_TOKEN": token}
 
-    # 1. ПАНЕЛЬ ЧЕРНОГО СПИСКА
+    # 1. ПАНЕЛЬ ЧЕРНОГО СПИСКА (Кандидаты на бан из общего рейтинга)
     body_ctrl = f"### 🎮 Панель Blacklist\n🕒 `{update_time}`\n\n"
-    # ОБЯЗАТЕЛЬНО: Тире в начале и пустая строка после заголовка
     body_ctrl += "- [ ] 💀 **ПОДТВЕРДИТЬ_БАН** (Отметь и сохрани для запуска)\n\n---\n\n"
     
-    for link in working_for_base[:50]:
-        body_ctrl += f"- [ ] '{link}'\n"
+    # Берем первые 50 элементов из рейтинга
+    # Достаем полную ссылку из значения словаря
+    for base, data in list(ranking_db.items())[:50]:
+        full_link = data.get('link', base) if isinstance(data, dict) else base
+        body_ctrl += f"- [ ] {full_link}\n"
+    
     update_issue(repo, 'control', body_ctrl, env_gh)
 
-    # 2. ПАНЕЛЬ КАНДИДАТОВ
+    # 2. ПАНЕЛЬ КАНДИДАТОВ В ЭЛИТУ
     body_pin = f"### 💎 Кандидаты в Элиту\n🕒 `{update_time}`\n\n"
-    # Добавляем ПУСТУЮ СТРОКУ перед этой строкой, иначе GitHub склеит ее с заголовком
     body_pin += "- [ ] ✅ **ПРИМЕНИТЬ_PIN_BAN** (Отметь и сохрани для запуска)\n\n---\n\n"
     
-    vetted_clean = [v.split('#')[0].strip() for v in vetted_list]
-    for link in vetted_clean:
-        body_pin += f"📡 Элита:\n- [ ] PIN_{link}\n- [ ] BAN_{link}\n\n---\n"
+    # Здесь vetted_list уже содержит полные ссылки, 
+    # поэтому просто используем элементы списка целиком
+    for full_link in vetted_list:
+        # Для команд PIN/BAN лучше использовать чистую часть ссылки (base), 
+        # чтобы парсеру было проще, но отображать можно красиво
+        base = full_link.split('#')[0].strip()
+        body_pin += f"📡 {full_link}:\n- [ ] PIN_{base}\n- [ ] BAN_{base}\n\n---\n"
+    
     update_issue(repo, 'pin_control', body_pin, env_gh)
 
     # 3. ПАНЕЛЬ ЗАКРЕПОВ
     body_unp = f"### 👑 Управление Закрепами\n🕒 `{update_time}`\n\n"
     body_unp += "- [ ] 🔓 **ПОДТВЕРДИТЬ_РАСПИН** (Отметь и сохрани для запуска)\n\n---\n\n"
     
-    for link in pinned_list:
-        body_unp += f"- [ ] '{link}'\n"
+    # pinned_list обычно уже содержит полные ссылки
+    for full_link in pinned_list:
+        body_unp += f"- [ ] {full_link}\n"
+        
     update_issue(repo, 'unpin_control', body_unp, env_gh)
-
 
 # --- ХИРУРГИЧЕСКОЕ УДАЛЕНИЕ ---
 def remove_from_all(base_part):
@@ -395,7 +403,7 @@ def main_torturer():
             json.dump(ranking_db, f, ensure_ascii=False, indent=4)
 
     print("📝 Обновляю панели в GitHub...")
-    refresh_all_panels(token, repo, working_for_base, vetted_list, pinned_list)
+    refresh_all_panels(token, repo, ranking_db, vetted_list, pinned_list)
 
     # --- ШАГ 4: ПЕРЕХОД К ПЫТКАМ ---
     if not ranking_db:
