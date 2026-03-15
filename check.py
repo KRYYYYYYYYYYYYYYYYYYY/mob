@@ -192,10 +192,7 @@ def probe_server(host: str, port: int, base_part: str, stress_config: dict):
             time.sleep(stress_config.get("between_attempts_sleep", 0.35))
 
     return False, last_ip, success, attempts
-
-
-
-
+    
 def remove_from_input_file(base_to_remove: str):
     """Удаляет конкретную ссылку из 1.txt по её базовой части"""
     if not os.path.exists(INPUT_FILE):
