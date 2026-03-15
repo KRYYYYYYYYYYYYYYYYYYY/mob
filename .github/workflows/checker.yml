@@ -21,14 +21,15 @@ jobs:
       github.event_name != 'issues' || 
       (
         github.event.sender.login != 'github-actions[bot]' && 
-        contains(github.event.issue.body, '[x]') && 
         (
-          contains(github.event.issue.body, 'ПОДТВЕРДИТЬ_БАН') ||
-          contains(github.event.issue.body, 'ПРИМЕНИТЬ_PIN_BAN') ||
-          contains(github.event.issue.body, 'ПОДТВЕРДИТЬ_РАСПИН')
+          contains(github.event.issue.body, '[x] 💀 ПОДТВЕРДИТЬ_БАН') ||
+          contains(github.event.issue.body, '[x] ✅ ПРИМЕНИТЬ_PIN_BAN') ||
+          contains(github.event.issue.body, '[x] 🔓 ПОДТВЕРДИТЬ_РАСПИН') ||
+          contains(github.event.issue.body, '[X] 💀 ПОДТВЕРДИТЬ_БАН') ||
+          contains(github.event.issue.body, '[X] ✅ ПРИМЕНИТЬ_PIN_BAN') ||
+          contains(github.event.issue.body, '[X] 🔓 ПОДТВЕРДИТЬ_РАСПИН')
         )
       )
-    # -------------------
     
     timeout-minutes: 360  
     permissions:
