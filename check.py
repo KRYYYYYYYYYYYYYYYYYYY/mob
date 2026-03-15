@@ -15,8 +15,6 @@ OUTPUT_FILE = 'kr/mob/wifi.txt'
 STATUS_FILE = 'test1/status.json'
 CACHE_FILE = 'test1/countries_cache.json' # Добавь эту константу для порядка
 RANKING_FILE = 'test1/ranking.json'
-VETTED_FILE = 'test1/vetted.txt'
-PINNED_FILE = 'test1/pinned.txt'
 
 EXTERNAL_SOURCE_URL = [
     "https://raw.githubusercontent.com/KRYYYYYYYYYYYYYYYYYYY/crazy_xray_checker/refs/heads/main/result/working.txt",
@@ -34,14 +32,6 @@ HEADER = """# profile-title: 🏳️Мобильный инет🏳️
 """
 
 ALLOWED_COUNTRIES = {"US", "DE", "NL", "GB", "FR", "FI", "SG", "JP", "PL", "TR", "RU"}
-
-DEFAULT_MOBILE_USER_AGENTS = [
-    "Mozilla/5.0 (Linux; Android 13; SM-A336B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
-    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1",
-]
-DEFAULT_PROBE_PATHS = ["/", "/generate_204", "/favicon.ico"]
-
 
 def download_raw_data(urls):
     """
@@ -92,6 +82,7 @@ def download_raw_data(urls):
     return all_links
 
 def rebuild_link_name(link: str, new_name: str) -> str:
+    return link
     base, _, fragment = link.partition("#")
 
     # Если это уже закреп — не трогаем
@@ -113,86 +104,6 @@ def rebuild_link_name(link: str, new_name: str) -> str:
 
     return f"{base}#{urllib.parse.quote(new_name)}"
 
-def remove_from_all(base_part: str):
-    """Удаляет сервер по base_part из основных рабочих файлов."""
-    for path in [INPUT_FILE, OUTPUT_FILE, VETTED_FILE, PINNED_FILE]:
-        if not os.path.exists(path):
-            continue
-        try:
-            with open(path, 'r', encoding='utf-8') as f:
-                lines = f.readlines()
-
-            new_lines = [line for line in lines if line.split('#')[0].strip() != base_part]
-            if len(new_lines) != len(lines):
-                with open(path, 'w', encoding='utf-8') as f:
-                    f.writelines(new_lines)
-        except Exception as e:
-            print(f"⚠️ Ошибка при очистке {path}: {e}")
-
-
-def probe_server(host: str, port: int, base_part: str, stress_config: dict):
-    """Проверка сервера с повторами и разными сценариями трафика (anti-DPI профиль)."""
-    use_tls = "security=tls" in base_part.lower() or "security=reality" in base_part.lower()
-    attempts = max(1, int(stress_config.get("probe_attempts", 4)))
-    min_success = max(1, int(stress_config.get("min_success", 2)))
-    user_agents = stress_config.get("user_agents") or DEFAULT_MOBILE_USER_AGENTS
-    probe_paths = stress_config.get("probe_paths") or DEFAULT_PROBE_PATHS
-
-    success = 0
-    last_ip = None
-
-    for attempt in range(attempts):
-        try:
-            infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
-        except socket.gaierror:
-            infos = []
-
-        if not infos:
-            time.sleep(0.2)
-            continue
-
-        ua = user_agents[attempt % len(user_agents)]
-        path = probe_paths[attempt % len(probe_paths)]
-        request = f"GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: {ua}\r\nAccept: */*\r\nConnection: close\r\n\r\n"
-
-        attempt_ok = False
-        for info in infos:
-            resolved_ip = info[4][0]
-            last_ip = resolved_ip
-            try:
-                with socket.create_connection((resolved_ip, int(port)), timeout=stress_config["timeout"]) as sock:
-                    if use_tls:
-                        context = ssl.create_default_context()
-                        context.check_hostname = False
-                        context.verify_mode = ssl.CERT_NONE
-                        with context.wrap_socket(sock, server_hostname=host) as ssock:
-                            ssock.sendall(request.encode())
-                            if stress_config["dpi_sleep"] > 0:
-                                time.sleep(stress_config["dpi_sleep"])
-                            ssock.settimeout(stress_config.get("recv_timeout", 1.7))
-                            head = ssock.recv(8)
-                            if head:
-                                attempt_ok = True
-                                break
-                    else:
-                        sock.sendall(b'\x05\x01\x00')
-                        sock.settimeout(stress_config.get("recv_timeout", 1.7))
-                        if sock.recv(2):
-                            attempt_ok = True
-                            break
-            except (socket.timeout, ConnectionResetError, ssl.SSLError, socket.error):
-                continue
-
-        if attempt_ok:
-            success += 1
-            if success >= min_success:
-                return True, last_ip, success, attempts
-
-        if attempt < attempts - 1:
-            time.sleep(stress_config.get("between_attempts_sleep", 0.35))
-
-    return False, last_ip, success, attempts
-    
 def remove_from_input_file(base_to_remove: str):
     """Удаляет конкретную ссылку из 1.txt по её базовой части"""
     if not os.path.exists(INPUT_FILE):
@@ -303,17 +214,6 @@ def safe_gh_call(cmd, token):
             break
     return "[]"
 
-def add_to_blacklist(base_part):
-    """Добавляет сервер в файл blacklist.txt, если его там нет."""
-    current_bl = set()
-    if os.path.exists('test1/blacklist.txt'):
-        with open('test1/blacklist.txt', 'r') as f:
-            current_bl = {line.strip() for line in f if line.strip()}
-    
-    if base_part not in current_bl:
-        with open('test1/blacklist.txt', 'a') as f:
-            f.write(base_part + "\n")
-
 def main():
     import subprocess
     token = os.getenv("GH_TOKEN")
@@ -400,65 +300,60 @@ def main():
             unique_links.append(link)
             seen_bases.add(base)
 
-    # --- БЛОК ЧТЕНИЯ КОМАНД ИЗ GITHUB ---
+    # --- БЛОК ЧТЕНИЯ КОМАНД ИЗ GITHUB (В начале main) ---
     if token and repo:
-    env_gh = {**os.environ, "GH_TOKEN": token}
+        # 1. ЧЕРНЫЙ СПИСОК (CONTROL)
+        try:
+            print("🔍 Проверка черного списка в GitHub...")
+            cmd_control = ['gh', 'issue', 'list', '--repo', repo, '--label', 'control', '--json', 'body', '--limit', '1']
+            out = safe_gh_call(cmd_control, token)
+            data = json.loads(out)
+            if data:
+                checked = re.findall(r'- \[x\] (vless://[^\s]+)', data[0]['body'])
+                if checked:
+                    for s in checked:
+                        blacklist.add(s.split('#')[0].strip())
+                    with open('test1/blacklist.txt', 'w') as f:
+                        f.write("\n".join(list(blacklist)))
+                    print(f"🚫 Обновлено: {len(checked)} серверов в блэклисте.")
+        except Exception as e:
+            print(f"⚠️ Ошибка Blacklist: {e}")
 
-    # 1. ЧЕРНЫЙ СПИСОК (LABEL: control) 💀
-    try:
-        cmd = ['gh', 'issue', 'list', '--repo', repo, '--label', 'control', '--json', 'body', '--limit', '1']
-        data = json.loads(subprocess.check_output(cmd, env=env_gh))
-        if data:
-            body = data[0]['body']
-            # Мастер-кнопка: 💀 ПОДТВЕРДИТЬ_БАН
-            if re.search(r'\[[xX]\]\s*💀\s*ПОДТВЕРДИТЬ_БАН', body):
-                checked = re.findall(r'-\s*\[[xX]\]\s*\'(vless://[^\s\']+)\'', body)
-                for link in checked:
-                    base = link.split('#')[0].strip()
-                    add_to_blacklist(base)
-                    remove_from_all(base)
-                    if base in ranking_db: del ranking_db[base]
-                print(f"💀 [CONTROL] Забанено {len(checked)} серверов")
-    except Exception as e: print(f"⚠️ Ошибка Control: {e}")
+        # 2. НОВЫЕ ЗАКРЕПЫ (PIN_CONTROL)
+        try:
+            print("🔍 Проверка новых закрепов...")
+            cmd_pin = ['gh', 'issue', 'list', '--repo', repo, '--label', 'pin_control', '--json', 'body', '--limit', '1']
+            out = safe_gh_call(cmd_pin, token)
+            data = json.loads(out)
+            if data:
+                to_pin = re.findall(r'- \[x\] (vless://[^\s#\s]+)', data[0]['body'])
+                if to_pin:
+                    with open('test1/pinned.txt', 'a', encoding='utf-8') as pf:
+                        for s in to_pin:
+                            base = s.split("#")[0].strip()
+                            if all(base != p.split("#")[0].strip() for p in pinned_list):
+                                pf.write(s.strip() + "\n")
+                                pinned_list.append(s.strip())
+                    print(f"💎 Добавлено {len(to_pin)} новых закрепов.")
+        except Exception as e:
+            print(f"⚠️ Ошибка Pin: {e}")
 
-    # 2. ПИН/БАН (LABEL: pin_control) ✅
-    try:
-        cmd = ['gh', 'issue', 'list', '--repo', repo, '--label', 'pin_control', '--json', 'body', '--limit', '1']
-        data = json.loads(subprocess.check_output(cmd, env=env_gh))
-        if data:
-            body = data[0]['body']
-            # Мастер-кнопка: ✅ ПРИМЕНИТЬ_PIN_BAN
-            if re.search(r'\[[xX]\]\s*✅\s*ПРИМЕНИТЬ_PIN_BAN', body):
-                to_pin = re.findall(r'\[[xX]\]\s*PIN_(vless://[^\s#`]+)', body)
-                to_ban = re.findall(r'\[[xX]\]\s*BAN_(vless://[^\s#`]+)', body)
-                
-                for s in to_pin:
-                    base = s.split("#")[0].strip()
-                    with open(PINNED_FILE, 'a', encoding='utf-8') as pf:
-                        pf.write(base + "\n")
-                
-                for s in to_ban:
-                    base = s.split("#")[0].strip()
-                    add_to_blacklist(base)
-                    remove_from_all(base)
-                print(f"💎 [PIN_CONTROL] PIN: {len(to_pin)}, BAN: {len(to_ban)}")
-    except Exception as e: print(f"⚠️ Ошибка Pin/Ban: {e}")
-
-    # 3. РАЗЗАКРЕПЛЕНИЕ (LABEL: unpin_control) 🔓
-    try:
-        cmd = ['gh', 'issue', 'list', '--repo', repo, '--label', 'unpin_control', '--json', 'body', '--limit', '1']
-        data = json.loads(subprocess.check_output(cmd, env=env_gh))
-        if data:
-            body = data[0]['body']
-            # Мастер-кнопка: 🔓 ПОДТВЕРДИТЬ_РАСПИН
-            if re.search(r'\[[xX]\]\s*🔓\s*ПОДТВЕРДИТЬ_РАСПИН', body):
-                to_unpin = re.findall(r'-\s*\[[xX]\]\s*\'(vless://[^\s\']+)\'', body)
-                unpin_bases = [u.split("#")[0].strip() for u in to_unpin]
-                pinned_list = [s for s in pinned_list if s.split("#")[0].strip() not in unpin_bases]
-                with open(PINNED_FILE, 'w', encoding='utf-8') as pf:
-                    pf.write("\n".join(pinned_list) + ("\n" if pinned_list else ""))
-                print(f"🔓 [UNPIN] Раззакреплено: {len(to_unpin)}")
-    except Exception as e: print(f"⚠️ Ошибка Unpin: {e}")
+        # 3. РАЗЗАКРЕПЛЕНИЕ (UNPIN_CONTROL)
+        try:
+            print("🔍 Проверка раззакрепления...")
+            cmd_unpin = ['gh', 'issue', 'list', '--repo', repo, '--label', 'unpin_control', '--json', 'body', '--limit', '1']
+            out = safe_gh_call(cmd_unpin, token)
+            data = json.loads(out)
+            if data:
+                to_unpin = re.findall(r'- \[x\] (vless://[^\s#\s]+)', data[0]['body'])
+                if to_unpin:
+                    to_unpin_bases = [u.split("#")[0].strip() for u in to_unpin]
+                    pinned_list = [s for s in pinned_list if s.split("#")[0].strip() not in to_unpin_bases]
+                    with open('test1/pinned.txt', 'w', encoding='utf-8') as pf:
+                        pf.write("\n".join(pinned_list) + ("\n" if pinned_list else ""))
+                    print(f"🔓 Убрано из закрепов: {len(to_unpin)}")
+        except Exception as e:
+            print(f"⚠️ Ошибка Unpin: {e}")
 
     # --- ПЕРЕЗАГРУЗКА ИСТОРИИ ПЕРЕД ПРОВЕРКОЙ ---
     history = {}
@@ -500,15 +395,9 @@ def main():
 
     # --- НАСТРОЙКИ СТРЕСС-ТЕСТА (Интеграция твоего JSON) ---
     stress_config = {
-        "timeout": 2.5,                # Дефолт
-        "dpi_sleep": 0.5,              # Дефолт
-        "target_mtu": 1280,            # Для мобильных сетей
-        "probe_attempts": 4,           # Сколько разных сценариев пробуем
-        "min_success": 2,              # Сколько успешных попыток нужно
-        "recv_timeout": 1.7,
-        "between_attempts_sleep": 0.35,
-        "user_agents": list(DEFAULT_MOBILE_USER_AGENTS),
-        "probe_paths": list(DEFAULT_PROBE_PATHS),
+        "timeout": 2.5,        # Дефолт
+        "dpi_sleep": 0.5,      # Дефолт
+        "target_mtu": 1280     # Для мобильных сетей
     }
     
     if os.path.exists('test1/stress_profile.json'):
@@ -520,21 +409,10 @@ def main():
                 # Если mimic_dpi_delay: true, ставим паузу 0.5 сек (имитация лага мобилы)
                 stress_config["dpi_sleep"] = 0.5 if data.get("mimic_dpi_delay") else 0
                 stress_config["target_mtu"] = data.get("target_mtu", 1280)
-                stress_config["probe_attempts"] = int(data.get("probe_attempts", stress_config["probe_attempts"]))
-                stress_config["min_success"] = int(data.get("min_success", stress_config["min_success"]))
-                stress_config["recv_timeout"] = float(data.get("recv_timeout", stress_config["recv_timeout"]))
-                stress_config["between_attempts_sleep"] = float(data.get("between_attempts_sleep", stress_config["between_attempts_sleep"]))
-                if isinstance(data.get("mobile_user_agents"), list) and data.get("mobile_user_agents"):
-                    stress_config["user_agents"] = [str(x) for x in data["mobile_user_agents"] if str(x).strip()]
-                if isinstance(data.get("probe_paths"), list) and data.get("probe_paths"):
-                    stress_config["probe_paths"] = [str(x) for x in data["probe_paths"] if str(x).strip()]
         except: 
             pass
     # Работаем, пока не набрали 200 в подписку ИЛИ пока не кончились ссылки в unique_links
     while len(working_for_sub) < 200 and idx < len(unique_links):
-        if checked_today >= MAX_TO_CHECK:
-            print(f"🛑 Достигнут лимит проверок за запуск: {MAX_TO_CHECK}")
-            break
         link = unique_links[idx]
         idx += 1 # Сдвигаем указатель
         
@@ -546,6 +424,7 @@ def main():
         if base_part in seen_parts and not any(base_part in p for p in pinned_list):
             continue
         
+        # --- БЛОК ЗАКРЕПОВ (PINNED) ---
         # --- БЛОК ЗАКРЕПОВ (PINNED) ---
         found_pinned_full = None
         for p in pinned_list:
@@ -597,25 +476,58 @@ def main():
             print(f"❌ Ошибка: Не удалось извлечь хост/порт из ссылки")
             continue
 
-        # --- ЖЕСТКИЙ ФИЛЬТР IPv6 ---
-        if is_ipv6(host):
-            print(f"🚫 БАН (IPv6): {host} запрещен в мобильной сети.")
-            add_to_blacklist(base_part) # Отправляем в черный список сразу
-            remove_from_input_file(base_part) # Чистим из 1.txt
-            continue
-
         # --- ПРОВЕРКА СОЕДИНЕНИЯ ---
         print(f"🔍 Тестирую: {host}...", end=" ", flush=True) # Печатаем без переноса строки
 
-        checked_today += 1
-        is_alive, resolved_ip, success_hits, total_hits = probe_server(host, int(port), base_part, stress_config)
+        # --- ЭТАП 1: РЕЗОЛВИНГ И ПРОВЕРКА ПОД "ГЛУШИЛКУ" ---
+        resolved_ip = None
+        is_alive = False
+        try:
+            # Проверка DNS (то, что у тебя падает на мобиле)
+            resolved_ip = host if is_ipv6(host) else socket.gethostbyname(host)
+            
+            if resolved_ip in seen_ips:
+                continue 
+    
+            # Установка соединения с учетом таймаута из stress_profile (1.8s)
+            with socket.create_connection((resolved_ip, int(port)), timeout=stress_config["timeout"]) as sock:
+                # Имитируем малый MTU, характерный для забитых каналов или мобильных VPN
+                # sock.setsockopt(socket.IPPROTO_IP, socket.IP_MTU_DISCOVER, socket.IP_PMTUDISC_DO) 
+                
+                use_tls = "security=tls" in base_part.lower() or "security=reality" in base_part.lower()
+                
+                if use_tls:
+                    context = ssl.create_default_context()
+                    context.check_hostname = False
+                    context.verify_mode = ssl.CERT_NONE
+                    
+                    with context.wrap_socket(sock, server_hostname=host) as ssock:
+                        # ОТПРАВЛЯЕМ ДАННЫЕ (Важно! Глушилки смотрят на первый пакет после Handshake)
+                        # Эмулируем обычный браузерный запрос
+                        request = f"GET / HTTP/1.1\r\nHost: {host}\r\nUser-Agent: Mozilla/5.0\r\n\r\n"
+                        ssock.sendall(request.encode())
+                        
+                        # ПАУЗА DPI (из конфига)
+                        if stress_config["dpi_sleep"] > 0:
+                            time.sleep(stress_config["dpi_sleep"])
+                        
+                        # Ждем ответа. Если ТСПУ оборвал связь — тут выпадет ConnectionResetError
+                        ssock.settimeout(1.5) 
+                        response = ssock.recv(1) 
+                        if response:
+                            is_alive = True
+                else:
+                    # Для SOCKS5/Shadowsocks имитируем рукопожатие
+                    sock.sendall(b'\x05\x01\x00')
+                    if sock.recv(2):
+                        is_alive = True
 
-        if resolved_ip and resolved_ip in seen_ips and not is_alive:
-            print("♻️ Пропуск: IP уже встречался и сейчас недоступен")
-            continue
-
-        if is_alive and resolved_ip:
-            seen_ips.add(resolved_ip)
+        except (socket.timeout, ConnectionResetError, ssl.SSLError, socket.error):
+            # Если DNS не нашелся или связь оборвалась после отправки данных — сервер в утиль
+            is_alive = False
+                
+            if is_alive:
+                seen_ips.add(resolved_ip) 
 
         # --- ЭТАП 2: ЕСЛИ СЕРВЕР РАБОТАЕТ ---
         if is_alive:
@@ -640,10 +552,11 @@ def main():
                 sep = "&" if "?" in sub_link else "?"
                 sub_link += f"{sep}sni={host}"
             
-            final_link = rebuild_link_name(sub_link, f"mob {counter}")
+            # final_link = rebuild_link_name(sub_link, f"wifi {counter}")
+            final_link = link.strip()
             working_for_sub.append(final_link)
             
-            print(f"✅ ОК {len(working_for_sub)}/200 ({country}): {host} -> {resolved_ip} [{success_hits}/{total_hits}] (mob {counter})")
+            print(f"✅ ОК {len(working_for_sub)}/200 ({country}): {host} -> {resolved_ip} (wifi {counter})")
             counter += 1
     
         # --- ЭТАП 3: ЕСЛИ СЕРВЕР НЕ ОТВЕЧАЕТ ---
@@ -675,10 +588,10 @@ def main():
                     new_history[base_part] = fail_time
                     
                     # Добавляем в подписку с меткой ожидания
-                    temp_link = rebuild_link_name(link, f"⏳ mob {counter}")
+                    temp_link = rebuild_link_name(link, f"⏳ wifi {counter}")
                     working_for_sub.append(temp_link)
                     
-                    print(f"⏳ DOWN ({country}): {host} (оставлен шанс, mob {counter})")
+                    print(f"⏳ DOWN ({country}): {host} (оставлен шанс, wifi {counter})")
                     counter += 1
             else:
                 print(f"🗑️ Удален (тайм-аут): {host}")
@@ -775,37 +688,65 @@ def main():
 
     print(f"🏁 Готово! Подписка обновлена.")
     # --- ОБНОВЛЕНИЕ ИНТЕРФЕЙСА С ГАЛОЧКАМИ ---
+ # --- ОБНОВЛЕНИЕ ИНТЕРФЕЙСА С ГАЛОЧКАМИ ---
     if token and repo:
-        # --- БЛОК ОБНОВЛЕНИЯ ПАНЕЛЕЙ (ФИНАЛ) ---
         try:
             update_time = time.strftime("%d.%m.%Y %H:%M:%S")
+            env_gh = {**os.environ, "GH_TOKEN": token}
+
+            # --- ПАНЕЛЬ 1: ЧЕРНЫЙ СПИСОК (CONTROL) ---
+            find_cmd = ['gh', 'issue', 'list', '--repo', repo, '--label', 'control', '--json', 'number', '--limit', '1']
+            out = subprocess.check_output(find_cmd, env=env_gh).decode()
+            data = json.loads(out)
             
-            # ПАНЕЛЬ 1: BLACKLIST (control)
-            body_ctrl = f"### 🎮 Панель Blacklist\n🕒 `{update_time}`\n\n"
-            body_ctrl += "- [ ] 💀 **ПОДТВЕРДИТЬ_БАН** (Нажми для запуска)\n\n---\n"
-            for link in working_for_base[:50]:
-                body_ctrl += f"- [ ] '{link}'\n"
-            update_issue(repo, 'control', body_ctrl, env_gh)
-        
-            # ПАНЕЛЬ 2: КАНДИДАТЫ (pin_control)
-            body_pin = f"### 💎 Кандидаты в Элиту\n🕒 `{update_time}`\n\n"
-            body_pin += "- [ ] ✅ **ПРИМЕНИТЬ_PIN_BAN** (Нажми для запуска)\n\n---\n"
-            if not vetted_list:
-                body_pin += "_Пока кандидатов нет..._"
+            if data:  # Проверка: если список не пуст
+                issue_number = str(data[0]['number'])
+                issue_body = f"### 🎮 Панель управления серверами\n🕒 Последнее обновление: `{update_time}`\n\n"
+                issue_body += "Отметь [x] и сохрани, чтобы отправить в черный список:\n\n---\n\n"
+                
+                for i, link in enumerate(working_for_base, 1):
+                    status = "[x]" if link in blacklist else "[ ]"
+                    issue_body += f"- {status} {link} (wifi {i})\n\n---\n\n"
+                
+                with open("issue_body.txt", "w", encoding="utf-8") as f: f.write(issue_body)
+                subprocess.run(['gh', 'issue', 'edit', issue_number, '--repo', repo, '--body-file', 'issue_body.txt'], env=env_gh)
+                print(f"📝 Панель Control #{issue_number} обновлена.")
             else:
-                for link in [v.split('#')[0].strip() for v in vetted_list]:
-                    body_pin += f"📡 Элита:\n- [ ] PIN_{link}\n- [ ] BAN_{link}\n\n---\n"
-            update_issue(repo, 'pin_control', body_pin, env_gh)
-        
-            # ПАНЕЛЬ 3: ЗАКРЕПЫ (unpin_control)
-            body_unp = f"### 👑 Управление Закрепами\n🕒 `{update_time}`\n\n"
-            body_unp += "- [ ] 🔓 **ПОДТВЕРДИТЬ_РАСПИН** (Нажми для запуска)\n\n---\n"
-            for link in pinned_list:
-                body_unp += f"- [ ] '{link}'\n"
-            update_issue(repo, 'unpin_control', body_unp, env_gh)
-        
+                print("⚠️ Issue с меткой 'control' не найдено.")
+
+            # --- ПАНЕЛЬ 2: КАНДИДАТЫ В ЗАКРЕП (PIN) ---
+            pin_cmd = ['gh', 'issue', 'list', '--repo', repo, '--label', 'pin_control', '--json', 'number', '--limit', '1']
+            out_pin = subprocess.check_output(pin_cmd, env=env_gh).decode()
+            data_pin = json.loads(out_pin)
+            
+            if data_pin:
+                num_pin = str(data_pin[0]['number'])
+                body_pin = f"### 💎 Кандидаты в закреп\n🕒 Обновлено: `{update_time}`\n\n"
+                for i, link in enumerate(vetted_list, 1):
+                    if link not in pinned_list:
+                        body_pin += f"- [ ] {link} (wifi {i})\n\n---\n\n"
+                
+                with open("pin_body.txt", "w", encoding="utf-8") as f: f.write(body_pin)
+                subprocess.run(['gh', 'issue', 'edit', num_pin, '--repo', repo, '--body-file', 'pin_body.txt'], env=env_gh)
+                print(f"💎 Панель Pin #{num_pin} обновлена.")
+
+            # --- ПАНЕЛЬ 3: УПРАВЛЕНИЕ ЗАКРЕПАМИ (UNPIN) ---
+            unpin_cmd = ['gh', 'issue', 'list', '--repo', repo, '--label', 'unpin_control', '--json', 'number', '--limit', '1']
+            out_unp = subprocess.check_output(unpin_cmd, env=env_gh).decode()
+            data_unp = json.loads(out_unp)
+            
+            if data_unp:
+                num_unp = str(data_unp[0]['number'])
+                body_unp = f"### 👑 Ваши закрепленные сервера\n🕒 Обновлено: `{update_time}`\n\n"
+                for i, link in enumerate(pinned_list, 1):
+                    body_unp += f"- [ ] {link} (FIXED {i})\n\n---\n\n"
+                
+                with open("unpin_body.txt", "w", encoding="utf-8") as f: f.write(body_unp)
+                subprocess.run(['gh', 'issue', 'edit', num_unp, '--repo', repo, '--body-file', 'unpin_body.txt'], env=env_gh)
+                print(f"🔓 Панель Unpin #{num_unp} обновлена.")
+
         except Exception as e:
-            print(f"⚠️ Ошибка отрисовки панелей: {e}")
+            print(f"⚠️ Ошибка при обновлении панелей GitHub: {e}")
 
 if __name__ == "__main__":
     main()
