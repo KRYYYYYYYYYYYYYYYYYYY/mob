@@ -126,40 +126,29 @@ def refresh_all_panels(token, repo, working_for_base, vetted_list, pinned_list):
 
     # 1. ПАНЕЛЬ ЧЕРНОГО СПИСКА
     body_ctrl = f"### 🎮 Панель Blacklist\n🕒 `{update_time}`\n\n"
-    # Важно: пустая строка перед списком и строгий формат - [ ]
-    body_ctrl += "- [ ] 💀 **ПОДТВЕРДИТЬ_БАН** (Нажми Edit и поставь X, либо просто нажми на чекбокс)\n\n---\n"
+    # ОБЯЗАТЕЛЬНО: Тире в начале и пустая строка после заголовка
+    body_ctrl += "- [ ] 💀 **ПОДТВЕРДИТЬ_БАН** (Отметь и сохрани для запуска)\n\n---\n\n"
     
-    if not working_for_base:
-        body_ctrl += "_Список пуст_\n"
-    else:
-        for link in working_for_base[:50]:
-            body_ctrl += f"- [ ] '{link}'\n"
-    
+    for link in working_for_base[:50]:
+        body_ctrl += f"- [ ] '{link}'\n"
     update_issue(repo, 'control', body_ctrl, env_gh)
 
     # 2. ПАНЕЛЬ КАНДИДАТОВ
     body_pin = f"### 💎 Кандидаты в Элиту\n🕒 `{update_time}`\n\n"
-    body_pin += "- [ ] ✅ **ПРИМЕНИТЬ_PIN_BAN**\n\n---\n"
+    # Добавляем ПУСТУЮ СТРОКУ перед этой строкой, иначе GitHub склеит ее с заголовком
+    body_pin += "- [ ] ✅ **ПРИМЕНИТЬ_PIN_BAN** (Отметь и сохрани для запуска)\n\n---\n\n"
     
     vetted_clean = [v.split('#')[0].strip() for v in vetted_list]
-    if not vetted_clean:
-        body_pin += "_Пока кандидатов нет..._\n"
-    else:
-        for link in vetted_clean:
-            body_pin += f"📡 Элита:\n- [ ] PIN_{link}\n- [ ] BAN_{link}\n\n---\n"
-    
+    for link in vetted_clean:
+        body_pin += f"📡 Элита:\n- [ ] PIN_{link}\n- [ ] BAN_{link}\n\n---\n"
     update_issue(repo, 'pin_control', body_pin, env_gh)
 
     # 3. ПАНЕЛЬ ЗАКРЕПОВ
     body_unp = f"### 👑 Управление Закрепами\n🕒 `{update_time}`\n\n"
-    body_unp += "- [ ] 🔓 **ПОДТВЕРДИТЬ_РАСПИН**\n\n---\n"
+    body_unp += "- [ ] 🔓 **ПОДТВЕРДИТЬ_РАСПИН** (Отметь и сохрани для запуска)\n\n---\n\n"
     
-    if not pinned_list:
-        body_unp += "_Закрепленных серверов нет_\n"
-    else:
-        for link in pinned_list:
-            body_unp += f"- [ ] '{link}'\n"
-            
+    for link in pinned_list:
+        body_unp += f"- [ ] '{link}'\n"
     update_issue(repo, 'unpin_control', body_unp, env_gh)
 
 def update_issue(repo, label, body, env):
