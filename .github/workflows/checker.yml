@@ -24,12 +24,12 @@ jobs:
         github.event.action == 'edited' &&
         github.event.sender.login != 'github-actions[bot]' && 
         (
-          contains(github.event.issue.body, '[x] 💀 ПОДТВЕРДИТЬ_БАН') ||
-          contains(github.event.issue.body, '[x] ✅ ПРИМЕНИТЬ_PIN_BAN') ||
-          contains(github.event.issue.body, '[x] 🔓 ПОДТВЕРДИТЬ_РАСПИН') ||
-          contains(github.event.issue.body, '[X] 💀 ПОДТВЕРДИТЬ_БАН') ||
-          contains(github.event.issue.body, '[X] ✅ ПРИМЕНИТЬ_PIN_BAN') ||
-          contains(github.event.issue.body, '[X] 🔓 ПОДТВЕРДИТЬ_РАСПИН')
+          contains(github.event.issue.body, '- [x] 💀 **ПОДТВЕРДИТЬ_БАН**') ||
+          contains(github.event.issue.body, '- [x] ✅ **ПРИМЕНИТЬ_PIN_BAN**') ||
+          contains(github.event.issue.body, '- [x] 🔓 **ПОДТВЕРДИТЬ_РАСПИН**') ||
+          contains(github.event.issue.body, '- [X] 💀 **ПОДТВЕРДИТЬ_БАН**') ||
+          contains(github.event.issue.body, '- [X] ✅ **ПРИМЕНИТЬ_PIN_BAN**') ||
+          contains(github.event.issue.body, '- [X] 🔓 **ПОДТВЕРДИТЬ_РАСПИН**')
         )
       )
     
