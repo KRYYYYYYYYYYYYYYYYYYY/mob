@@ -15,6 +15,8 @@ OUTPUT_FILE = 'kr/mob/wifi.txt'
 STATUS_FILE = 'test1/status.json'
 CACHE_FILE = 'test1/countries_cache.json' # Добавь эту константу для порядка
 RANKING_FILE = 'test1/ranking.json'
+VETTED_FILE = 'test1/vetted.txt'
+PINNED_FILE = 'test1/pinned.txt'
 
 EXTERNAL_SOURCE_URL = [
     "https://raw.githubusercontent.com/KRYYYYYYYYYYYYYYYYYYY/crazy_xray_checker/refs/heads/main/result/working.txt",
@@ -32,6 +34,14 @@ HEADER = """# profile-title: 🏳️Мобильный инет🏳️
 """
 
 ALLOWED_COUNTRIES = {"US", "DE", "NL", "GB", "FR", "FI", "SG", "JP", "PL", "TR", "RU"}
+
+DEFAULT_MOBILE_USER_AGENTS = [
+    "Mozilla/5.0 (Linux; Android 13; SM-A336B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1",
+]
+DEFAULT_PROBE_PATHS = ["/", "/generate_204", "/favicon.ico"]
+
 
 def download_raw_data(urls):
     """
@@ -82,7 +92,6 @@ def download_raw_data(urls):
     return all_links
 
 def rebuild_link_name(link: str, new_name: str) -> str:
-    return link
     base, _, fragment = link.partition("#")
 
     # Если это уже закреп — не трогаем
@@ -104,6 +113,86 @@ def rebuild_link_name(link: str, new_name: str) -> str:
 
     return f"{base}#{urllib.parse.quote(new_name)}"
 
+def remove_from_all(base_part: str):
+    """Удаляет сервер по base_part из основных рабочих файлов."""
+    for path in [INPUT_FILE, OUTPUT_FILE]:
+        if not os.path.exists(path):
+            continue
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+
+            new_lines = [line for line in lines if line.split('#')[0].strip() != base_part]
+            if len(new_lines) != len(lines):
+                with open(path, 'w', encoding='utf-8') as f:
+                    f.writelines(new_lines)
+        except Exception as e:
+            print(f"⚠️ Ошибка при очистке {path}: {e}")
+
+
+def probe_server(host: str, port: int, base_part: str, stress_config: dict):
+    """Проверка сервера с повторами и разными сценариями трафика (anti-DPI профиль)."""
+    use_tls = "security=tls" in base_part.lower() or "security=reality" in base_part.lower()
+    attempts = max(1, int(stress_config.get("probe_attempts", 4)))
+    min_success = max(1, int(stress_config.get("min_success", 2)))
+    user_agents = stress_config.get("user_agents") or DEFAULT_MOBILE_USER_AGENTS
+    probe_paths = stress_config.get("probe_paths") or DEFAULT_PROBE_PATHS
+
+    success = 0
+    last_ip = None
+
+    for attempt in range(attempts):
+        try:
+            infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+        except socket.gaierror:
+            infos = []
+
+        if not infos:
+            time.sleep(0.2)
+            continue
+
+        ua = user_agents[attempt % len(user_agents)]
+        path = probe_paths[attempt % len(probe_paths)]
+        request = f"GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: {ua}\r\nAccept: */*\r\nConnection: close\r\n\r\n"
+
+        attempt_ok = False
+        for info in infos:
+            resolved_ip = info[4][0]
+            last_ip = resolved_ip
+            try:
+                with socket.create_connection((resolved_ip, int(port)), timeout=stress_config["timeout"]) as sock:
+                    if use_tls:
+                        context = ssl.create_default_context()
+                        context.check_hostname = False
+                        context.verify_mode = ssl.CERT_NONE
+                        with context.wrap_socket(sock, server_hostname=host) as ssock:
+                            ssock.sendall(request.encode())
+                            if stress_config["dpi_sleep"] > 0:
+                                time.sleep(stress_config["dpi_sleep"])
+                            ssock.settimeout(stress_config.get("recv_timeout", 1.7))
+                            head = ssock.recv(8)
+                            if head:
+                                attempt_ok = True
+                                break
+                    else:
+                        sock.sendall(b'\x05\x01\x00')
+                        sock.settimeout(stress_config.get("recv_timeout", 1.7))
+                        if sock.recv(2):
+                            attempt_ok = True
+                            break
+            except (socket.timeout, ConnectionResetError, ssl.SSLError, socket.error):
+                continue
+
+        if attempt_ok:
+            success += 1
+            if success >= min_success:
+                return True, last_ip, success, attempts
+
+        if attempt < attempts - 1:
+            time.sleep(stress_config.get("between_attempts_sleep", 0.35))
+
+    return False, last_ip, success, attempts
+    
 def remove_from_input_file(base_to_remove: str):
     """Удаляет конкретную ссылку из 1.txt по её базовой части"""
     if not os.path.exists(INPUT_FILE):
@@ -214,6 +303,17 @@ def safe_gh_call(cmd, token):
             break
     return "[]"
 
+def add_to_blacklist(base_part):
+    """Добавляет сервер в файл blacklist.txt, если его там нет."""
+    current_bl = set()
+    if os.path.exists('test1/blacklist.txt'):
+        with open('test1/blacklist.txt', 'r') as f:
+            current_bl = {line.strip() for line in f if line.strip()}
+    
+    if base_part not in current_bl:
+        with open('test1/blacklist.txt', 'a') as f:
+            f.write(base_part + "\n")
+
 def main():
     import subprocess
     token = os.getenv("GH_TOKEN")
@@ -300,7 +400,6 @@ def main():
             unique_links.append(link)
             seen_bases.add(base)
 
-
     # --- ПЕРЕЗАГРУЗКА ИСТОРИИ ПЕРЕД ПРОВЕРКОЙ ---
     history = {}
     if os.path.exists(STATUS_FILE):
@@ -341,9 +440,15 @@ def main():
 
     # --- НАСТРОЙКИ СТРЕСС-ТЕСТА (Интеграция твоего JSON) ---
     stress_config = {
-        "timeout": 2.5,        # Дефолт
-        "dpi_sleep": 0.5,      # Дефолт
-        "target_mtu": 1280     # Для мобильных сетей
+        "timeout": 2.5,                # Дефолт
+        "dpi_sleep": 0.5,              # Дефолт
+        "target_mtu": 1280,            # Для мобильных сетей
+        "probe_attempts": 4,           # Сколько разных сценариев пробуем
+        "min_success": 2,              # Сколько успешных попыток нужно
+        "recv_timeout": 1.7,
+        "between_attempts_sleep": 0.35,
+        "user_agents": list(DEFAULT_MOBILE_USER_AGENTS),
+        "probe_paths": list(DEFAULT_PROBE_PATHS),
     }
     
     if os.path.exists('test1/stress_profile.json'):
@@ -355,10 +460,21 @@ def main():
                 # Если mimic_dpi_delay: true, ставим паузу 0.5 сек (имитация лага мобилы)
                 stress_config["dpi_sleep"] = 0.5 if data.get("mimic_dpi_delay") else 0
                 stress_config["target_mtu"] = data.get("target_mtu", 1280)
+                stress_config["probe_attempts"] = int(data.get("probe_attempts", stress_config["probe_attempts"]))
+                stress_config["min_success"] = int(data.get("min_success", stress_config["min_success"]))
+                stress_config["recv_timeout"] = float(data.get("recv_timeout", stress_config["recv_timeout"]))
+                stress_config["between_attempts_sleep"] = float(data.get("between_attempts_sleep", stress_config["between_attempts_sleep"]))
+                if isinstance(data.get("mobile_user_agents"), list) and data.get("mobile_user_agents"):
+                    stress_config["user_agents"] = [str(x) for x in data["mobile_user_agents"] if str(x).strip()]
+                if isinstance(data.get("probe_paths"), list) and data.get("probe_paths"):
+                    stress_config["probe_paths"] = [str(x) for x in data["probe_paths"] if str(x).strip()]
         except: 
             pass
     # Работаем, пока не набрали 200 в подписку ИЛИ пока не кончились ссылки в unique_links
     while len(working_for_sub) < 200 and idx < len(unique_links):
+        if checked_today >= MAX_TO_CHECK:
+            print(f"🛑 Достигнут лимит проверок за запуск: {MAX_TO_CHECK}")
+            break
         link = unique_links[idx]
         idx += 1 # Сдвигаем указатель
         
@@ -370,7 +486,6 @@ def main():
         if base_part in seen_parts and not any(base_part in p for p in pinned_list):
             continue
         
-        # --- БЛОК ЗАКРЕПОВ (PINNED) ---
         # --- БЛОК ЗАКРЕПОВ (PINNED) ---
         found_pinned_full = None
         for p in pinned_list:
@@ -422,58 +537,25 @@ def main():
             print(f"❌ Ошибка: Не удалось извлечь хост/порт из ссылки")
             continue
 
+        # --- ЖЕСТКИЙ ФИЛЬТР IPv6 ---
+        if is_ipv6(host):
+            print(f"🚫 БАН (IPv6): {host}.")
+            add_to_blacklist(base_part) # Отправляем в черный список сразу
+            remove_from_input_file(base_part) # Чистим из 1.txt
+            continue
+
         # --- ПРОВЕРКА СОЕДИНЕНИЯ ---
         print(f"🔍 Тестирую: {host}...", end=" ", flush=True) # Печатаем без переноса строки
 
-        # --- ЭТАП 1: РЕЗОЛВИНГ И ПРОВЕРКА ПОД "ГЛУШИЛКУ" ---
-        resolved_ip = None
-        is_alive = False
-        try:
-            # Проверка DNS (то, что у тебя падает на мобиле)
-            resolved_ip = host if is_ipv6(host) else socket.gethostbyname(host)
-            
-            if resolved_ip in seen_ips:
-                continue 
-    
-            # Установка соединения с учетом таймаута из stress_profile (1.8s)
-            with socket.create_connection((resolved_ip, int(port)), timeout=stress_config["timeout"]) as sock:
-                # Имитируем малый MTU, характерный для забитых каналов или мобильных VPN
-                # sock.setsockopt(socket.IPPROTO_IP, socket.IP_MTU_DISCOVER, socket.IP_PMTUDISC_DO) 
-                
-                use_tls = "security=tls" in base_part.lower() or "security=reality" in base_part.lower()
-                
-                if use_tls:
-                    context = ssl.create_default_context()
-                    context.check_hostname = False
-                    context.verify_mode = ssl.CERT_NONE
-                    
-                    with context.wrap_socket(sock, server_hostname=host) as ssock:
-                        # ОТПРАВЛЯЕМ ДАННЫЕ (Важно! Глушилки смотрят на первый пакет после Handshake)
-                        # Эмулируем обычный браузерный запрос
-                        request = f"GET / HTTP/1.1\r\nHost: {host}\r\nUser-Agent: Mozilla/5.0\r\n\r\n"
-                        ssock.sendall(request.encode())
-                        
-                        # ПАУЗА DPI (из конфига)
-                        if stress_config["dpi_sleep"] > 0:
-                            time.sleep(stress_config["dpi_sleep"])
-                        
-                        # Ждем ответа. Если ТСПУ оборвал связь — тут выпадет ConnectionResetError
-                        ssock.settimeout(1.5) 
-                        response = ssock.recv(1) 
-                        if response:
-                            is_alive = True
-                else:
-                    # Для SOCKS5/Shadowsocks имитируем рукопожатие
-                    sock.sendall(b'\x05\x01\x00')
-                    if sock.recv(2):
-                        is_alive = True
+        checked_today += 1
+        is_alive, resolved_ip, success_hits, total_hits = probe_server(host, int(port), base_part, stress_config)
 
-        except (socket.timeout, ConnectionResetError, ssl.SSLError, socket.error):
-            # Если DNS не нашелся или связь оборвалась после отправки данных — сервер в утиль
-            is_alive = False
-                
-            if is_alive:
-                seen_ips.add(resolved_ip) 
+        if resolved_ip and resolved_ip in seen_ips and not is_alive:
+            print("♻️ Пропуск: IP уже встречался и сейчас недоступен")
+            continue
+
+        if is_alive and resolved_ip:
+            seen_ips.add(resolved_ip)
 
         # --- ЭТАП 2: ЕСЛИ СЕРВЕР РАБОТАЕТ ---
         if is_alive:
@@ -498,11 +580,10 @@ def main():
                 sep = "&" if "?" in sub_link else "?"
                 sub_link += f"{sep}sni={host}"
             
-            # final_link = rebuild_link_name(sub_link, f"wifi {counter}")
-            final_link = link.strip()
+            final_link = rebuild_link_name(sub_link, f"mob {counter}")
             working_for_sub.append(final_link)
             
-            print(f"✅ ОК {len(working_for_sub)}/200 ({country}): {host} -> {resolved_ip} (mob {counter})")
+            print(f"✅ ОК {len(working_for_sub)}/200 ({country}): {host} -> {resolved_ip} [{success_hits}/{total_hits}] (mob {counter})")
             counter += 1
     
         # --- ЭТАП 3: ЕСЛИ СЕРВЕР НЕ ОТВЕЧАЕТ ---
@@ -534,10 +615,10 @@ def main():
                     new_history[base_part] = fail_time
                     
                     # Добавляем в подписку с меткой ожидания
-                    temp_link = rebuild_link_name(link, f"⏳ wifi {counter}")
+                    temp_link = rebuild_link_name(link, f"⏳ mob {counter}")
                     working_for_sub.append(temp_link)
                     
-                    print(f"⏳ DOWN ({country}): {host} (оставлен шанс, wifi {counter})")
+                    print(f"⏳ DOWN ({country}): {host} (оставлен шанс, mob {counter})")
                     counter += 1
             else:
                 print(f"🗑️ Удален (тайм-аут): {host}")
