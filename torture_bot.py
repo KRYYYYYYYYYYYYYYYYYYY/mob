@@ -128,10 +128,10 @@ def refresh_all_panels(token, repo, ranking_db, vetted_list, pinned_list):
     body_pin = f"### 💎 Кандидаты в Элиту\n🕒 `{update_time}`\n\n"
     body_pin += "- [ ] ✅ **ПРИМЕНИТЬ_PIN_BAN**\n\n---\n\n"
     for full_link in vetted_list:
-        base = full_link.split('#')[0].strip()
+        # УБИРАЕМ split('#')[0]. Нам нужна ПОЛНАЯ ссылка в чекбоксе.
         body_pin += f"📡 {full_link}\n"
-        body_pin += f"- [ ] PIN: {base}\n"  # Четкая метка действия
-        body_pin += f"- [ ] BAN: {base}\n"  # Четкая метка действия
+        body_pin += f"- [ ] PIN: {full_link.strip()}\n" 
+        body_pin += f"- [ ] BAN: {full_link.strip()}\n"
         body_pin += "\n---\n"
     update_issue(repo, 'pin_control', body_pin, env_gh)
 
@@ -196,11 +196,9 @@ def process_all_controls(token, repo, vetted_list, pinned_list, ranking_db):
     executed_any = False
     env_gh = {**os.environ, "GH_TOKEN": token}
 
-    # Самая простая и надежная регулярка: ищем [x], пробелы и сразу vless
-    # [^ \s]+ берет всё до первого пробела или конца строки
+    # ИСПРАВЛЕНО: теперь берем всё до конца строки [^\n\r], а не до пробела
     def find_checked_vless(text):
-        found = re.findall(r'\[[xX]\]\s+(vless://[^\s`\'"]+)', text)
-        # Очищаем от двоеточий в конце (которые часто вешает GitHub)
+        found = re.findall(r'\[[xX]\]\s+(vless://[^\n\r`\'"]+)', text)
         return [l.strip().rstrip(':') for l in found]
 
     try:
@@ -224,11 +222,8 @@ def process_all_controls(token, repo, vetted_list, pinned_list, ranking_db):
         if data:
             body = data[0]['body']
             if "ПРИМЕНИТЬ_PIN_BAN" in body and "[x]" in body:
-                # Здесь используем специфичный поиск для PIN_ и BAN_
-                # Ищем только те, где стоит PIN:
+                # ИСПРАВЛЕНО: Забираем всю строку целиком до конца
                 to_pin = re.findall(r'\[[xX]\]\s+PIN:\s+(vless://[^\n\r`\'"]+)', body)
-                
-                # Ищем только те, где стоит BAN:
                 to_ban = re.findall(r'\[[xX]\]\s+BAN:\s+(vless://[^\n\r`\'"]+)', body)
                 
                 for s in to_pin:
@@ -238,12 +233,16 @@ def process_all_controls(token, repo, vetted_list, pinned_list, ranking_db):
                         with open(PINNED_FILE, 'a', encoding='utf-8') as pf:
                             pf.write(base_full + "\n")
                         pinned_list.append(base_full)
+                    # Чистим из элиты после пина
+                    vetted_list = [v for v in vetted_list if v.split('#')[0].strip() != base]
                     executed_any = True
 
                 for s in to_ban:
-                    base = s.strip().rstrip(':').split('#')[0].strip()
+                    base_full = s.strip().rstrip(':')
+                    base = base_full.split('#')[0].strip()
                     add_to_blacklist(base)
                     remove_from_all(base)
+                    vetted_list = [v for v in vetted_list if v.split('#')[0].strip() != base]
                     executed_any = True
 
         # --- 3. РАЗЗАКРЕПЛЕНИЕ (Label: unpin_control) ---
