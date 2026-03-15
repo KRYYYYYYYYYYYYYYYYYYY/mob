@@ -425,15 +425,23 @@ def main_torturer():
 
     working_for_base = list(ranking_db.keys())
 
-    # --- ШАГ 2: РЕАЛЬНОЕ ВЫПОЛНЕНИЕ КОМАНД ---
-    # Если команды были (executed=True), эта функция реально изменит списки в памяти
+    # --- ШАГ 2: ВЫПОЛНЕНИЕ КОМАНД ---
     vetted_list, pinned_list, executed = process_all_controls(
         token, repo, vetted_list, pinned_list, ranking_db
     )
 
-    # --- ШАГ 3: СОХРАНЕНИЕ И ОБНОВЛЕНИЕ ПАНЕЛЕЙ ---
-    # Если были команды — сохраняем файлы. 
-    # Обновляем GitHub-панели В ЛЮБОМ СЛУЧАЕ (чтобы сбросить галочки или обновить список)
+    is_scheduled = os.getenv("GITHUB_EVENT_NAME") == "schedule"
+    is_manual = os.getenv("GITHUB_EVENT_NAME") == "workflow_dispatch"
+
+    # --- ПРЕДОХРАНИТЕЛЬ ---
+    # Если это клик по Issue (событие edited), но кнопка "Подтвердить" НЕ нажата:
+    if not executed and not is_scheduled and not is_manual:
+        print("☕ Кнопка подтверждения не нажата. Бот уходит тихо, не трогая GitHub.")
+        # МЫ НЕ ВЫЗЫВАЕМ refresh_all_panels здесь!
+        # Твои галочки остаются висеть в GitHub, бот их не затирает.
+        return 
+
+    # Если мы здесь, значит либо нажата кнопка, либо это запуск по расписанию
     if executed:
         print("🧹 Команды выполнены, фиксирую изменения в файлы...")
         with open(VETTED_FILE, 'w', encoding='utf-8') as vf:
@@ -441,13 +449,9 @@ def main_torturer():
         with open(RANK_FILE, 'w', encoding='utf-8') as f:
             json.dump(ranking_db, f, ensure_ascii=False, indent=4)
 
-    # ОБНОВЛЯЕМ ПАНЕЛИ В ЛЮБОМ СЛУЧАЕ
-    # Теперь даже при ручном запуске без команд ты увидишь актуальный wifi.txt в Blacklist
-    print("📝 Синхронизация панелей с текущим состоянием файлов...")
+    # Обновляем панели ТОЛЬКО если что-то реально произошло
+    print("📝 Обновляю панели в GitHub...")
     refresh_all_panels(token, repo, ranking_db, vetted_list, pinned_list)
-
-    # --- ШАГ 3: УСЛОВНЫЙ ВЫХОД ИЗ ПЫТОК ---
-    is_scheduled = os.getenv("GITHUB_EVENT_NAME") == "schedule"
     
     # Если это не расписание и команд не было — на пытки не идем, но панели уже обновлены!
     if not executed and not is_scheduled:
