@@ -53,6 +53,28 @@ def get_wifi_candidates(pinned_list):
                 
     return candidates
 
+def commit_and_push():
+    """Отправляет все измененные файлы обратно в репозиторий."""
+    try:
+        # Настройка пользователя (нужна для коммита)
+        subprocess.run(['git', 'config', 'user.name', 'github-actions[bot]'], check=True)
+        subprocess.run(['git', 'config', 'user.email', 'github-actions[bot]@users.noreply.github.com'], check=True)
+        
+        # Добавляем все измененные файлы
+        subprocess.run(['git', 'add', WIFI_FILE, BLACKLIST_FILE, VETTED_FILE, RANK_FILE, PINNED_FILE], check=True)
+        
+        # Проверяем, есть ли что коммитить
+        status = subprocess.run(['git', 'diff', '--cached', '--quiet'])
+        if status.returncode != 0:
+            subprocess.run(['git', 'commit', '-m', '🤖 Автоматическое обновление списков и бан-листа'], check=True)
+            subprocess.run(['git', 'push'], check=True)
+            print("✅ Все изменения успешно запушены в репозиторий!")
+        else:
+            print("yml Новых изменений для коммита не найдено.")
+            
+    except Exception as e:
+        print(f"⚠️ Ошибка при выполнении Git Push: {e}")
+
 def add_to_blacklist(base_part):
     """Добавляет сервер в бан-лист, игнорируя дубликаты"""
     existing = set()
@@ -563,6 +585,7 @@ def main_torturer():
     # ФИНАЛЬНЫЙ СИНХРОН С GITHUB
     print("🔄 Финальное обновление панелей после инспекции...")
     refresh_all_panels(token, repo, list(ranking_db.keys()), vetted_list, pinned_list)
+    commit_and_push()
     
 if __name__ == "__main__":
     main_torturer()
