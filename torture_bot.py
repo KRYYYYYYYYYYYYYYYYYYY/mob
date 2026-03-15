@@ -126,36 +126,65 @@ def refresh_all_panels(token, repo, working_for_base, vetted_list, pinned_list):
 
     # 1. ПАНЕЛЬ ЧЕРНОГО СПИСКА
     body_ctrl = f"### 🎮 Панель Blacklist\n🕒 `{update_time}`\n\n"
-    body_ctrl += "- [ ] 💀 **ПОДТВЕРДИТЬ_БАН** (Нажми для запуска)\n\n---\n"
-    for link in working_for_base[:50]: # Лимит 50 для красоты
-        body_ctrl += f"- [ ] '{link}'\n"
+    # Важно: пустая строка перед списком и строгий формат - [ ]
+    body_ctrl += "- [ ] 💀 **ПОДТВЕРДИТЬ_БАН** (Нажми Edit и поставь X, либо просто нажми на чекбокс)\n\n---\n"
+    
+    if not working_for_base:
+        body_ctrl += "_Список пуст_\n"
+    else:
+        for link in working_for_base[:50]:
+            body_ctrl += f"- [ ] '{link}'\n"
+    
     update_issue(repo, 'control', body_ctrl, env_gh)
 
     # 2. ПАНЕЛЬ КАНДИДАТОВ
     body_pin = f"### 💎 Кандидаты в Элиту\n🕒 `{update_time}`\n\n"
-    body_pin += "- [ ] ✅ **ПРИМЕНИТЬ_PIN_BAN** (Нажми для запуска)\n\n---\n"
+    body_pin += "- [ ] ✅ **ПРИМЕНИТЬ_PIN_BAN**\n\n---\n"
+    
     vetted_clean = [v.split('#')[0].strip() for v in vetted_list]
-    for link in vetted_clean:
-        body_pin += f"📡 Элита:\n- [ ] PIN_{link}\n- [ ] BAN_{link}\n\n---\n"
+    if not vetted_clean:
+        body_pin += "_Пока кандидатов нет..._\n"
+    else:
+        for link in vetted_clean:
+            body_pin += f"📡 Элита:\n- [ ] PIN_{link}\n- [ ] BAN_{link}\n\n---\n"
+    
     update_issue(repo, 'pin_control', body_pin, env_gh)
 
     # 3. ПАНЕЛЬ ЗАКРЕПОВ
     body_unp = f"### 👑 Управление Закрепами\n🕒 `{update_time}`\n\n"
-    body_unp += "- [ ] 🔓 **ПОДТВЕРДИТЬ_РАСПИН** (Нажми для запуска)\n\n---\n"
-    for link in pinned_list:
-        body_unp += f"- [ ] '{link}'\n"
+    body_unp += "- [ ] 🔓 **ПОДТВЕРДИТЬ_РАСПИН**\n\n---\n"
+    
+    if not pinned_list:
+        body_unp += "_Закрепленных серверов нет_\n"
+    else:
+        for link in pinned_list:
+            body_unp += f"- [ ] '{link}'\n"
+            
     update_issue(repo, 'unpin_control', body_unp, env_gh)
 
 def update_issue(repo, label, body, env):
-    # Вспомогательная функция, чтобы не дублировать код gh issue edit
     try:
+        # Ищем номер issue
         cmd = ['gh', 'issue', 'list', '--repo', repo, '--label', label, '--json', 'number']
-        data = json.loads(subprocess.check_output(cmd, env=env))
+        result = subprocess.check_output(cmd, env=env)
+        data = json.loads(result)
+        
         if data:
             num = str(data[0]['number'])
-            with open("tmp_body.txt", "w", encoding="utf-8") as f: f.write(body)
-            subprocess.run(['gh', 'issue', 'edit', num, '--repo', repo, '--body-file', 'tmp_body.txt'], env=env)
-    except: pass
+            # Записываем тело во временный файл
+            with open("tmp_body.txt", "w", encoding="utf-8") as f: 
+                f.write(body)
+            
+            # Редактируем
+            edit_cmd = ['gh', 'issue', 'edit', num, '--repo', repo, '--body-file', 'tmp_body.txt']
+            subprocess.run(edit_cmd, env=env, check=True)
+            print(f"✅ Панель '{label}' успешно обновлена (Issue #{num})")
+        else:
+            # ВОТ ЗДЕСЬ может быть причина: метка есть в коде, но нет в GitHub
+            print(f"⚠️ Панель '{label}' НЕ НАЙДЕНА в репозитории. Проверь метки (Labels) в GitHub!")
+            
+    except Exception as e:
+        print(f"❌ Ошибка при обновлении панели '{label}': {e}")
 
 # --- ХИРУРГИЧЕСКОЕ УДАЛЕНИЕ ---
 def remove_from_all(base_part):
