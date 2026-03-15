@@ -106,14 +106,14 @@ def refresh_all_panels(token, repo, ranking_db, vetted_list, pinned_list):
     update_time = time.strftime("%d.%m.%Y %H:%M:%S")
     env_gh = {**os.environ, "GH_TOKEN": token}
     
-    # --- 1. ПАНЕЛЬ ЧЕРНОГО СПИСКА (issue_body.txt) ---
+    # --- 1. ПАНЕЛЬ ЧЕРНОГО СПИСКА ---
     body_ctrl = f"### 🎮 Панель Blacklist (Весь wifi.txt)\n🕒 `{update_time}`\n\n"
     body_ctrl += "- [ ] 💀 **ПОДТВЕРДИТЬ_БАН**\n\n---\n\n"
-    
-    wifi_to_ban = get_wifi_candidates(pinned_list) # Получаем ВСЁ из wifi.txt
+    wifi_to_ban = get_wifi_candidates(pinned_list)
     if wifi_to_ban:
         for full_link in wifi_to_ban:
-            body_ctrl += f"- [ ] '{full_link}'\n"
+            # УБРАЛИ КАВЫЧКИ
+            body_ctrl += f"- [ ] {full_link.strip()}\n"
     else:
         body_ctrl += "_Список пуст_\n"
 
@@ -136,7 +136,8 @@ def refresh_all_panels(token, repo, ranking_db, vetted_list, pinned_list):
     body_unp = f"### 👑 Управление Закрепами\n🕒 `{update_time}`\n\n"
     body_unp += "- [ ] 🔓 **ПОДТВЕРДИТЬ_РАСПИН**\n\n---\n\n"
     for full_link in pinned_list:
-        body_unp += f"- [ ] '{full_link}'\n"
+        # УБРАЛИ КАВЫЧКИ
+        body_unp += f"- [ ] {full_link.strip()}\n"
     update_issue(repo, 'unpin_control', body_unp, env_gh)
 
 # --- ХИРУРГИЧЕСКОЕ УДАЛЕНИЕ ---
@@ -192,72 +193,69 @@ def process_all_controls(token, repo, vetted_list, pinned_list, ranking_db):
     executed_any = False
     env_gh = {**os.environ, "GH_TOKEN": token}
 
-    def get_checked_links(body):
-        # Ищем строку с [x], за которой где-то дальше идет vless. 
-        # Очищаем ссылку от кавычек и лишних символов в конце.
-        found = re.findall(r'\[[xX]\]\s*.*?\'?(vless://[^\s\'"`#]+)', body)
+    # Самая простая и надежная регулярка: ищем [x], пробелы и сразу vless
+    # [^ \s]+ берет всё до первого пробела или конца строки
+    def find_checked_vless(text):
+        found = re.findall(r'\[[xX]\]\s+(vless://[^\s`\'"]+)', text)
+        # Очищаем от двоеточий в конце (которые часто вешает GitHub)
         return [l.strip().rstrip(':') for l in found]
 
-    # Читаем данные из GitHub один раз
     try:
-        # Собираем все 3 типа панелей (они могут быть в разных issue или в одном с разными лейблами)
-        # Для примера берем логику, что мы проверяем каждую панель по её лейблу
-        
-        # --- 1. ПАНЕЛЬ ЧЕРНОГО СПИСКА ---
-        cmd = ['gh', 'issue', 'list', '--repo', repo, '--label', 'control', '--json', 'body', '--limit', '1']
-        gh_data = json.loads(subprocess.check_output(cmd, env=env_gh))
-        if gh_data:
-            body = gh_data[0]['body']
-            # Ищем кнопку БАН более гибко (регистронезависимо и с любыми пробелами)
-            if re.search(r'\[[xX]\]\s*.*?(?:ПОДТВЕРДИТЬ_БАН|💀)', body, re.IGNORECASE):
-                links = get_checked_links(body)
-                for base in links:
-                    if "ПОДТВЕРДИТЬ_БАН" in base: continue
+        # --- 1. ПАНЕЛЬ ЧЕРНОГО СПИСКА (Label: control) ---
+        out = subprocess.check_output(['gh', 'issue', 'list', '--repo', repo, '--label', 'control', '--json', 'body'], env=env_gh)
+        data = json.loads(out)
+        if data:
+            body = data[0]['body']
+            if "ПОДТВЕРДИТЬ_БАН" in body and "[x]" in body:
+                links = find_checked_vless(body)
+                for base_full in links:
+                    base = base_full.split('#')[0].strip()
                     add_to_blacklist(base)
                     remove_from_all(base)
                     if base in ranking_db: del ranking_db[base]
                     executed_any = True
 
-        # --- 2. PIN/BAN КАНДИДАТОВ ---
-        cmd = ['gh', 'issue', 'list', '--repo', repo, '--label', 'pin_control', '--json', 'body', '--limit', '1']
-        data = json.loads(subprocess.check_output(cmd, env=env_gh))
+        # --- 2. PIN/BAN КАНДИДАТОВ (Label: pin_control) ---
+        out = subprocess.check_output(['gh', 'issue', 'list', '--repo', repo, '--label', 'pin_control', '--json', 'body'], env=env_gh)
+        data = json.loads(out)
         if data:
             body = data[0]['body']
-            if re.search(r'\[[xX]\]\s*.*?(?:ПРИМЕНИТЬ_PIN_BAN|✅)', body, re.IGNORECASE):
-                # Ищем [x] PIN_vless... или [x] BAN_vless...
-                to_pin = re.findall(r'\[[xX]\]\s*PIN_(vless://[^\s#\'"`]+)', body, re.IGNORECASE)
-                to_ban = re.findall(r'\[[xX]\]\s*BAN_(vless://[^\s#\'"`]+)', body, re.IGNORECASE)
+            if "ПРИМЕНИТЬ_PIN_BAN" in body and "[x]" in body:
+                # Здесь используем специфичный поиск для PIN_ и BAN_
+                to_pin = re.findall(r'\[[xX]\]\s+PIN_(vless://[^\s`\'"]+)', body)
+                to_ban = re.findall(r'\[[xX]\]\s+BAN_(vless://[^\s`\'"]+)', body)
                 
                 for s in to_pin:
-                    base = s.strip().rstrip(':')
+                    base_full = s.strip().rstrip(':')
+                    base = base_full.split('#')[0].strip()
                     if all(base != p.split("#")[0].strip() for p in pinned_list):
                         with open(PINNED_FILE, 'a', encoding='utf-8') as pf:
-                            pf.write(base + "\n")
-                        pinned_list.append(base)
+                            pf.write(base_full + "\n")
+                        pinned_list.append(base_full)
                     executed_any = True
 
                 for s in to_ban:
-                    base = s.strip().rstrip(':')
+                    base = s.strip().rstrip(':').split('#')[0].strip()
                     add_to_blacklist(base)
                     remove_from_all(base)
                     executed_any = True
 
-        # --- 3. РАЗЗАКРЕПЛЕНИЕ ---
-        cmd = ['gh', 'issue', 'list', '--repo', repo, '--label', 'unpin_control', '--json', 'body', '--limit', '1']
-        data = json.loads(subprocess.check_output(cmd, env=env_gh))
+        # --- 3. РАЗЗАКРЕПЛЕНИЕ (Label: unpin_control) ---
+        out = subprocess.check_output(['gh', 'issue', 'list', '--repo', repo, '--label', 'unpin_control', '--json', 'body'], env=env_gh)
+        data = json.loads(out)
         if data:
             body = data[0]['body']
-            if re.search(r'\[[xX]\]\s*.*?(?:ПОДТВЕРДИТЬ_РАСПИН|🔓)', body, re.IGNORECASE):
-                links = get_checked_links(body)
-                unp_bases = {l.strip().rstrip(':') for l in links if "ПОДТВЕРДИТЬ_РАСПИН" not in l}
-                if unp_bases:
-                    pinned_list = [s for s in pinned_list if s.split("#")[0].strip() not in unp_bases]
+            if "ПОДТВЕРДИТЬ_РАСПИН" in body and "[x]" in body:
+                links = find_checked_vless(body)
+                if links:
+                    to_unpin_bases = {l.split('#')[0].strip() for l in links}
+                    pinned_list = [s for s in pinned_list if s.split("#")[0].strip() not in to_unpin_bases]
                     with open(PINNED_FILE, 'w', encoding='utf-8') as pf:
                         pf.write("\n".join(pinned_list) + ("\n" if pinned_list else ""))
                     executed_any = True
 
     except Exception as e:
-        print(f"⚠️ Ошибка при обработке команд: {e}")
+        print(f"⚠️ Ошибка обработки команд: {e}")
 
     return vetted_list, pinned_list, executed_any
 
