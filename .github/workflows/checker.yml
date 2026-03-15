@@ -7,6 +7,11 @@ concurrency:
   cancel-in-progress: true 
 
 on:
+  push:
+    paths:
+      - 'kr/mob/wifi.txt'
+      - 'test1/vetted.txt'
+      - 'test1/pinned.txt'
   workflow_dispatch:          # Запуск вручную
   schedule:
     - cron: '0 * * * *'       # Запуск раз в час
@@ -17,6 +22,7 @@ jobs:
   check:
     runs-on: ubuntu-latest
     if: |
+      github.event_name == 'push' ||
       github.event_name == 'schedule' || 
       github.event_name == 'workflow_dispatch' ||
       (
