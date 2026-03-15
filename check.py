@@ -300,60 +300,6 @@ def main():
             unique_links.append(link)
             seen_bases.add(base)
 
-    # --- БЛОК ЧТЕНИЯ КОМАНД ИЗ GITHUB (В начале main) ---
-    if token and repo:
-        # 1. ЧЕРНЫЙ СПИСОК (CONTROL)
-        try:
-            print("🔍 Проверка черного списка в GitHub...")
-            cmd_control = ['gh', 'issue', 'list', '--repo', repo, '--label', 'control', '--json', 'body', '--limit', '1']
-            out = safe_gh_call(cmd_control, token)
-            data = json.loads(out)
-            if data:
-                checked = re.findall(r'- \[x\] (vless://[^\s]+)', data[0]['body'])
-                if checked:
-                    for s in checked:
-                        blacklist.add(s.split('#')[0].strip())
-                    with open('test1/blacklist.txt', 'w') as f:
-                        f.write("\n".join(list(blacklist)))
-                    print(f"🚫 Обновлено: {len(checked)} серверов в блэклисте.")
-        except Exception as e:
-            print(f"⚠️ Ошибка Blacklist: {e}")
-
-        # 2. НОВЫЕ ЗАКРЕПЫ (PIN_CONTROL)
-        try:
-            print("🔍 Проверка новых закрепов...")
-            cmd_pin = ['gh', 'issue', 'list', '--repo', repo, '--label', 'pin_control', '--json', 'body', '--limit', '1']
-            out = safe_gh_call(cmd_pin, token)
-            data = json.loads(out)
-            if data:
-                to_pin = re.findall(r'- \[x\] (vless://[^\s#\s]+)', data[0]['body'])
-                if to_pin:
-                    with open('test1/pinned.txt', 'a', encoding='utf-8') as pf:
-                        for s in to_pin:
-                            base = s.split("#")[0].strip()
-                            if all(base != p.split("#")[0].strip() for p in pinned_list):
-                                pf.write(s.strip() + "\n")
-                                pinned_list.append(s.strip())
-                    print(f"💎 Добавлено {len(to_pin)} новых закрепов.")
-        except Exception as e:
-            print(f"⚠️ Ошибка Pin: {e}")
-
-        # 3. РАЗЗАКРЕПЛЕНИЕ (UNPIN_CONTROL)
-        try:
-            print("🔍 Проверка раззакрепления...")
-            cmd_unpin = ['gh', 'issue', 'list', '--repo', repo, '--label', 'unpin_control', '--json', 'body', '--limit', '1']
-            out = safe_gh_call(cmd_unpin, token)
-            data = json.loads(out)
-            if data:
-                to_unpin = re.findall(r'- \[x\] (vless://[^\s#\s]+)', data[0]['body'])
-                if to_unpin:
-                    to_unpin_bases = [u.split("#")[0].strip() for u in to_unpin]
-                    pinned_list = [s for s in pinned_list if s.split("#")[0].strip() not in to_unpin_bases]
-                    with open('test1/pinned.txt', 'w', encoding='utf-8') as pf:
-                        pf.write("\n".join(pinned_list) + ("\n" if pinned_list else ""))
-                    print(f"🔓 Убрано из закрепов: {len(to_unpin)}")
-        except Exception as e:
-            print(f"⚠️ Ошибка Unpin: {e}")
 
     # --- ПЕРЕЗАГРУЗКА ИСТОРИИ ПЕРЕД ПРОВЕРКОЙ ---
     history = {}
@@ -556,7 +502,7 @@ def main():
             final_link = link.strip()
             working_for_sub.append(final_link)
             
-            print(f"✅ ОК {len(working_for_sub)}/200 ({country}): {host} -> {resolved_ip} (wifi {counter})")
+            print(f"✅ ОК {len(working_for_sub)}/200 ({country}): {host} -> {resolved_ip} (mob {counter})")
             counter += 1
     
         # --- ЭТАП 3: ЕСЛИ СЕРВЕР НЕ ОТВЕЧАЕТ ---
@@ -680,73 +626,12 @@ def main():
 
     os.makedirs(os.path.dirname(OUTPUT_FILE), exist_ok=True)
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
-        # ЗАМЕНИ ТУТ working_for_sub на final_to_sub
         f.write(HEADER + "\n".join(final_to_sub))
 
     with open(CACHE_FILE, 'w') as f:
         json.dump(countries_cache, f)
 
     print(f"🏁 Готово! Подписка обновлена.")
-    # --- ОБНОВЛЕНИЕ ИНТЕРФЕЙСА С ГАЛОЧКАМИ ---
- # --- ОБНОВЛЕНИЕ ИНТЕРФЕЙСА С ГАЛОЧКАМИ ---
-    if token and repo:
-        try:
-            update_time = time.strftime("%d.%m.%Y %H:%M:%S")
-            env_gh = {**os.environ, "GH_TOKEN": token}
-
-            # --- ПАНЕЛЬ 1: ЧЕРНЫЙ СПИСОК (CONTROL) ---
-            find_cmd = ['gh', 'issue', 'list', '--repo', repo, '--label', 'control', '--json', 'number', '--limit', '1']
-            out = subprocess.check_output(find_cmd, env=env_gh).decode()
-            data = json.loads(out)
-            
-            if data:  # Проверка: если список не пуст
-                issue_number = str(data[0]['number'])
-                issue_body = f"### 🎮 Панель управления серверами\n🕒 Последнее обновление: `{update_time}`\n\n"
-                issue_body += "Отметь [x] и сохрани, чтобы отправить в черный список:\n\n---\n\n"
-                
-                for i, link in enumerate(working_for_base, 1):
-                    status = "[x]" if link in blacklist else "[ ]"
-                    issue_body += f"- {status} {link} (wifi {i})\n\n---\n\n"
-                
-                with open("issue_body.txt", "w", encoding="utf-8") as f: f.write(issue_body)
-                subprocess.run(['gh', 'issue', 'edit', issue_number, '--repo', repo, '--body-file', 'issue_body.txt'], env=env_gh)
-                print(f"📝 Панель Control #{issue_number} обновлена.")
-            else:
-                print("⚠️ Issue с меткой 'control' не найдено.")
-
-            # --- ПАНЕЛЬ 2: КАНДИДАТЫ В ЗАКРЕП (PIN) ---
-            pin_cmd = ['gh', 'issue', 'list', '--repo', repo, '--label', 'pin_control', '--json', 'number', '--limit', '1']
-            out_pin = subprocess.check_output(pin_cmd, env=env_gh).decode()
-            data_pin = json.loads(out_pin)
-            
-            if data_pin:
-                num_pin = str(data_pin[0]['number'])
-                body_pin = f"### 💎 Кандидаты в закреп\n🕒 Обновлено: `{update_time}`\n\n"
-                for i, link in enumerate(vetted_list, 1):
-                    if link not in pinned_list:
-                        body_pin += f"- [ ] {link} (wifi {i})\n\n---\n\n"
-                
-                with open("pin_body.txt", "w", encoding="utf-8") as f: f.write(body_pin)
-                subprocess.run(['gh', 'issue', 'edit', num_pin, '--repo', repo, '--body-file', 'pin_body.txt'], env=env_gh)
-                print(f"💎 Панель Pin #{num_pin} обновлена.")
-
-            # --- ПАНЕЛЬ 3: УПРАВЛЕНИЕ ЗАКРЕПАМИ (UNPIN) ---
-            unpin_cmd = ['gh', 'issue', 'list', '--repo', repo, '--label', 'unpin_control', '--json', 'number', '--limit', '1']
-            out_unp = subprocess.check_output(unpin_cmd, env=env_gh).decode()
-            data_unp = json.loads(out_unp)
-            
-            if data_unp:
-                num_unp = str(data_unp[0]['number'])
-                body_unp = f"### 👑 Ваши закрепленные сервера\n🕒 Обновлено: `{update_time}`\n\n"
-                for i, link in enumerate(pinned_list, 1):
-                    body_unp += f"- [ ] {link} (FIXED {i})\n\n---\n\n"
-                
-                with open("unpin_body.txt", "w", encoding="utf-8") as f: f.write(body_unp)
-                subprocess.run(['gh', 'issue', 'edit', num_unp, '--repo', repo, '--body-file', 'unpin_body.txt'], env=env_gh)
-                print(f"🔓 Панель Unpin #{num_unp} обновлена.")
-
-        except Exception as e:
-            print(f"⚠️ Ошибка при обновлении панелей GitHub: {e}")
 
 if __name__ == "__main__":
     main()
