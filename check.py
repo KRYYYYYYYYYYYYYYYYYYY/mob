@@ -91,6 +91,28 @@ def download_raw_data(urls):
             
     return all_links
 
+def rebuild_link_name(link: str, new_name: str) -> str:
+    base, _, fragment = link.partition("#")
+
+    # Если это уже закреп — не трогаем
+    if fragment:
+        frag = urllib.parse.unquote(fragment).upper()
+        if "PINNED" in frag:
+            return link
+
+    if not fragment:
+        return f"{base}#{urllib.parse.quote(new_name)}"
+
+    fragment_dec = urllib.parse.unquote(fragment)
+
+    # Пытаемся сохранить флаг/эмодзи
+    match = re.match(r"^([^\w\s\d]|[^\x00-\x7F])+", fragment_dec)
+    if match:
+        prefix = match.group(0).strip()
+        return f"{base}#{urllib.parse.quote(prefix + ' ' + new_name)}"
+
+    return f"{base}#{urllib.parse.quote(new_name)}"
+
 def remove_from_all(base_part: str):
     """Удаляет сервер по base_part из основных рабочих файлов."""
     for path in [INPUT_FILE, OUTPUT_FILE, VETTED_FILE, PINNED_FILE]:
