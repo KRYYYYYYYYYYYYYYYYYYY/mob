@@ -157,8 +157,7 @@ def process_pin_commands(token, repo, vetted_list, ranking_db):
 
         # --- КРИТИЧЕСКАЯ ЗАЩИТА ---
         # Проверяем ТОЛЬКО наличие [x] в мастер-галочке
-        if not re.search(r'\[[xX]\]\s*✅\s*ПРИМЕНИТЬ', body):
-            # Если мастер-галочка не нажата, выходим мгновенно
+        if not re.search(r'\[[xX]\].*ПРИМЕНИТЬ', body, re.IGNORECASE | re.DOTALL):
             return vetted_list, False
         # -------------------
         
@@ -336,6 +335,20 @@ def is_ipv6(host):
     return ":" in host if host else False
 
 def main_torturer():
+    token = os.getenv("GH_TOKEN")
+    repo = os.getenv("GITHUB_REPOSITORY")
+
+    # --- ШАГ 1: ПРОВЕРКА МАСТЕР-КНОПКИ (БЫСТРАЯ) ---
+    # Вызываем функцию с пустыми списками только ради проверки галочки
+    _, executed = process_pin_commands(token, repo, [], {})
+    
+    if not executed:
+        print("📴 Мастер-кнопка не нажата. Завершаю работу мгновенно.")
+        return # Скрипт тут же прекращает выполнение
+
+    # --- ШАГ 2: ЕСЛИ НАЖАТА — ПРОВЕРКА ПРОЦЕССОВ И ЗАГРУЗКА ---
+    print("🚀 Кнопка нажата! Начинаю обработку...")
+    
     # Проверка на дубликаты процесса
     for proc in psutil.process_iter(['pid', 'cmdline']):
         try:
@@ -346,37 +359,27 @@ def main_torturer():
             continue
 
     stress_config = load_stress_config()
-    token = os.getenv("GH_TOKEN")
-    repo = os.getenv("GITHUB_REPOSITORY")
-
-    # Загрузка базы
+    # Загружаем РЕАЛЬНУЮ базу
     ranking_db = {}
     if os.path.exists(RANK_FILE):
         with open(RANK_FILE, 'r', encoding='utf-8') as f:
             ranking_db = json.load(f)
 
-# GitHub Контроль
     vetted_list = []
     if os.path.exists(VETTED_FILE):
         with open(VETTED_FILE, 'r', encoding='utf-8') as f:
             vetted_list = [l.strip() for l in f if 'vless' in l]
-
-    # ВЫЗЫВАЕМ ТУТ И ПЕРЕДАЕМ СПИСОК, А НЕ ПУСТЫЕ СКОБКИ []
+    # --- ШАГ 3: ПОВТОРНЫЙ ВЫЗОВ (РЕАЛЬНОЕ ВЫПОЛНЕНИЕ) ---
+    # Теперь передаем настоящие списки для обработки PIN/BAN
     vetted_list, executed = process_pin_commands(token, repo, vetted_list, ranking_db)
 
     if executed:
         print("🧹 Команды выполнены, очищаю панель и сохраняю файлы...")
-        # Обновляем панель (рисуем пустые галочки)
         refresh_control_panel(token, repo)
         
-        # Сохраняем обновленный vetted.txt (после удаления из него PIN/BAN серверов)
         with open(VETTED_FILE, 'w', encoding='utf-8') as vf:
-            if vetted_list:
-                vf.write("\n".join(vetted_list) + "\n")
-            else:
-                vf.write("")
+            vf.write("\n".join(vetted_list) + ("\n" if vetted_list else ""))
         
-        # Сохраняем обновленную базу (без удаленных серверов)
         with open(RANK_FILE, 'w', encoding='utf-8') as f:
             json.dump(ranking_db, f, ensure_ascii=False, indent=4)
     else:
