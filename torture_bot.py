@@ -517,7 +517,7 @@ def main_torturer():
 
         with ThreadPoolExecutor(max_workers=5) as executor:
             # Передавай конфиг явно в каждый поток
-            results = list(executor.map(lambda x: run_torture(x, stress_config), candidates))
+            results = list(executor.map(run_torture, candidates))
 
         for base, full_link, success, status, success_hits, total_hits in results:
             if success:
