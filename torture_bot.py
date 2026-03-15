@@ -44,51 +44,118 @@ def add_to_blacklist(base_part):
             f.write(base_part + "\n")
         print(f"💀 [BLACKLIST] Забанен: {base_part[:30]}...")
 
-def refresh_control_panel(token, repo):
-    if not token or not repo:
-        return
-    
+def process_all_controls(token, repo, vetted_list, pinned_list, ranking_db):
+    executed_any = False
+    env_gh = {**os.environ, "GH_TOKEN": token}
+
+    # --- 1. ЧЕРНЫЙ СПИСОК (LABEL: control) 💀 ---
     try:
-        # 1. Считываем свежий список проверенных
-        vetted_links = []
-        if os.path.exists(VETTED_FILE):
-            with open(VETTED_FILE, 'r', encoding='utf-8') as f:
-                vetted_links = [l.split('#')[0].strip() for l in f if 'vless://' in l]
+        cmd = ['gh', 'issue', 'list', '--repo', repo, '--label', 'control', '--json', 'body,number', '--limit', '1']
+        data = json.loads(subprocess.check_output(cmd, env=env_gh))
+        if data:
+            body = data[0]['body']
+            # Уникальная мастер-галочка для этой панели
+            if re.search(r'\[[xX]\]\s*💀\s*ПОДТВЕРДИТЬ_БАН', body):
+                checked = re.findall(r'-\s*\[[xX]\]\s*\'(vless://[^\s\']+)\'', body)
+                if checked:
+                    for link in checked:
+                        base = link.split('#')[0].strip()
+                        add_to_blacklist(base)
+                        remove_from_all(base)
+                        if base in ranking_db: del ranking_db[base]
+                    print(f"💀 [CONTROL] Забанено {len(checked)} серверов")
+                    executed_any = True
+    except Exception as e: print(f"⚠️ Ошибка Control: {e}")
 
-        # 2. Формируем новое тело с ЗАЩИТОЙ
-        update_time = time.strftime('%d.%m.%Y %H:%M:%S')
-        new_body = f"### 💎 Кандидаты в закреп и бан\n🕒 Обновлено: `{update_time}`\n\n"
-        
-        # Добавляем мастер-галочку
-        new_body += "🚨 **ПОДТВЕРЖДЕНИЕ ДЕЙСТВИЙ:**\n"
-        new_body += "- [ ] ✅ **ПРИМЕНИТЬ ВЫБРАННЫЕ PIN/BAN**\n" 
-        new_body += "> _Нажмите все нужные PIN/BAN, а затем ЭТУ галочку для запуска_\n\n---\n\n"
-        
-        if not vetted_links:
-            new_body += "_Пока элитных кандидатов нет. Все обработаны или список пуст._"
-        else:
-            for i, link in enumerate(vetted_links, 1):
-                new_body += f"📡 **Элита {i}:**\n"
-                new_body += f"- [ ] PIN_{link}\n" # Рисуем пустым
-                new_body += f"- [ ] BAN_{link}\n\n---\n\n"
+    # --- 2. ПИН/БАН КАНДИДАТОВ (LABEL: pin_control) 💎 ---
+    try:
+        cmd = ['gh', 'issue', 'list', '--repo', repo, '--label', 'pin_control', '--json', 'body,number', '--limit', '1']
+        data = json.loads(subprocess.check_output(cmd, env=env_gh))
+        if data:
+            body = data[0]['body']
+            if re.search(r'\[[xX]\]\s*✅\s*ПРИМЕНИТЬ_PIN_BAN', body):
+                to_pin = re.findall(r'\[[xX]\]\s*PIN_(vless://[^\s#`]+)', body)
+                to_ban = re.findall(r'\[[xX]\]\s*BAN_(vless://[^\s#`]+)', body)
+                
+                affected = set()
+                if to_pin:
+                    with open(PINNED_FILE, 'a', encoding='utf-8') as pf:
+                        for s in to_pin:
+                            base = s.split("#")[0].strip()
+                            pf.write(base + "\n")
+                            affected.add(base)
+                if to_ban:
+                    for s in to_ban:
+                        base = s.split("#")[0].strip()
+                        add_to_blacklist(base)
+                        remove_from_all(base)
+                        affected.add(base)
+                
+                # Чистим списки
+                if affected:
+                    vetted_list = [v for v in vetted_list if v.split('#')[0].strip() not in affected]
+                    for b in affected: 
+                        if b in ranking_db: del ranking_db[b]
+                
+                print(f"💎 [PIN_CONTROL] Обработано: {len(to_pin)} PIN, {len(to_ban)} BAN")
+                executed_any = True
+    except Exception as e: print(f"⚠️ Ошибка Pin/Ban: {e}")
 
-        # 3. Обновление через GH CLI
-        cmd_find = ['gh', 'issue', 'list', '--repo', repo, '--label', 'pin_control', '--json', 'number', '--limit', '1']
-        issue_data = json.loads(subprocess.check_output(cmd_find, env={**os.environ, "GH_TOKEN": token}))
-        
-        if issue_data:
-            num = str(issue_data[0]['number'])
-            with open("new_panel.txt", "w", encoding="utf-8") as f:
-                f.write(new_body)
-            
-            subprocess.run(
-                ['gh', 'issue', 'edit', num, '--repo', repo, '--body-file', 'new_panel.txt'],
-                env={**os.environ, "GH_TOKEN": token},
-            )
-            print(f"♻️ Панель обновлена. Ожидание подтверждения (осталось: {len(vetted_links)})")
+    # --- 3. РАЗЗАКРЕПЛЕНИЕ (LABEL: unpin_control) 🔓 ---
+    try:
+        cmd = ['gh', 'issue', 'list', '--repo', repo, '--label', 'unpin_control', '--json', 'body,number', '--limit', '1']
+        data = json.loads(subprocess.check_output(cmd, env=env_gh))
+        if data:
+            body = data[0]['body']
+            if re.search(r'\[[xX]\]\s*🔓\s*ПОДТВЕРДИТЬ_РАСПИН', body):
+                to_unpin = re.findall(r'-\s*\[[xX]\]\s*\'(vless://[^\s\']+)\'', body)
+                if to_unpin:
+                    unpin_bases = [u.split("#")[0].strip() for u in to_unpin]
+                    pinned_list = [s for s in pinned_list if s.split("#")[0].strip() not in unpin_bases]
+                    with open(PINNED_FILE, 'w', encoding='utf-8') as pf:
+                        pf.write("\n".join(pinned_list) + ("\n" if pinned_list else ""))
+                    print(f"🔓 [UNPIN] Убрано {len(to_unpin)} серверов")
+                    executed_any = True
+    except Exception as e: print(f"⚠️ Ошибка Unpin: {e}")
 
-    except Exception as e:
-        print(f"⚠️ Ошибка обновления панели: {e}")
+    return vetted_list, pinned_list, executed_any
+
+def refresh_all_panels(token, repo, working_for_base, vetted_list, pinned_list):
+    update_time = time.strftime("%d.%m.%Y %H:%M:%S")
+    env_gh = {**os.environ, "GH_TOKEN": token}
+
+    # 1. ПАНЕЛЬ ЧЕРНОГО СПИСКА
+    body_ctrl = f"### 🎮 Панель Blacklist\n🕒 `{update_time}`\n\n"
+    body_ctrl += "- [ ] 💀 **ПОДТВЕРДИТЬ_БАН** (Нажми для запуска)\n\n---\n"
+    for link in working_for_base[:50]: # Лимит 50 для красоты
+        body_ctrl += f"- [ ] '{link}'\n"
+    update_issue(repo, 'control', body_ctrl, env_gh)
+
+    # 2. ПАНЕЛЬ КАНДИДАТОВ
+    body_pin = f"### 💎 Кандидаты в Элиту\n🕒 `{update_time}`\n\n"
+    body_pin += "- [ ] ✅ **ПРИМЕНИТЬ_PIN_BAN** (Нажми для запуска)\n\n---\n"
+    vetted_clean = [v.split('#')[0].strip() for v in vetted_list]
+    for link in vetted_clean:
+        body_pin += f"📡 Элита:\n- [ ] PIN_{link}\n- [ ] BAN_{link}\n\n---\n"
+    update_issue(repo, 'pin_control', body_pin, env_gh)
+
+    # 3. ПАНЕЛЬ ЗАКРЕПОВ
+    body_unp = f"### 👑 Управление Закрепами\n🕒 `{update_time}`\n\n"
+    body_unp += "- [ ] 🔓 **ПОДТВЕРДИТЬ_РАСПИН** (Нажми для запуска)\n\n---\n"
+    for link in pinned_list:
+        body_unp += f"- [ ] '{link}'\n"
+    update_issue(repo, 'unpin_control', body_unp, env_gh)
+
+def update_issue(repo, label, body, env):
+    # Вспомогательная функция, чтобы не дублировать код gh issue edit
+    try:
+        cmd = ['gh', 'issue', 'list', '--repo', repo, '--label', label, '--json', 'number']
+        data = json.loads(subprocess.check_output(cmd, env=env))
+        if data:
+            num = str(data[0]['number'])
+            with open("tmp_body.txt", "w", encoding="utf-8") as f: f.write(body)
+            subprocess.run(['gh', 'issue', 'edit', num, '--repo', repo, '--body-file', 'tmp_body.txt'], env=env)
+    except: pass
 
 # --- ХИРУРГИЧЕСКОЕ УДАЛЕНИЕ ---
 def remove_from_all(base_part):
@@ -139,88 +206,80 @@ def load_stress_config():
             pass
     return config
 
-def process_pin_commands(token, repo, vetted_list, ranking_db):
-    if not token or not repo:
-        return vetted_list, False # Добавляем флаг "было ли выполнение"
-    
+def process_all_controls(token, repo, vetted_list, pinned_list, ranking_db):
+    """Считывает команды из всех панелей и вносит правки в списки."""
+    executed_any = False
+    env_gh = {**os.environ, "GH_TOKEN": token}
+
+    # 1. ЧЕРНЫЙ СПИСОК (LABEL: control) 💀
     try:
-        # 1. Получаем Issue
-        cmd = ['gh', 'issue', 'list', '--repo', repo, '--label', 'pin_control', '--json', 'body,number', '--limit', '1']
-        pin_read = subprocess.check_output(cmd, env={**os.environ, "GH_TOKEN": token}).decode()
-        
-        if not pin_read or pin_read == "[]":
-            return vetted_list, False
-            
-        issue_info = json.loads(pin_read)[0]
-        body = issue_info['body']
-        issue_number = issue_info['number']
-
-        # --- КРИТИЧЕСКАЯ ЗАЩИТА ---
-        # Проверяем ТОЛЬКО наличие [x] в мастер-галочке
-        if not re.search(r'\[[xX]\].*ПРИМЕНИТЬ', body, re.IGNORECASE | re.DOTALL):
-            return vetted_list, False
-        # -------------------
-        
-        # Если дошли сюда, значит ПРИМЕНИТЬ нажато. 
-        # Теперь ищем команды PIN и BAN
-        to_pin = re.findall(r'\[[xX]\]\s*PIN_(vless://[^\s#`]+)', body)
-        to_ban = re.findall(r'\[[xX]\]\s*BAN_(vless://[^\s#`]+)', body)
-
-        if not to_pin and not to_ban:
-            # Мастер-галочка нажата, но команды не выбраны? 
-            # Можно либо выйти, либо сбросить мастер-галочку.
-            return vetted_list, False
-
-        print(f"⚡ ИСПОЛНЕНИЕ: Найдено {len(to_pin)} PIN и {len(to_ban)} BAN")
-        affected_bases = set()
-
-        # --- ОБРАБОТКА PIN (В закрепы) ---
-        if to_pin:
-            current_p = set()
-            if os.path.exists(PINNED_FILE):
-                with open(PINNED_FILE, 'r', encoding='utf-8') as f:
-                    current_p = {l.strip().split('#')[0] for l in f if l.strip()}
-            
-            with open(PINNED_FILE, 'a', encoding='utf-8') as pf:
-                for link in to_pin:
-                    base = link.split('#')[0].strip()
-                    if base not in current_p:
-                        pf.write(base + "\n")
-                        current_p.add(base) # Чтобы не записать один и тот же дважды за один проход
-                        affected_bases.add(base)
-                        print(f"📌 [PIN] Перенесен: {base[:25]}...")
-
-        # --- ОБРАБОТКА BAN (В черный список) ---
-        if to_ban:
-            for link in to_ban:
+        cmd = ['gh', 'issue', 'list', '--repo', repo, '--label', 'control', '--json', 'body', '--limit', '1']
+        data = json.loads(subprocess.check_output(cmd, env=env_gh))
+        if data and re.search(r'\[[xX]\]\s*💀\s*ПОДТВЕРДИТЬ_БАН', data[0]['body']):
+            checked = re.findall(r'-\s*\[[xX]\]\s*\'(vless://[^\s\']+)\'', data[0]['body'])
+            for link in checked:
                 base = link.split('#')[0].strip()
                 add_to_blacklist(base)
-                remove_from_all(base)
-                affected_bases.add(base)
-                print(f"🚫 [BAN] Забанен: {base[:25]}...")
+                remove_from_all(base) # Твоя функция удаления из файлов
+                if base in ranking_db: del ranking_db[base]
+            executed_any = True
+    except: pass
 
-        # --- СИНХРОНИЗАЦИЯ (Очистка памяти и базы) ---
-        if affected_bases:
-            # 1. Удаляем из текущего списка vetted (в памяти)
-            vetted_list = [v for v in vetted_list if v.split('#')[0].strip() not in affected_bases]
+    # 2. PIN/BAN КАНДИДАТОВ (LABEL: pin_control) 💎
+    try:
+        cmd = ['gh', 'issue', 'list', '--repo', repo, '--label', 'pin_control', '--json', 'body', '--limit', '1']
+        data = json.loads(subprocess.check_output(cmd, env=env_gh))
+        if data and re.search(r'\[[xX]\]\s*✅\s*ПРИМЕНИТЬ_PIN_BAN', data[0]['body']):
+            to_pin = re.findall(r'\[[xX]\]\s*PIN_(vless://[^\s#`]+)', data[0]['body'])
+            to_ban = re.findall(r'\[[xX]\]\s*BAN_(vless://[^\s#`]+)', data[0]['body'])
             
-            # 2. Удаляем из базы рейтинга (чтобы монитор их не трогал)
-            for base in affected_bases:
-                if base in ranking_db:
-                    del ranking_db[base]
+            affected = set()
+            if to_pin:
+                with open(PINNED_FILE, 'a', encoding='utf-8') as pf:
+                    for s in to_pin:
+                        base = s.split("#")[0].strip()
+                        pf.write(base + "\n")
+                        affected.add(base)
+            if to_ban:
+                for s in to_ban:
+                    base = s.split("#")[0].strip()
+                    add_to_blacklist(base)
+                    remove_from_all(base)
+                    affected.add(base)
             
-            # 3. Сразу сохраняем чистый vetted.txt
-            with open(VETTED_FILE, 'w', encoding='utf-8') as vf:
-                if vetted_list:
-                    vf.write("\n".join(vetted_list) + "\n")
-                else:
-                    vf.write("") # Если список стал пустым
+            if affected:
+                vetted_list = [v for v in vetted_list if v.split('#')[0].strip() not in affected]
+                for b in affected:
+                    if b in ranking_db: del ranking_db[b]
+            executed_any = True
+    except: pass
 
-        return vetted_list, True
+    # 3. РАЗЗАКРЕПЛЕНИЕ (LABEL: unpin_control) 🔓
+    try:
+        cmd = ['gh', 'issue', 'list', '--repo', repo, '--label', 'unpin_control', '--json', 'body', '--limit', '1']
+        data = json.loads(subprocess.check_output(cmd, env=env_gh))
+        if data and re.search(r'\[[xX]\]\s*🔓\s*ПОДТВЕРДИТЬ_РАСПИН', data[0]['body']):
+            to_unpin = re.findall(r'-\s*\[[xX]\]\s*\'(vless://[^\s\']+)\'', data[0]['body'])
+            if to_unpin:
+                unp_bases = [u.split("#")[0].strip() for u in to_unpin]
+                pinned_list = [s for s in pinned_list if s.split("#")[0].strip() not in unp_bases]
+                with open(PINNED_FILE, 'w', encoding='utf-8') as pf:
+                    pf.write("\n".join(pinned_list) + ("\n" if pinned_list else ""))
+            executed_any = True
+    except: pass
 
-    except Exception as e:
-        print(f"⚠️ Ошибка в process_pin_commands: {e}")
-        return vetted_list, False
+    return vetted_list, pinned_list, executed_any
+
+def update_issue(repo, label, body, env):
+    """Техническая функция для редактирования Issue."""
+    try:
+        cmd = ['gh', 'issue', 'list', '--repo', repo, '--label', label, '--json', 'number']
+        data = json.loads(subprocess.check_output(cmd, env=env))
+        if data:
+            num = str(data[0]['number'])
+            with open("tmp_body.txt", "w", encoding="utf-8") as f: f.write(body)
+            subprocess.run(['gh', 'issue', 'edit', num, '--repo', repo, '--body-file', 'tmp_body.txt'], env=env)
+    except: pass
 
 def get_country(host):
     if not os.path.exists(COUNTRY_CACHE_FILE):
@@ -338,28 +397,29 @@ def main_torturer():
     token = os.getenv("GH_TOKEN")
     repo = os.getenv("GITHUB_REPOSITORY")
 
-    # --- ШАГ 1: ПРОВЕРКА МАСТЕР-КНОПКИ (БЫСТРАЯ) ---
-    # Вызываем функцию с пустыми списками только ради проверки галочки
-    _, executed = process_pin_commands(token, repo, [], {})
+    # --- ШАГ 0: БЫСТРЫЙ ФИЛЬТР ---
+    # Проверяем наличие ЛЮБОЙ нажатой мастер-галочки во всех панелях
+    # ВНИМАНИЕ: Здесь вызываем новую универсальную функцию process_all_controls
+    _, _, executed = process_all_controls(token, repo, [], [], {})
     
     if not executed:
-        print("📴 Мастер-кнопка не нажата. Завершаю работу мгновенно.")
-        return # Скрипт тут же прекращает выполнение
+        print("☕ Ни одна мастер-галочка не нажата. Завершаю работу за 1 секунду.")
+        return
 
-    # --- ШАГ 2: ЕСЛИ НАЖАТА — ПРОВЕРКА ПРОЦЕССОВ И ЗАГРУЗКА ---
-    print("🚀 Кнопка нажата! Начинаю обработку...")
-    
+    # --- ШАГ 1: ПОДГОТОВКА ---
+    print("🚀 Команда получена! Начинаю обработку...")
+
     # Проверка на дубликаты процесса
     for proc in psutil.process_iter(['pid', 'cmdline']):
         try:
             if proc.info['pid'] != os.getpid() and 'torture_bot.py' in ' '.join(proc.info['cmdline']):
-                print("🛑 Бот уже запущен.")
+                print("🛑 Бот уже запущен. Выхожу.")
                 return
-        except Exception:
-            continue
+        except Exception: continue
 
     stress_config = load_stress_config()
-    # Загружаем РЕАЛЬНУЮ базу
+
+    # Загружаем реальные данные из всех файлов
     ranking_db = {}
     if os.path.exists(RANK_FILE):
         with open(RANK_FILE, 'r', encoding='utf-8') as f:
@@ -369,35 +429,46 @@ def main_torturer():
     if os.path.exists(VETTED_FILE):
         with open(VETTED_FILE, 'r', encoding='utf-8') as f:
             vetted_list = [l.strip() for l in f if 'vless' in l]
-    # --- ШАГ 3: ПОВТОРНЫЙ ВЫЗОВ (РЕАЛЬНОЕ ВЫПОЛНЕНИЕ) ---
-    # Теперь передаем настоящие списки для обработки PIN/BAN
-    vetted_list, executed = process_pin_commands(token, repo, vetted_list, ranking_db)
 
-    if executed:
-        print("🧹 Команды выполнены, очищаю панель и сохраняю файлы...")
-        refresh_control_panel(token, repo)
-        
-        with open(VETTED_FILE, 'w', encoding='utf-8') as vf:
-            vf.write("\n".join(vetted_list) + ("\n" if vetted_list else ""))
-        
-        with open(RANK_FILE, 'w', encoding='utf-8') as f:
-            json.dump(ranking_db, f, ensure_ascii=False, indent=4)
-    else:
-        print("⏳ Скип: Мастер-галочка не активна. Пытки продолжатся в штатном режиме.")
+    pinned_list = []
+    if os.path.exists(PINNED_FILE):
+        with open(PINNED_FILE, 'r', encoding='utf-8') as f:
+            pinned_list = [l.strip() for l in f if 'vless' in l]
 
-# Вместо резкого return используем проверку
-    if not ranking_db: 
+    # Список для панели Blacklist (те, кто сейчас в ranking_db)
+    working_for_base = list(ranking_db.keys())
+
+    # --- ШАГ 2: РЕАЛЬНОЕ ВЫПОЛНЕНИЕ КОМАНД ---
+    # Вызываем Исполнителя еще раз, но уже с данными для правки
+    vetted_list, pinned_list, _ = process_all_controls(
+        token, repo, vetted_list, pinned_list, ranking_db
+    )
+
+    # --- ШАГ 3: СОХРАНЕНИЕ И ОБНОВЛЕНИЕ ПАНЕЛЕЙ ---
+    print("🧹 Команды выполнены, сохраняю файлы и обновляю GitHub...")
+    
+    # 1. Сохраняем VETTED
+    with open(VETTED_FILE, 'w', encoding='utf-8') as vf:
+        vf.write("\n".join(vetted_list) + ("\n" if vetted_list else ""))
+    
+    # 2. Сохраняем RANKING_DB
+    with open(RANK_FILE, 'w', encoding='utf-8') as f:
+        json.dump(ranking_db, f, ensure_ascii=False, indent=4)
+
+    # 3. Обновляем ВСЕ панели (сбрасываем галочки в GitHub)
+    # Используем новую функцию, которую мы обсуждали
+    refresh_all_panels(token, repo, working_for_base, vetted_list, pinned_list)
+
+    # --- ШАГ 4: ПЕРЕХОД К ПЫТКАМ ---
+    if not ranking_db:
         print("⌛ База пуста. Пытать некого.")
-        # Если панель еще не была обновлена выше, а база пуста — можно обновить сейчас
-        if not executed:
-            refresh_control_panel(token, repo)
         return
 
-    pinned_set = set()
-    if os.path.exists(PINNED_FILE):
-        with open(PINNED_FILE, 'r', encoding='utf-8') as pf:
-            pinned_set = {l.split('#')[0].strip() for l in pf if 'vless' in l}
+    # Подготовка множеств для пыток
     vetted_set = {l.split('#')[0].strip() for l in vetted_list}
+    pinned_set = {l.split('#')[0].strip() for l in pinned_list}
+    
+    print(f"🕵️ Начинаю инспекцию для {len(ranking_db)} кандидатов...")
 
     # Проверка кандидатов
     candidates = []
