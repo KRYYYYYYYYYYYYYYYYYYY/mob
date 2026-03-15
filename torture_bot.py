@@ -226,10 +226,10 @@ def process_all_controls(token, repo, vetted_list, pinned_list, ranking_db):
             if "ПРИМЕНИТЬ_PIN_BAN" in body and "[x]" in body:
                 # Здесь используем специфичный поиск для PIN_ и BAN_
                 # Ищем только те, где стоит PIN:
-                to_pin = re.findall(r'\[[xX]\]\s+PIN:\s+(vless://[^\s`\'"]+)', body)
+                to_pin = re.findall(r'\[[xX]\]\s+PIN:\s+(vless://[^\n\r`\'"]+)', body)
                 
                 # Ищем только те, где стоит BAN:
-                to_ban = re.findall(r'\[[xX]\]\s+BAN:\s+(vless://[^\s`\'"]+)', body)
+                to_ban = re.findall(r'\[[xX]\]\s+BAN:\s+(vless://[^\n\r`\'"]+)', body)
                 
                 for s in to_pin:
                     base_full = s.strip().rstrip(':')
