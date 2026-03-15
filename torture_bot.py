@@ -129,7 +129,7 @@ def refresh_all_panels(token, repo, ranking_db, vetted_list, pinned_list):
     body_pin += "- [ ] ✅ **ПРИМЕНИТЬ_PIN_BAN**\n\n---\n\n"
     for full_link in vetted_list:
         base = full_link.split('#')[0].strip()
-        body_pin += f"📡 {full_link}:\n- [ ] PIN_{base}\n- [ ] BAN_{base}\n\n---\n"
+        body_pin += f"{full_link}:\n- [ ] PIN_{base}\n- [ ] BAN_{base}\n\n---\n"
     update_issue(repo, 'pin_control', body_pin, env_gh)
 
     # --- 3. ПАНЕЛЬ ЗАКРЕПОВ ---
