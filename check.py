@@ -24,68 +24,24 @@ EXTERNAL_SOURCE_URL = [
 
 GRACE_PERIOD = 2 * 24 * 60 * 60 # 48 часов
 
-HEADER = """# profile-title: 🏳️Мобильный инет🏳️
-# remark: 🏳️Мобильный инет🏳️
-# announce: Подписка для использования ТОЛЬКО на мобильном интернете в условиях БЕЛЫХ СПИСКОВ!
+HEADER = """
+# profile-title: 🏴WIFI🏴
+# remark: 🏴WIFI🏴
+# announce: Подписка для использования на wifi.
+# hide-settings: 1
 # profile-update-interval: 2
 # subscription-userinfo: upload=0; download=0; expire=0
 # shadowrocket-userinfo: upload=0; download=0; expire=0
-
 """
 
-ALLOWED_COUNTRIES = {"US", "DE", "NL", "GB", "FR", "FI", "SG", "JP", "PL", "TR", "RU"}
-
-def download_raw_data(urls):
-    """
-    Этап 1: Огороженная загрузка с защитой от сбоев DNS.
-    """
-    all_links = []
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-    
-    print("📥 ЭТАП 1: Загрузка сырых данных (Огороженный режим)")
-    
-    for url in urls:
-        success = False
-        # Извлекаем домен (например, raw.githubusercontent.com)
-        try:
-            hostname = urllib.parse.urlparse(url).netloc
-        except:
-            hostname = None
-            
-        for attempt in range(5): 
-            try:
-                # 1. Прогреваем DNS (пробиваем Errno -3)
-                if hostname:
-                    try:
-                        socket.gethostbyname(hostname)
-                    except:
-                        pass # Если не вышло тут, попробует urllib
-
-                print(f"📡 Попытка {attempt+1}: {url.split('/')[-1]}...", end=" ")
-                req = urllib.request.Request(url.strip(), headers=headers)
-                
-                # 2. Загружаем данные
-                with urllib.request.urlopen(req, timeout=30) as response:
-                    content = response.read().decode("utf-8")
-                    found = [line.strip() for line in content.splitlines() if "vless://" in line]
-                    all_links.extend(found)
-                    print(f"✅ Найдено {len(found)} шт.")
-                    success = True
-                    break
-            except Exception as e:
-                # 3. Нарастающая пауза: 5с, 10с, 15с, 20с
-                wait_time = (attempt + 1) * 5
-                print(f"❌ Ошибка: {e}. Ждем {wait_time}с...")
-                time.sleep(wait_time)
-        
-        if not success:
-            print(f"⚠️ КРИТИЧЕСКАЯ ОШИБКА: Не удалось загрузить {url}")
-            
-    return all_links
+ALLOWED_COUNTRIES = {"US", "DE", "NL", "GB", "FR", "FI", "SG", "JP", "PL", "TR"}
 
 def rebuild_link_name(link: str, new_name: str) -> str:
-    return link
-    base, _, fragment = link.partition("#")
+    """
+    Меняем ТОЛЬКО подпись после '#', не трогая base-часть vless-ссылки.
+    Это безопасно для uuid/host/port/query-параметров.
+    """
+    base, sep, fragment = link.partition("#")
 
     # Если это уже закреп — не трогаем
     if fragment:
@@ -93,507 +49,191 @@ def rebuild_link_name(link: str, new_name: str) -> str:
         if "PINNED" in frag:
             return link
 
-    if not fragment:
-        return f"{base}#{urllib.parse.quote(new_name)}"
-
-    fragment_dec = urllib.parse.unquote(fragment)
+    fragment_dec = urllib.parse.unquote(fragment) if sep else ""
 
     # Пытаемся сохранить флаг/эмодзи
     match = re.match(r"^([^\w\s\d]|[^\x00-\x7F])+", fragment_dec)
     if match:
         prefix = match.group(0).strip()
-        return f"{base}#{urllib.parse.quote(prefix + ' ' + new_name)}"
+        safe_name = f"{prefix} {new_name}".strip()
+        return f"{base}#{urllib.parse.quote(safe_name)}"
 
     return f"{base}#{urllib.parse.quote(new_name)}"
 
-def remove_from_input_file(base_to_remove: str):
-    """Удаляет конкретную ссылку из 1.txt по её базовой части"""
-    if not os.path.exists(INPUT_FILE):
-        return
-    try:
-        with open(INPUT_FILE, 'r', encoding='utf-8') as f:
-            lines = f.readlines()
-        
-        # Оставляем только те строки, которые НЕ содержат этот base_part
-        new_lines = [l for l in lines if base_to_remove not in l]
-        
-        if len(lines) != len(new_lines):
-            with open(INPUT_FILE, 'w', encoding='utf-8') as f:
-                f.writelines(new_lines)
-    except Exception as e:
-        print(f"⚠️ Ошибка при очистке {INPUT_FILE}: {e}")
-
 def is_ipv6(host: str) -> bool:
-    """
-    Проверяет, является ли строка IPv6.
-    Работает и со скобками (для URL), и без них (после парсинга).
-    """
-    if not host: return False
     return ":" in host
 
 def extract_host_port(link: str):
-    """
-    Извлекает хост и порт. 
-    Если это IPv6 в скобках, вернет чистый адрес без скобок.
-    """
-    pattern = r"@(?:\[([0-9a-fA-F:]+)\]|([\w.-]+)):(\d+)"
-    match = re.search(pattern, link)
+    # Поиск для обычного хоста или домена
+    match = re.search(r"(@)([\w.-]+):(\d+)", link)
     if match:
-        # group(1) — адрес из скобок, group(2) — обычный адрес
-        host = match.group(1) or match.group(2)
-        port = match.group(3)
-        return match.group(0), host, port
+        # group(0) содержит '@host:port', group(2) - host, group(3) - port
+        return match.group(0), match.group(2), match.group(3)
+    
+    # Поиск для IPv6 в скобках
+    ipv6_match = re.search(r"(@)\[([0-9a-fA-F:]+)\]:(\d+)", link)
+    if ipv6_match:
+        return ipv6_match.group(0), ipv6_match.group(2), ipv6_match.group(3)
+        
     return None, None, None
 
+
 def format_uri_host(host: str) -> str:
-    """Упаковывает IPv6 в скобки для использования в ссылке vless."""
     if is_ipv6(host) and not host.startswith("["):
         return f"[{host}]"
     return host
 
-def get_country_code(host, cache):
-    # 1. Определяем IP. 
-    # Если это домен — резолвим. Если IPv6 или IPv4 — оставляем как есть.
-    ip = host
-    if not is_ipv6(host):
-        try:
-            # Пытаемся резолвить только если это похоже на домен (нет двоеточий)
-            # и это не чистый IPv4
-            if not re.match(r"^\d{1,3}(\.\d{1,3}){3}$", host):
-                ip = socket.gethostbyname(host)
-        except:
-            ip = host
+def parse_vless_params(link: str) -> dict:
+    parsed = urllib.parse.urlparse(link)
+    query = urllib.parse.parse_qs(parsed.query)
+    return {
+        "type": query.get("type", [""])[0].lower(),
+        "security": query.get("security", [""])[0].lower(),
+        "sni": query.get("sni", [""])[0],
+        "host": query.get("host", [""])[0],
+        "path": urllib.parse.unquote(query.get("path", ["/"])[0] or "/"),
+    }
 
-    # 2. Проверяем кэш (используем IP как ключ)
-    if ip in cache:
-        return cache[ip]
+def probe_server(host: str, port: int, link: str, timeout: float = 4.0):
+    """
+    Возвращает (ok, latency_ms, reason).
+    Для ws дополнительно проверяет HTTP-ответ, чтобы не считать живым случайно открытый порт.
+    """
+    params = parse_vless_params(link)
+    probe_host = params["sni"] or params["host"] or host
+    use_tls = params["security"] in {"tls", "reality"}
+    transport = params["type"]
 
-    # 3. Запрос к API
+    started = time.time()
     try:
-        # Пауза 0.5с — это хорошо, защищает от 429 Too Many Requests
-        time.sleep(0.5) 
-        
-        # Для IPv6 в URL скобки не нужны, ip-api кушает их просто как строку
-        clean_ip = ip.replace("[", "").replace("]", "")
-        url = f"http://ip-api.com/json/{clean_ip}?fields=status,countryCode"
-        
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=3) as response:
+        with socket.create_connection((host, int(port)), timeout=timeout) as sock:
+            sock.settimeout(timeout)
+            conn = sock
+            if use_tls:
+                context = ssl.create_default_context()
+                context.check_hostname = False
+                context.verify_mode = ssl.CERT_NONE
+                conn = context.wrap_socket(sock, server_hostname=probe_host)
+
+            if transport == "ws":
+                ws_path = params["path"] if params["path"].startswith("/") else f"/{params['path']}"
+                ws_host = params["host"] or probe_host
+                request = (
+                    f"GET {ws_path} HTTP/1.1\r\n"
+                    f"Host: {ws_host}\r\n"
+                    "Upgrade: websocket\r\n"
+                    "Connection: Upgrade\r\n"
+                    "Sec-WebSocket-Key: SGVsbG8sIHdvcmxkIQ==\r\n"
+                    "Sec-WebSocket-Version: 13\r\n\r\n"
+                )
+                conn.sendall(request.encode("utf-8"))
+                response = conn.recv(256).decode("utf-8", errors="ignore")
+                if not response.startswith("HTTP/1.1") and not response.startswith("HTTP/1.0"):
+                    return False, None, "ws-no-http"
+            else:
+                conn.sendall(b"\x00")
+
+        return True, (time.time() - started) * 1000, "ok"
+    except socket.timeout:
+        return False, None, "timeout"
+    except ConnectionRefusedError:
+        return False, None, "refused"
+    except ssl.SSLError:
+        return False, None, "tls"
+    except OSError:
+        return False, None, "network"
+
+def get_country_code(host: str) -> str:
+    try:
+        url = f"http://ip-api.com/json/{host}?fields=status,countryCode"
+        with urllib.request.urlopen(url, timeout=3) as response:
             data = json.loads(response.read().decode("utf-8"))
             if data.get("status") == "success":
-                code = data.get("countryCode", "Unknown")
-                cache[ip] = code 
-                return code
-    except Exception as e:
-        # Печатаем ошибку только для отладки, если нужно
-        # print(f"GeoIP Error: {e}")
-        pass
-        
+                return data.get("countryCode", "Unknown")
+    except: pass
     return "Unknown"
 
-def safe_gh_call(cmd, token):
-    """Безопасно вызывает gh cli, пробуя 3 раза при сетевых сбоях."""
-    import subprocess
-    import time
-    import os
-    for attempt in range(3):
-        try:
-            # Выполняем команду
-            return subprocess.check_output(
-                cmd, 
-                env={**os.environ, "GH_TOKEN": token}, 
-                stderr=subprocess.STDOUT
-            ).decode()
-        except subprocess.CalledProcessError as e:
-            err_output = e.output.decode().lower() if e.output else ""
-            # Если это сетевая ошибка GitHub, ждем и повторяем
-            if any(x in err_output for x in ["connection", "api.github.com", "timeout"]):
-                print(f"⏳ Сетевой лаг GitHub (попытка {attempt+1}/3)... Ждем 5 сек.")
-                time.sleep(5)
-                continue
-            # Если ошибка другая (например, нет прав), выходим
-            print(f"❌ Ошибка GH CLI: {err_output[:100]}")
-            break
-    return "[]"
-
-def add_to_blacklist(base_part):
-    """Добавляет сервер в файл blacklist.txt, если его там нет."""
-    current_bl = set()
-    if os.path.exists('test1/blacklist.txt'):
-        with open('test1/blacklist.txt', 'r') as f:
-            current_bl = {line.strip() for line in f if line.strip()}
+def fetch_external_servers() -> list:
+    # Если вдруг в переменной осталась просто строка, превращаем её в список для совместимости
+    urls = [EXTERNAL_SOURCE_URL] if isinstance(EXTERNAL_SOURCE_URL, str) else EXTERNAL_SOURCE_URL
     
-    if base_part not in current_bl:
-        with open('test1/blacklist.txt', 'a') as f:
-            f.write(base_part + "\n")
-
-def main():
-    import subprocess
-    token = os.getenv("GH_TOKEN")
-    repo = os.getenv("GITHUB_REPOSITORY")
-
-    # --- ЗАГРУЗКА КЭША СТРАН (важно для get_country_code) ---
-    countries_cache = {}
-    if os.path.exists(CACHE_FILE):
+    all_configs = []
+    for url in urls:
+        if not url.strip(): continue
         try:
-            with open(CACHE_FILE, 'r') as f: countries_cache = json.load(f)
-        except: countries_cache = {}
-
-    blacklist = set()
-    pinned_list = []
-    deferred_base = []
-    current_base = []
-    external_servers = []
-    ranking_db = {}
-    vetted_list = []
-    
-    blacklist = set()
-    if os.path.exists('test1/blacklist.txt'):
-        with open('test1/blacklist.txt', 'r') as f:
-            blacklist = {line.strip() for line in f if line.strip()}
-
-        # Загружаем "рейтинг выслуги"
-    ranking_file = 'test1/ranking.json'
-    ranking_db = {}
-    if os.path.exists(ranking_file):
-        try:
-            with open(ranking_file, "r") as f: ranking_db = json.load(f)
-        except: ranking_db = {}
-
-    # Загружаем текущих проверенных (чтобы не дублировать)
-    vetted_list = []
-    if os.path.exists('test1/vetted.txt'):
-        with open('test1/vetted.txt', 'r') as f:
-            vetted_list = [line.strip() for line in f if line.strip()]
-
-
-    # --- ДОБАВЛЯЕМ ЗАГРУЗКУ СПЕЦФАЙЛОВ ТУТ ---
-    
-    # 1. Загружаем Закрепленные (Pinned)
-    pinned_list = []
-    if os.path.exists('test1/pinned.txt'):
-        with open('test1/pinned.txt', 'r', encoding='utf-8') as f:
-            # Читаем всё целиком, убираем пустые строки
-            pinned_list = [line.strip() for line in f if "vless://" in line]
-    
-    print(f"📦 Загружено закрепов из файла: {len(pinned_list)}")
-
-    clean_pinned = {}
-    for p in pinned_list:
-        base = p.split("#")[0].strip()
-        clean_pinned[base] = p  # последний вариант перезапишет предыдущий
-
-    pinned_list = list(clean_pinned.values())
-
-    # 2. Загружаем Отложенные (Deferred)
-    deferred_base = []
-    if os.path.exists('test1/deferred.txt'):
-        with open('test1/deferred.txt', 'r', encoding='utf-8') as f:
-            deferred_base = [line.strip() for line in f if line.strip()]
-
-    # ------------------------------------------
-
-    # Дальше твоя стандартная загрузка
-    current_base = []
-    if os.path.exists(INPUT_FILE):
-        with open(INPUT_FILE, "r", encoding="utf-8") as f:
-            current_base = f.read().splitlines()
-
-    raw_external = download_raw_data(EXTERNAL_SOURCE_URL)
-    # СОБИРАЕМ ОЧЕРЕДЬ: База + Отложенные + Новые
-    # Это гарантирует, что "старички" из очереди проверятся раньше новичков
-    combined_queue = pinned_list + deferred_base + raw_external + current_base
-
-    # Убираем дубликаты, сохраняя этот новый приоритетный порядок
-    unique_links = []
-    seen_bases = set()
-    for link in combined_queue:
-        base = link.split('#')[0].strip()
-        if base not in seen_bases:
-            unique_links.append(link)
-            seen_bases.add(base)
-
-    # --- БЛОК ЧТЕНИЯ КОМАНД ИЗ GITHUB (В начале main) ---
-    if token and repo:
-        # 1. ЧЕРНЫЙ СПИСОК (CONTROL)
-        try:
-            print("🔍 Проверка черного списка в GitHub...")
-            cmd_control = ['gh', 'issue', 'list', '--repo', repo, '--label', 'control', '--json', 'body', '--limit', '1']
-            out = safe_gh_call(cmd_control, token)
-            data = json.loads(out)
-            if data:
-                checked = re.findall(r'- \[x\] (vless://[^\s]+)', data[0]['body'])
-                if checked:
-                    for s in checked:
-                        blacklist.add(s.split('#')[0].strip())
-                    with open('test1/blacklist.txt', 'w') as f:
-                        f.write("\n".join(list(blacklist)))
-                    print(f"🚫 Обновлено: {len(checked)} серверов в блэклисте.")
+            print(f"📥 Загрузка из {url}")
+            with urllib.request.urlopen(url, timeout=8) as response:
+                configs = response.read().decode("utf-8").splitlines()
+                all_configs.extend(configs)
         except Exception as e:
-            print(f"⚠️ Ошибка Blacklist: {e}")
-
-        # 2. НОВЫЕ ЗАКРЕПЫ И БАНЫ (PIN_CONTROL)
-        try:
-            print("🔍 Проверка новых команд в Issue...")
-            cmd_pin = ['gh', 'issue', 'list', '--repo', repo, '--label', 'pin_control', '--json', 'body', '--limit', '1']
-            out = subprocess.check_output(cmd_pin, env={**os.environ, "GH_TOKEN": token}).decode()
-            data = json.loads(out)
-        
-            if data:
-                body = data[0]['body']
-                
-                # --- БЛОК ЗАЩИТЫ: Проверяем мастер-галочку ---
-                if re.search(r'\[[xX]\]\s*✅\s*ПРИМЕНИТЬ', body):
-                    print("🛡️ Мастер-галочка нажата! Выполняю команды...")
-                    
-                    # Ищем PIN и BAN
-                    to_pin = re.findall(r'\[[xX]\]\s*PIN_(vless://[^\s#`]+)', body)
-                    to_ban = re.findall(r'\[[xX]\]\s*BAN_(vless://[^\s#`]+)', body)
-        
-                    # Обработка PIN
-                    if to_pin:
-                        with open(PINNED_FILE, 'a', encoding='utf-8') as pf:
-                            for s in to_pin:
-                                base = s.split("#")[0].strip()
-                                if all(base != p.split("#")[0].strip() for p in pinned_list):
-                                    pf.write(base + "\n")
-                                    pinned_list.append(base)
-                        print(f"📌 Закреплено: {len(to_pin)} серверов.")
-        
-                    # Обработка BAN
-                    if to_ban:
-                        for s in to_ban:
-                            base = s.split("#")[0].strip()
-                            add_to_blacklist(base)
-                            remove_from_all(base)
-                        print(f"🚫 Забанено: {len(to_ban)} серверов.")
-                else:
-                    print("🛡️ Команды PIN/BAN проигнорированы: мастер-галочка не нажата.")
-
-        except Exception as e:
-            print(f"⚠️ Ошибка Pin/Ban: {e}")
-        # 3. РАЗЗАКРЕПЛЕНИЕ (UNPIN_CONTROL)
-        try:
-            print("🔍 Проверка раззакрепления...")
-            cmd_unpin = ['gh', 'issue', 'list', '--repo', repo, '--label', 'unpin_control', '--json', 'body', '--limit', '1']
-            out = safe_gh_call(cmd_unpin, token)
-            data = json.loads(out)
-            if data:
-                to_unpin = re.findall(r'- \[x\] (vless://[^\s#\s]+)', data[0]['body'])
-                if to_unpin:
-                    to_unpin_bases = [u.split("#")[0].strip() for u in to_unpin]
-                    pinned_list = [s for s in pinned_list if s.split("#")[0].strip() not in to_unpin_bases]
-                    with open('test1/pinned.txt', 'w', encoding='utf-8') as pf:
-                        pf.write("\n".join(pinned_list) + ("\n" if pinned_list else ""))
-                    print(f"🔓 Убрано из закрепов: {len(to_unpin)}")
-        except Exception as e:
-            print(f"⚠️ Ошибка Unpin: {e}")
-
-    # --- ПЕРЕЗАГРУЗКА ИСТОРИИ ПЕРЕД ПРОВЕРКОЙ ---
-    history = {}
-    if os.path.exists(STATUS_FILE):
-        try:
-            with open(STATUS_FILE, "r") as f: history = json.load(f)
-        except: history = {}
-
-    all_lines = pinned_list + deferred_base + external_servers + current_base
-
-    # 1. Загрузка базы и истории
-    current_base = []
-    if os.path.exists(INPUT_FILE):
-        with open(INPUT_FILE, "r", encoding="utf-8") as f:
-            current_base = f.read().splitlines()
-
-    history = {}
-    if os.path.exists(STATUS_FILE):
-        try:
-            with open(STATUS_FILE, "r") as f: history = json.load(f)
-        except: history = {}
-    
-    working_for_base = []
-    working_for_sub = []
-    new_deferred = []   # <--- ДОБАВЬ ЭТО (сюда пойдут те, кто не влез в лимит)
-    new_history = {}
-    now = time.time()
-    counter = 1
-    checked_today = 0   # <--- ДОБАВЬ ЭТО (счетчик реальных проверок)
-    MAX_TO_CHECK = 300  # <--- ДОБАВЬ ЭТО (лимит, чтобы скрипт не шел до конца очереди вечно)
-    seen_ips = set()
-    # ----------------------------------------------------------
-# --- ЦИКЛ ПРОВЕРКИ (ИЩЕМ 200 РАБОЧИХ) ---
-    print(f"📡 Начинаю проверку. Цель: 200 серверов. Всего в очереди: {len(unique_links)}")
-    
-    seen_parts = set()
-    
-    idx = 0
-
-    # --- НАСТРОЙКИ СТРЕСС-ТЕСТА (Интеграция твоего JSON) ---
-    stress_config = {
-        "timeout": 2.5,        # Дефолт
-        "dpi_sleep": 0.5,      # Дефолт
-        "target_mtu": 1280     # Для мобильных сетей
-    }
-    
-    if os.path.exists('test1/stress_profile.json'):
-        try:
-            with open('test1/stress_profile.json', 'r') as f:
-                data = json.load(f)
-                # Берем 1800ms из твоего конфига и превращаем в секунды (1.8)
-                stress_config["timeout"] = data.get("max_handshake_ms", 2500) / 1000
-                # Если mimic_dpi_delay: true, ставим паузу 0.5 сек (имитация лага мобилы)
-                stress_config["dpi_sleep"] = 0.5 if data.get("mimic_dpi_delay") else 0
-                stress_config["target_mtu"] = data.get("target_mtu", 1280)
-        except: 
-            pass
-    # Работаем, пока не набрали 200 в подписку ИЛИ пока не кончились ссылки в unique_links
-    while len(working_for_sub) < 200 and idx < len(unique_links):
-        link = unique_links[idx]
-        idx += 1 # Сдвигаем указатель
-        
-        clean_link = link.strip()
-        base_part = clean_link.split("#", 1)[0].strip()
-
-        endpoint, host, port = extract_host_port(base_part)
-        
-        if base_part in seen_parts and not any(base_part in p for p in pinned_list):
-            continue
-        
-        # --- БЛОК ЗАКРЕПОВ (PINNED) ---
-        found_pinned_full = None
-        for p in pinned_list:
-            if base_part == p.split("#")[0].strip():
-                found_pinned_full = p
-                break
-
-        if found_pinned_full:
-            seen_parts.add(base_part)
-        
-            # 1. Достаём только флаг из старого имени
-            #raw_pinned_name = found_pinned_full.split("#")[-1].strip()
-            #original_label = urllib.parse.unquote(raw_pinned_name)
-        
-            #emoji_match = re.match(r'^([^\w\s\d]+)', original_label)
-            #flag = emoji_match.group(1).strip() if emoji_match else ""
-            final_linkk = found_pinned_full.strip()
+            print(f"❌ Ошибка загрузки {url}: {e}")
+    return all_configs
+@@ -317,125 +377,118 @@ def main():
             # 2. Полностью перезаписываем имя
-            #new_name = f"{flag} 💎 [PINNED] {counter}"
+            new_name = f"{flag} 💎 [PINNED] {counter}"
         
             # 3. Чистим базу
-            #clean_base = base_part.split("#")[0].strip()
+            clean_base = base_part.split("#")[0].strip()
         
             # 4. Собираем финальную ссылку
-            #final_linkk = f"{clean_base}#{urllib.parse.quote(new_name)}"
+            final_linkk = f"{clean_base}#{urllib.parse.quote(new_name)}"
         
             working_for_sub.append(final_linkk)
-            #print(f"💎 [PINNED] {counter} с флагом '{flag}' готов")
-            print(f"💎 [PINNED] {counter} добавлен без изменений")
-            
+            print(f"💎 [PINNED] {counter} с флагом '{flag}' готов")
+        
             counter += 1
             continue
             
-        # --- ФИЛЬТРЫ И ПРОВЕРКИ ---
+        # --- ФИЛЬТРЫ ---
         if base_part in blacklist:
-            print(f"🚫 Пропуск: Сервер в черном списке ({host})")
             continue
-
-        if "type=ws" in base_part.lower() or "type=grpc" in base_part.lower():
-            print(f"📡 Пропуск: Протокол WS/gRPC временно отключен ({host})")
-            continue 
-
         if not re.search(r'[a-f0-9\-]{36}@', base_part):
-            print(f"❓ Пропуск: Неверный формат UUID или ссылки ({host if host else 'unknown'})")
-            continue
+            continue 
     
         endpoint, host, port = extract_host_port(base_part)
         if not endpoint or not host or not port:
-            print(f"❌ Ошибка: Не удалось извлечь хост/порт из ссылки")
             continue
 
-        # --- ЖЕСТКИЙ ФИЛЬТР IPv6 ---
-        if is_ipv6(host):
-            print(f"🚫 БАН (IPv6): {host} запрещен в мобильной сети.")
-            add_to_blacklist(base_part) # Отправляем в черный список сразу
-            remove_from_input_file(base_part) # Чистим из 1.txt
-            continue
-
-        # --- ПРОВЕРКА СОЕДИНЕНИЯ ---
-        print(f"🔍 Тестирую: {host}...", end=" ", flush=True) # Печатаем без переноса строки
-
-        # --- ЭТАП 1: РЕЗОЛВИНГ И ПРОВЕРКА ПОД "ГЛУШИЛКУ" ---
+        # --- ЭТАП 1: РЕЗОЛВИНГ + ПРОВЕРКА СВЯЗИ ---
         resolved_ip = None
+        latency_ms = None
+        fail_reason = "unknown"
         is_alive = False
         try:
-            # Проверка DNS (то, что у тебя падает на мобиле)
-            resolved_ip = host if is_ipv6(host) else socket.gethostbyname(host)
-            
+            resolved_ip = socket.gethostbyname(host) if not is_ipv6(host) else host
             if resolved_ip in seen_ips:
-                continue 
-    
-            # Установка соединения с учетом таймаута из stress_profile (1.8s)
-            with socket.create_connection((resolved_ip, int(port)), timeout=stress_config["timeout"]) as sock:
-                # Имитируем малый MTU, характерный для забитых каналов или мобильных VPN
-                # sock.setsockopt(socket.IPPROTO_IP, socket.IP_MTU_DISCOVER, socket.IP_PMTUDISC_DO) 
-                
-                use_tls = "security=tls" in base_part.lower() or "security=reality" in base_part.lower()
-                
-                if use_tls:
-                    context = ssl.create_default_context()
-                    context.check_hostname = False
-                    context.verify_mode = ssl.CERT_NONE
-                    
-                    with context.wrap_socket(sock, server_hostname=host) as ssock:
-                        # ОТПРАВЛЯЕМ ДАННЫЕ (Важно! Глушилки смотрят на первый пакет после Handshake)
-                        # Эмулируем обычный браузерный запрос
-                        request = f"GET / HTTP/1.1\r\nHost: {host}\r\nUser-Agent: Mozilla/5.0\r\n\r\n"
-                        ssock.sendall(request.encode())
-                        
-                        # ПАУЗА DPI (из конфига)
-                        if stress_config["dpi_sleep"] > 0:
-                            time.sleep(stress_config["dpi_sleep"])
-                        
-                        # Ждем ответа. Если ТСПУ оборвал связь — тут выпадет ConnectionResetError
-                        ssock.settimeout(1.5) 
-                        response = ssock.recv(1) 
-                        if response:
-                            is_alive = True
-                else:
-                    # Для SOCKS5/Shadowsocks имитируем рукопожатие
-                    sock.sendall(b'\x05\x01\x00')
-                    if sock.recv(2):
-                        is_alive = True
+                continue
 
-        except (socket.timeout, ConnectionResetError, ssl.SSLError, socket.error):
-            # Если DNS не нашелся или связь оборвалась после отправки данных — сервер в утиль
-            is_alive = False
-                
+            is_alive, latency_ms, fail_reason = probe_server(resolved_ip, int(port), base_part, timeout=4.0)
+            if is_alive and latency_ms and latency_ms > 1500:
+                is_alive = False
+                fail_reason = "slow"
+
             if is_alive:
-                seen_ips.add(resolved_ip) 
-
+                seen_ips.add(resolved_ip)
+        except OSError:
+            is_alive = False
+            fail_reason = "dns"
+    
         # --- ЭТАП 2: ЕСЛИ СЕРВЕР РАБОТАЕТ ---
         if is_alive:
-            # Твоя логика сохранения (БЕЗ ИЗМЕНЕНИЙ СИСТЕМЫ ЗАКРЕПОВ)
             if "security=none" in base_part.lower():
                 print(f"❌ НЕТ ШИФРОВАНИЯ: {host}")
                 continue
     
-            country = get_country_code(host, countries_cache)
+            country = get_country_code(host)
             if country not in ALLOWED_COUNTRIES:
-                print(f"🌍 МИМО: Страна {country} не в белом списке ({host})")
                 continue
-
-            remove_from_input_file(base_part)
     
             working_for_base.append(base_part)
-            # ip_str = f"[{resolved_ip}]" if is_ipv6(resolved_ip) else resolved_ip
-            # sub_link = base_part.replace(endpoint, f"@{ip_str}:{port}", 1)
-            sub_link = base_part
+            ip_str = f"[{resolved_ip}]" if is_ipv6(resolved_ip) else resolved_ip
+            sub_link = base_part.replace(endpoint, f"@{ip_str}:{port}", 1)
             
             if "sni=" not in sub_link.lower() and not is_ipv6(host):
                 sep = "&" if "?" in sub_link else "?"
                 sub_link += f"{sep}sni={host}"
             
-            # final_link = rebuild_link_name(sub_link, f"wifi {counter}")
-            final_link = link.strip()
+            final_link = rebuild_link_name(sub_link, f"wifi {counter}")
             working_for_sub.append(final_link)
             
             print(f"✅ ОК {len(working_for_sub)}/200 ({country}): {host} -> {resolved_ip} (wifi {counter})")
@@ -601,40 +241,27 @@ def main():
     
         # --- ЭТАП 3: ЕСЛИ СЕРВЕР НЕ ОТВЕЧАЕТ ---
         else:
-            print(f"💀 МЕРТВ: Не удалось подключиться или таймаут ({host})")
-            # Чистим из активных списков, так как сейчас он не работает
             if base_part in ranking_db:
                 del ranking_db[base_part]
+            if base_part in vetted_list:
+                vetted_list.remove(base_part)
             
             fail_time = history.get(base_part, now)
             
             if now - fail_time > 86400: 
-                print(f"🗑️ УДАЛЕН И ЗАБЛОКИРОВАН (оффлайн > 24ч): {host}")
-                # Пишем в блэклист, чтобы чекер больше его никогда не трогал
+                print(f"🗑️ УДАЛЕН И ЗАБЛОКИРОВАН (1 день оффлайн): {host}")
                 with open('test1/blacklist.txt', 'a') as bl:
                     bl.write(base_part + "\n")
-                # continue прерывает работу с этой ссылкой. 
-                # Она НЕ попадет в working_for_base и working_for_sub -> ИСЧЕЗНЕТ из файлов.
-                continue
+                continue 
     
-            # 3. СЦЕНАРИЙ: "ШАНС" (Упал недавно, попадает в GRACE_PERIOD)
             if now - fail_time < GRACE_PERIOD:
-                country = get_country_code(host, countries_cache)
-                # Оставляем только если страна нам подходит
+                country = get_country_code(host)
                 if country in ALLOWED_COUNTRIES:
-                    # Сохраняем в базу (1.txt), чтобы проверить в следующий раз
                     working_for_base.append(base_part)
-                    # Записываем в новую историю время падения (чтобы счетчик тикал дальше)
                     new_history[base_part] = fail_time
-                    
-                    # Добавляем в подписку с меткой ожидания
-                    temp_link = rebuild_link_name(link, f"⏳ wifi {counter}")
-                    working_for_sub.append(temp_link)
-                    
-                    print(f"⏳ DOWN ({country}): {host} (оставлен шанс, wifi {counter})")
-                    counter += 1
+                    print(f"⏸️ DOWN ({country}): {host} (в базу на перепроверку, reason={fail_reason})")
             else:
-                print(f"🗑️ Удален (тайм-аут): {host}")
+                print(f"🗑️ Удален (тайм-аут): {host}, reason={fail_reason}")
 
         # --- ВСЕ, ЧТО НЕ УСПЕЛИ ПРОВЕРИТЬ (если набрали 200 раньше конца списка) ---
         new_deferred = unique_links[idx:] 
