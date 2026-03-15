@@ -170,82 +170,73 @@ def process_all_controls(token, repo, vetted_list, pinned_list, ranking_db):
     executed_any = False
     env_gh = {**os.environ, "GH_TOKEN": token}
 
-    # 1. ЧИТАЕМ БАНЫ ИЗ issue_body.txt (СВЯЗАННОГО С ПАНЕЛЬЮ)
-    if os.path.exists('test1/issue_body.txt'):
-        try:
-            # Сначала проверяем, есть ли в GitHub вообще команда (нажата ли галочка)
-            cmd = ['gh', 'issue', 'list', '--repo', repo, '--label', 'control', '--json', 'body', '--limit', '1']
-            gh_data = json.loads(subprocess.check_output(cmd, env=env_gh))
-            
-            if gh_data and re.search(r'\[[xX]\]\s*💀\s*ПОДТВЕРДИТЬ_БАН', gh_data[0]['body']):
-                print("💀 Команда БАН обнаружена! Парсим ссылки...")
-                
-                # Парсим именно то, что пришло из GitHub (актуальные галочки)
-                checked = re.findall(r'-\s*\[[xX]\]\s*\'?(vless://[^\s\'\]]+)\'?', gh_data[0]['body'])
-                
-                for link in checked:
-                    base = link.split('#')[0].strip()
-                    add_to_blacklist(base)
-                    remove_from_all(base)
-                    if base in ranking_db: del ranking_db[base]
-                
-                executed_any = True
-        except Exception as e:
-            print(f"⚠️ Ошибка обработки issue_body: {e}")
+    # Вспомогательная функция для сбора всех отмеченных vless ссылок из текста
+    def get_checked_links(body):
+        # Ищем все строки, где есть [x] или [X], и забираем vless://...
+        # Игнорируем кавычки, скобки и прочее вокруг ссылки
+        return re.findall(r'\[[xX]\]\s*.*?\'?(vless://[^\s\'"`#]+)', body)
 
-    # 2. PIN/BAN КАНДИДАТОВ (LABEL: pin_control) 💎
+    # 1. ЧИТАЕМ БАНЫ (LABEL: control)
+    try:
+        cmd = ['gh', 'issue', 'list', '--repo', repo, '--label', 'control', '--json', 'body', '--limit', '1']
+        gh_data = json.loads(subprocess.check_output(cmd, env=env_gh))
+        
+        if gh_data and re.search(r'\[[xX]\]\s*💀\s*ПОДТВЕРДИТЬ_БАН', gh_data[0]['body']):
+            print("💀 Кнопка БАН нажата!")
+            links = get_checked_links(gh_data[0]['body'])
+            for link in links:
+                if "ПОДТВЕРДИТЬ_БАН" in link: continue # Пропускаем саму кнопку
+                base = link.split('#')[0].strip()
+                add_to_blacklist(base)
+                remove_from_all(base)
+                if base in ranking_db: del ranking_db[base]
+                executed_any = True
+    except Exception as e:
+        print(f"⚠️ Ошибка Blacklist: {e}")
+
+    # 2. PIN/BAN КАНДИДАТОВ (LABEL: pin_control)
     try:
         cmd = ['gh', 'issue', 'list', '--repo', repo, '--label', 'pin_control', '--json', 'body', '--limit', '1']
         data = json.loads(subprocess.check_output(cmd, env=env_gh))
-        # Важно: тут ПРИМЕНИТЬ_PIN_BAN (как в refresh_all_panels)
         if data and re.search(r'\[[xX]\]\s*✅\s*ПРИМЕНИТЬ_PIN_BAN', data[0]['body']):
-            to_pin = re.findall(r'\[[xX]\]\s*PIN_(vless://[^\s#`\n\r]+)', data[0]['body'])
-            to_ban = re.findall(r'\[[xX]\]\s*BAN_(vless://[^\s#`\n\r]+)', data[0]['body'])
+            print("✅ Кнопка PIN_BAN нажата!")
+            body = data[0]['body']
+            # Тут ищем специфические префиксы PIN_ и BAN_
+            to_pin = re.findall(r'\[[xX]\]\s*PIN_(vless://[^\s#`\n\r]+)', body)
+            to_ban = re.findall(r'\[[xX]\]\s*BAN_(vless://[^\s#`\n\r]+)', body)
             
-            affected = set()
-            if to_pin:
-                with open(PINNED_FILE, 'a', encoding='utf-8') as pf:
-                    for s in to_pin:
-                        base = s.split("#")[0].strip()
-                        # Проверка на дубли перед записью в pinned.txt
-                        if all(base != p.split("#")[0].strip() for p in pinned_list):
-                            pf.write(base + "\n")
-                            pinned_list.append(base)
-                            affected.add(base)
-                print(f"📌 [PIN] Закреплено: {len(to_pin)} шт.")
+            for s in to_pin:
+                base = s.split("#")[0].strip()
+                if all(base != p.split("#")[0].strip() for p in pinned_list):
+                    with open(PINNED_FILE, 'a', encoding='utf-8') as pf:
+                        pf.write(base + "\n")
+                    pinned_list.append(base)
+                executed_any = True
 
-            if to_ban:
-                for s in to_ban:
-                    base = s.split("#")[0].strip()
-                    add_to_blacklist(base)
-                    remove_from_all(base)
-                    affected.add(base)
-                print(f"🚫 [BAN] Удалено кандидатов: {len(to_ban)} шт.")
-            
-            if affected:
-                vetted_list = [v for v in vetted_list if v.split('#')[0].strip() not in affected]
-                for b in affected:
-                    if b in ranking_db: del ranking_db[b]
+            for s in to_ban:
+                base = s.split("#")[0].strip()
+                add_to_blacklist(base)
+                remove_from_all(base)
                 executed_any = True
     except Exception as e:
-        print(f"⚠️ Ошибка Pin/Ban парсера: {e}")
+        print(f"⚠️ Ошибка Pin/Ban: {e}")
 
-    # 3. РАЗЗАКРЕПЛЕНИЕ (LABEL: unpin_control) 🔓
+    # 3. РАЗЗАКРЕПЛЕНИЕ (LABEL: unpin_control)
     try:
         cmd = ['gh', 'issue', 'list', '--repo', repo, '--label', 'unpin_control', '--json', 'body', '--limit', '1']
         data = json.loads(subprocess.check_output(cmd, env=env_gh))
         if data and re.search(r'\[[xX]\]\s*🔓\s*ПОДТВЕРДИТЬ_РАСПИН', data[0]['body']):
-            # Учитываем кавычки
-            to_unpin = re.findall(r'-\s*\[[xX]\]\s*\'?(vless://[^\s\'\]]+)\'?', data[0]['body'])
-            if to_unpin:
-                unp_bases = {u.split("#")[0].strip() for u in to_unpin}
+            print("🔓 Кнопка РАСПИН нажата!")
+            links = get_checked_links(data[0]['body'])
+            unp_bases = {l.split("#")[0].strip() for l in links if "ПОДТВЕРДИТЬ_РАСПИН" not in l}
+            
+            if unp_bases:
                 pinned_list = [s for s in pinned_list if s.split("#")[0].strip() not in unp_bases]
                 with open(PINNED_FILE, 'w', encoding='utf-8') as pf:
                     pf.write("\n".join(pinned_list) + ("\n" if pinned_list else ""))
                 executed_any = True
-                print(f"🔓 [UNPIN] Раскреплено: {len(to_unpin)} шт.")
     except Exception as e:
-        print(f"⚠️ Ошибка Unpin парсера: {e}")
+        print(f"⚠️ Ошибка Unpin: {e}")
 
     return vetted_list, pinned_list, executed_any
 
