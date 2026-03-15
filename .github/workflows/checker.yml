@@ -16,14 +16,19 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
-    # Теперь запускаем, если:
-    # 1. Это запуск по расписанию (cron) или вручную (dispatch)
-    # 2. ИЛИ если редактируется любой из наших трех "пультов управления"
+    # --- МАГИЯ ЗДЕСЬ ---
     if: |
       github.event_name != 'issues' || 
-      contains(github.event.issue.labels.*.name, 'pin_control') ||
-      contains(github.event.issue.labels.*.name, 'control') ||
-      contains(github.event.issue.labels.*.name, 'unpin_control')
+      (
+        github.event.sender.login != 'github-actions[bot]' && 
+        contains(github.event.issue.body, '[x]') && 
+        (
+          contains(github.event.issue.body, 'ПОДТВЕРДИТЬ_БАН') ||
+          contains(github.event.issue.body, 'ПРИМЕНИТЬ_PIN_BAN') ||
+          contains(github.event.issue.body, 'ПОДТВЕРДИТЬ_РАСПИН')
+        )
+      )
+    # -------------------
     
     timeout-minutes: 360  
     permissions:
