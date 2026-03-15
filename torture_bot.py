@@ -145,7 +145,7 @@ def process_pin_commands(token, repo, vetted_list, ranking_db):
     
     try:
         # 1. Получаем Issue
-        cmd = ['gh', 'issue', 'list', '--repo', repo, '--label', 'pin_control', '--json', 'body', 'number', '--limit', '1']
+        cmd = ['gh', 'issue', 'list', '--repo', repo, '--label', 'pin_control', '--json', 'body,number', '--limit', '1']
         pin_read = subprocess.check_output(cmd, env={**os.environ, "GH_TOKEN": token}).decode()
         
         if not pin_read or pin_read == "[]":
