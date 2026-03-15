@@ -49,39 +49,35 @@ def refresh_all_panels(token, repo, ranking_db, vetted_list, pinned_list):
     update_time = time.strftime("%d.%m.%Y %H:%M:%S")
     env_gh = {**os.environ, "GH_TOKEN": token}
 
-    # 1. ПАНЕЛЬ ЧЕРНОГО СПИСКА (Кандидаты на бан из общего рейтинга)
+    # 1. ПАНЕЛЬ ЧЕРНОГО СПИСКА
     body_ctrl = f"### 🎮 Панель Blacklist\n🕒 `{update_time}`\n\n"
-    body_ctrl += "- [ ] 💀 **ПОДТВЕРДИТЬ_БАН** (Отметь и сохрани для запуска)\n\n---\n\n"
+    body_ctrl += "- [ ] 💀 **ПОДТВЕРДИТЬ_БАН**\n\n---\n\n"
     
-    # Берем первые 50 элементов из рейтинга
-    # Достаем полную ссылку из значения словаря
     for base, data in list(ranking_db.items())[:50]:
         full_link = data.get('link', base) if isinstance(data, dict) else base
-        body_ctrl += f"- [ ] {full_link}\n"
+        # Оборачиваем в кавычки, чтобы GitHub не портил ссылку
+        body_ctrl += f"- [ ] '{full_link}'\n" 
     
     update_issue(repo, 'control', body_ctrl, env_gh)
 
     # 2. ПАНЕЛЬ КАНДИДАТОВ В ЭЛИТУ
     body_pin = f"### 💎 Кандидаты в Элиту\n🕒 `{update_time}`\n\n"
-    body_pin += "- [ ] ✅ **ПРИМЕНИТЬ_PIN_BAN** (Отметь и сохрани для запуска)\n\n---\n\n"
+    body_pin += "- [ ] ✅ **ПРИМЕНИТЬ_PIN_BAN**\n\n---\n\n"
     
-    # Здесь vetted_list уже содержит полные ссылки, 
-    # поэтому просто используем элементы списка целиком
     for full_link in vetted_list:
-        # Для команд PIN/BAN лучше использовать чистую часть ссылки (base), 
-        # чтобы парсеру было проще, но отображать можно красиво
         base = full_link.split('#')[0].strip()
-        body_pin += f"📡 {full_link}:\n- [ ] PIN_{base}\n- [ ] BAN_{base}\n\n---\n"
+        # Показываем полную, но команду PIN/BAN крепим к базе
+        body_pin += f"📡 `{full_link}`:\n- [ ] PIN_{base}\n- [ ] BAN_{base}\n\n---\n"
     
     update_issue(repo, 'pin_control', body_pin, env_gh)
 
     # 3. ПАНЕЛЬ ЗАКРЕПОВ
     body_unp = f"### 👑 Управление Закрепами\n🕒 `{update_time}`\n\n"
-    body_unp += "- [ ] 🔓 **ПОДТВЕРДИТЬ_РАСПИН** (Отметь и сохрани для запуска)\n\n---\n\n"
+    body_unp += "- [ ] 🔓 **ПОДТВЕРДИТЬ_РАСПИН**\n\n---\n\n"
     
-    # pinned_list обычно уже содержит полные ссылки
     for full_link in pinned_list:
-        body_unp += f"- [ ] {full_link}\n"
+        # Аналогично — в кавычках для удобства
+        body_unp += f"- [ ] '{full_link}'\n"
         
     update_issue(repo, 'unpin_control', body_unp, env_gh)
 
@@ -402,8 +398,17 @@ def main_torturer():
         with open(RANK_FILE, 'w', encoding='utf-8') as f:
             json.dump(ranking_db, f, ensure_ascii=False, indent=4)
 
+    # --- ДИНАМИЧЕСКИЙ ФИЛЬТР ДЛЯ ПАНЕЛИ BLACKLIST ---
+    # Собираем все "защищенные" базы (закрепы + элита)
+    protected = {l.split('#')[0].strip() for l in pinned_list}
+    protected.update({l.split('#')[0].strip() for l in vetted_list})
+
+    # Оставляем только те, кого нет в защите
+    blacklist_view = {k: v for k, v in ranking_db.items() if k not in protected}
+
     print("📝 Обновляю панели в GitHub...")
-    refresh_all_panels(token, repo, ranking_db, vetted_list, pinned_list)
+    # ВАЖНО: передаем blacklist_view вместо всего ranking_db
+    refresh_all_panels(token, repo, blacklist_view, vetted_list, pinned_list)
 
     # --- ШАГ 4: ПЕРЕХОД К ПЫТКАМ ---
     if not ranking_db:
@@ -516,7 +521,14 @@ def main_torturer():
     
     # ФИНАЛЬНЫЙ СИНХРОН С GITHUB
     print("🔄 Финальное обновление панелей после инспекции...")
-    refresh_all_panels(token, repo, list(ranking_db.keys()), vetted_list, pinned_list)
+    
+    # Снова фильтруем, так как после пыток ranking_db и vetted_list изменились
+    protected = {l.split('#')[0].strip() for l in pinned_list}
+    protected.update({l.split('#')[0].strip() for l in vetted_list})
+    blacklist_view = {k: v for k, v in ranking_db.items() if k not in protected}
+
+    # Передаем отфильтрованный результат
+    refresh_all_panels(token, repo, blacklist_view, vetted_list, pinned_list)
     
 if __name__ == "__main__":
     main_torturer()
