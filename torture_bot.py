@@ -61,15 +61,15 @@ def refresh_control_panel(token, repo):
         
         # Добавляем мастер-галочку
         new_body += "🚨 **ПОДТВЕРЖДЕНИЕ ДЕЙСТВИЙ:**\n"
-        new_body += "- [ ] ✅ **ПРИМЕНИТЬ ВЫБРАННЫЕ PIN/BAN**\n"
-        new_body += "> _Без этой галочки команды будут проигнорированы_\n\n---\n\n"
+        new_body += "- [ ] ✅ **ПРИМЕНИТЬ ВЫБРАННЫЕ PIN/BAN**\n" 
+        new_body += "> _Нажмите все нужные PIN/BAN, а затем ЭТУ галочку для запуска_\n\n---\n\n"
         
         if not vetted_links:
             new_body += "_Пока элитных кандидатов нет. Все обработаны или список пуст._"
         else:
             for i, link in enumerate(vetted_links, 1):
                 new_body += f"📡 **Элита {i}:**\n"
-                new_body += f"- [ ] PIN_{link}\n"
+                new_body += f"- [ ] PIN_{link}\n" # Рисуем пустым
                 new_body += f"- [ ] BAN_{link}\n\n---\n\n"
 
         # 3. Обновление через GH CLI
@@ -140,36 +140,39 @@ def load_stress_config():
     return config
 
 def process_pin_commands(token, repo, vetted_list, ranking_db):
-    """
-    Считывает команды из Issue и переносит серверы между списками, 
-    очищая ranking_db от обработанных элементов.
-    """
     if not token or not repo:
-        return vetted_list
+        return vetted_list, False # Добавляем флаг "было ли выполнение"
     
     try:
-        # 1. Получаем тело Issue через GitHub CLI
-        cmd = ['gh', 'issue', 'list', '--repo', repo, '--label', 'pin_control', '--json', 'body', '--limit', '1']
+        # 1. Получаем Issue
+        cmd = ['gh', 'issue', 'list', '--repo', repo, '--label', 'pin_control', '--json', 'body', 'number', '--limit', '1']
         pin_read = subprocess.check_output(cmd, env={**os.environ, "GH_TOKEN": token}).decode()
         
         if not pin_read or pin_read == "[]":
-            return vetted_list
-        body = json.loads(pin_read)[0]['body']
+            return vetted_list, False
+            
+        issue_info = json.loads(pin_read)[0]
+        body = issue_info['body']
+        issue_number = issue_info['number']
 
-        # --- БЛОК ЗАЩИТЫ ---
+        # --- КРИТИЧЕСКАЯ ЗАЩИТА ---
+        # Проверяем ТОЛЬКО наличие [x] в мастер-галочке
         if not re.search(r'\[[xX]\]\s*✅\s*ПРИМЕНИТЬ', body):
-            print("🛡️ Команды PIN/BAN выбраны, но мастер-галочка не нажата. Пропускаю выполнение.")
-            return vetted_list
+            # Если мастер-галочка не нажата, выходим мгновенно
+            return vetted_list, False
         # -------------------
         
-        # ОБНОВЛЕННЫЕ РЕГУЛЯРКИ ПОД НОВУЮ ПАНЕЛЬ
+        # Если дошли сюда, значит ПРИМЕНИТЬ нажато. 
+        # Теперь ищем команды PIN и BAN
         to_pin = re.findall(r'\[[xX]\]\s*PIN_(vless://[^\s#`]+)', body)
         to_ban = re.findall(r'\[[xX]\]\s*BAN_(vless://[^\s#`]+)', body)
 
         if not to_pin and not to_ban:
-            return vetted_list
+            # Мастер-галочка нажата, но команды не выбраны? 
+            # Можно либо выйти, либо сбросить мастер-галочку.
+            return vetted_list, False
 
-        print(f"🕵️ Pin-Control: Найдено {len(to_pin)} PIN и {len(to_ban)} BAN (через клики [x])")
+        print(f"⚡ ИСПОЛНЕНИЕ: Найдено {len(to_pin)} PIN и {len(to_ban)} BAN")
         affected_bases = set()
 
         # --- ОБРАБОТКА PIN (В закрепы) ---
@@ -214,10 +217,11 @@ def process_pin_commands(token, repo, vetted_list, ranking_db):
                 else:
                     vf.write("") # Если список стал пустым
 
+        return vetted_list, True
+
     except Exception as e:
         print(f"⚠️ Ошибка в process_pin_commands: {e}")
-    
-    return vetted_list
+        return vetted_list, False
 
 def get_country(host):
     if not os.path.exists(COUNTRY_CACHE_FILE):
@@ -358,16 +362,31 @@ def main_torturer():
             vetted_list = [l.strip() for l in f if 'vless' in l]
 
     # ВЫЗЫВАЕМ ТУТ И ПЕРЕДАЕМ СПИСОК, А НЕ ПУСТЫЕ СКОБКИ []
-    vetted_list = process_pin_commands(token, repo, vetted_list, ranking_db)
+    vetted_list, executed = process_pin_commands(TOKEN, REPO, vetted_list, ranking_db)
 
-    # Сохраняем возможные правки из process_pin_commands
-    with open(RANK_FILE, 'w', encoding='utf-8') as f:
-        json.dump(ranking_db, f, ensure_ascii=False, indent=4)
+    if executed:
+        print("🧹 Команды выполнены, очищаю панель и сохраняю файлы...")
+        # Обновляем панель (рисуем пустые галочки)
+        refresh_control_panel(token, repo)
+        
+        # Сохраняем обновленный vetted.txt (после удаления из него PIN/BAN серверов)
+        with open(VETTED_FILE, 'w', encoding='utf-8') as vf:
+            if vetted_list:
+                vf.write("\n".join(vetted_list) + "\n")
+            else:
+                vf.write("")
+        
+        # Сохраняем обновленную базу (без удаленных серверов)
+        with open(RANK_FILE, 'w', encoding='utf-8') as f:
+            json.dump(ranking_db, f, ensure_ascii=False, indent=4)
+    else:
+        print("⏳ Скип: Мастер-галочка не активна. Пытки продолжатся в штатном режиме.")
 
 # Вместо резкого return используем проверку
     if not ranking_db: 
-        print("⌛ База пуста. Пытки отменяются, но команды GitHub выполнены.")
-        if token and repo:
+        print("⌛ База пуста. Пытать некого.")
+        # Если панель еще не была обновлена выше, а база пуста — можно обновить сейчас
+        if not executed:
             refresh_control_panel(token, repo)
         return
 
