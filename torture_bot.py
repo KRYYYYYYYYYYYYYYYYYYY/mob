@@ -65,28 +65,44 @@ def add_to_blacklist(base_part):
             f.write(base_part + "\n")
         print(f"💀 [BLACKLIST] Забанен: {base_part[:30]}...")
 
+def update_issue_from_file(repo, label, file_path, env):
+    try:
+        cmd_get = ['gh', 'issue', 'list', '--repo', repo, '--label', label, '--json', 'number']
+        data = json.loads(subprocess.check_output(cmd_get, env=env))
+        if data:
+            num = str(data[0]['number'])
+            subprocess.run([
+                'gh', 'issue', 'edit', num, 
+                '--repo', repo, 
+                '--body-file', file_path
+            ], env=env, check=True)
+    except Exception as e:
+        print(f"⚠️ Ошибка загрузки {file_path} в GitHub: {e}")
+
 
 def refresh_all_panels(token, repo, ranking_db, vetted_list, pinned_list):
     update_time = time.strftime("%d.%m.%Y %H:%M:%S")
     env_gh = {**os.environ, "GH_TOKEN": token}
-
-    # --- 1. ПАНЕЛЬ ЧЕРНОГО СПИСКА (Теперь из WIFI.TXT целиком) ---
+    
+    # --- 1. ПАНЕЛЬ ЧЕРНОГО СПИСКА (issue_body.txt) ---
     body_ctrl = f"### 🎮 Панель Blacklist (Весь wifi.txt)\n🕒 `{update_time}`\n\n"
     body_ctrl += "- [ ] 💀 **ПОДТВЕРДИТЬ_БАН**\n\n---\n\n"
     
-    # ПОЛУЧАЕМ ВЕСЬ СПИСОК ИЗ WIFI.TXT (кроме закрепов)
-    wifi_to_ban = get_wifi_candidates(pinned_list)
-    
+    wifi_to_ban = get_wifi_candidates(pinned_list) # Получаем ВСЁ из wifi.txt
     if wifi_to_ban:
         for full_link in wifi_to_ban:
-            # Оборачиваем в кавычки для надежности регулярки в парсере
             body_ctrl += f"- [ ] '{full_link}'\n"
     else:
-        body_ctrl += "_Список пуст (все сервера в закрепе или файл пуст)_\n"
-    
-    update_issue(repo, 'control', body_ctrl, env_gh)
+        body_ctrl += "_Список пуст_\n"
 
-    # --- 2. ПАНЕЛЬ КАНДИДАТОВ В ЭЛИТУ (Оставляем как есть) ---
+    # СОХРАНЯЕМ В ТОТ САМЫЙ ФАЙЛ
+    with open('test1/issue_body.txt', 'w', encoding='utf-8') as f:
+        f.write(body_ctrl)
+    
+    # Обновляем Issue в GitHub, используя этот файл
+    update_issue_from_file(repo, 'control', 'test1/issue_body.txt', env_gh)
+
+    # --- 2. ПАНЕЛЬ КАНДИДАТОВ (как и раньше) ---
     body_pin = f"### 💎 Кандидаты в Элиту\n🕒 `{update_time}`\n\n"
     body_pin += "- [ ] ✅ **ПРИМЕНИТЬ_PIN_BAN**\n\n---\n\n"
     for full_link in vetted_list:
@@ -151,27 +167,31 @@ def load_stress_config():
     return config
 
 def process_all_controls(token, repo, vetted_list, pinned_list, ranking_db):
-    """Считывает команды из всех панелей и вносит правки в списки."""
     executed_any = False
     env_gh = {**os.environ, "GH_TOKEN": token}
 
-    # 1. ЧЕРНЫЙ СПИСОК (LABEL: control) 💀 - Теперь чистит wifi.txt
-    try:
-        cmd = ['gh', 'issue', 'list', '--repo', repo, '--label', 'control', '--json', 'body', '--limit', '1']
-        data = json.loads(subprocess.check_output(cmd, env=env_gh))
-        if data and re.search(r'\[[xX]\]\s*💀\s*ПОДТВЕРДИТЬ_БАН', data[0]['body']):
-            # Регулярка теперь учитывает возможные кавычки вокруг ссылки
-            checked = re.findall(r'-\s*\[[xX]\]\s*\'?(vless://[^\s\'\]]+)\'?', data[0]['body'])
-            if checked:
+    # 1. ЧИТАЕМ БАНЫ ИЗ issue_body.txt (СВЯЗАННОГО С ПАНЕЛЬЮ)
+    if os.path.exists('test1/issue_body.txt'):
+        try:
+            # Сначала проверяем, есть ли в GitHub вообще команда (нажата ли галочка)
+            cmd = ['gh', 'issue', 'list', '--repo', repo, '--label', 'control', '--json', 'body', '--limit', '1']
+            gh_data = json.loads(subprocess.check_output(cmd, env=env_gh))
+            
+            if gh_data and re.search(r'\[[xX]\]\s*💀\s*ПОДТВЕРДИТЬ_БАН', gh_data[0]['body']):
+                print("💀 Команда БАН обнаружена! Парсим ссылки...")
+                
+                # Парсим именно то, что пришло из GitHub (актуальные галочки)
+                checked = re.findall(r'-\s*\[[xX]\]\s*\'?(vless://[^\s\'\]]+)\'?', gh_data[0]['body'])
+                
                 for link in checked:
                     base = link.split('#')[0].strip()
                     add_to_blacklist(base)
-                    remove_from_all(base) # Удаляет из wifi.txt, 1.txt и т.д.
+                    remove_from_all(base)
                     if base in ranking_db: del ranking_db[base]
+                
                 executed_any = True
-                print(f"💀 [CONTROL] Забанено из wifi.txt: {len(checked)} шт.")
-    except Exception as e:
-        print(f"⚠️ Ошибка Blacklist парсера: {e}")
+        except Exception as e:
+            print(f"⚠️ Ошибка обработки issue_body: {e}")
 
     # 2. PIN/BAN КАНДИДАТОВ (LABEL: pin_control) 💎
     try:
