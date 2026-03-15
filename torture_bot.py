@@ -142,7 +142,7 @@ def refresh_all_panels(token, repo, ranking_db, vetted_list, pinned_list):
 
 # --- ХИРУРГИЧЕСКОЕ УДАЛЕНИЕ ---
 def remove_from_all(base_part):
-    for path in [WIFI_FILE, DEFERRED_FILE, INPUT_FILE]: 
+    for path in [WIFI_FILE, DEFERRED_FILE, INPUT_FILE, VETTED_FILE]: 
         if os.path.exists(path):
             with open(path, 'r', encoding='utf-8') as f:
                 lines = f.readlines()
