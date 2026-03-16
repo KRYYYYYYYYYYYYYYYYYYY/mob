@@ -323,8 +323,7 @@ def main_monitor():
                 "# remark: 🏳️Мобильный инет🏳️",
                 "# announce: Подписка для использования ТОЛЬКО на мобильном интернете в условиях БЕЛЫХ СПИСКОВ!",
                 "# profile-update-interval: 2",
-                "# subscription-userinfo: upload=0; download=0; expire=0",
-                "# shadowrocket-userinfo: upload=0; download=0; expire=0",
+                "#providerid ioZjl2e1",
             ]
 
         # Записываем всё обратно
