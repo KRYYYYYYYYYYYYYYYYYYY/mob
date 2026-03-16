@@ -546,11 +546,24 @@ def main_torturer():
     # Обновляем панели ТОЛЬКО если что-то реально произошло
     print("📝 Обновляю панели в GitHub...")
     refresh_all_panels(token, repo, ranking_db, vetted_list, pinned_list)
-    
-    # Если это не расписание и команд не было — на пытки не идем, но панели уже обновлены!
-    if not executed and not is_scheduled:
-        print("☕ Панели обновлены. Пытки пропущены (нет команд/расписания).")
+
+    # --- ВОТ СЮДА ВСТАВЛЯЕМ ПРИОРИТЕТ ВЫПОЛНЕНИЯ ISSUES ---
+
+    # 1. Если была нажата кнопка (executed), мы уже всё сделали.
+    # Выходим, чтобы не запускать пытки, которые длятся часами.
+    if executed:
+        print("✅ Команды из Issues выполнены, панели обновлены. Завершаю работу (Priority: Issues).")
+        commit_and_push()
         return 
+
+    # 2. Если это запуск по расписанию (schedule), то идем пытать.
+    if is_scheduled:
+        print("⏰ Запуск по расписанию. Перехожу к инспекции (пыткам)...")
+    else:
+        # Если это ручной запуск (workflow_dispatch) без нажатых кнопок — тоже выходим
+        print("☕ Команд нет, расписания нет. Пытки не требуются. Выход.")
+        commit_and_push() # На всякий случай пушим, если были мелкие правки
+        return
 
     # --- ШАГ 4: ДАЛЬШЕ ИДУТ ПЫТКИ ---
     print("🚀 Начинаю инспекцию серверов...")
@@ -587,6 +600,11 @@ def main_torturer():
             else:
                 print(f"♻️ Пропуск дубля по IP: {addr}")
 
+    # ВОТ СЮДА ВСТАВЛЯЙ:
+    print(f"DEBUG: Всего кандидатов после фильтрации: {len(candidates)}")
+    if not candidates:
+        print("DEBUG: Пытать некого, все отфильтровано.")
+
     if candidates:
         def run_torture(item):
             base, full_link = item
@@ -614,7 +632,7 @@ def main_torturer():
             except Exception:
                 return base, full_link, False, "ERROR", 0, 0
 
-        with ThreadPoolExecutor(max_workers=5) as executor:
+        with ThreadPoolExecutor(max_workers=15) as executor:
             # Передавай конфиг явно в каждый поток
             results = list(executor.map(run_torture, candidates))
 
