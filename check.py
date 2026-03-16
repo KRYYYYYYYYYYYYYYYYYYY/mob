@@ -653,23 +653,7 @@ def main():
         new_deferred = unique_links[idx:] 
     # --- КОНЕЦ ЦИКЛА ПРОВЕРКИ ---
 
-    # --- РАСПРЕДЕЛЕНИЕ ПО КАТЕГОРИЯМ ---
-    all_favorites = [l for l in working_for_sub if "⭐" in l]
-    all_pinned = [l for l in working_for_sub if "💎" in l]
-    all_others = [l for l in working_for_sub if "⭐" not in l and "💎" not in l]
-    
-    final_to_sub = []
-    seen_in_final = set()
-    
-    # 1. Приоритет ⭐ (без лимита внутри общего 200)
-    for l in all_favorites:
-        if len(final_to_sub) >= 200: break
-        base = l.split("#")[0].strip()
-        if base not in seen_in_final:
-            final_to_sub.append(l)
-            seen_in_final.add(base)
-
-    # 2. Приоритет 💎 (Лимит 130)
+    # 1. ПРИОРИТЕТ №1: 💎 ЗАКРЕПЛЕННЫЕ (Самый верх, лимит 130)
     for l in all_pinned:
         if len(final_to_sub) >= 130: break
         base = l.split("#")[0].strip()
@@ -677,7 +661,15 @@ def main():
             final_to_sub.append(l)
             seen_in_final.add(base)
 
-    # 3. Приоритет mob (до 200)
+    # 2. ПРИОРИТЕТ №2: ⭐ ИЗБРАННЫЕ (Сразу после закрепов)
+    for l in all_favorites:
+        if len(final_to_sub) >= 200: break
+        base = l.split("#")[0].strip()
+        if base not in seen_in_final:
+            final_to_sub.append(l)
+            seen_in_final.add(base)
+
+    # 3. ПРИОРИТЕТ №3: ОБЫЧНЫЕ mob (Добиваем до 200)
     for l in all_others:
         if len(final_to_sub) >= 200: break
         base = l.split("#")[0].strip()
