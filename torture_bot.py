@@ -108,6 +108,13 @@ def update_issue_from_file(repo, label, file_path, env):
 def refresh_all_panels(token, repo, ranking_db, vetted_list, pinned_list):
     update_time = time.strftime("%d.%m.%Y %H:%M:%S")
     env_gh = {**os.environ, "GH_TOKEN": token}
+
+    # --- 0. ПРЕДВАРИТЕЛЬНАЯ ЗАГРУЗКА ИЗБРАННОГО ---
+    # Это решает проблему UnboundLocalError
+    fav_list = []
+    if os.path.exists(FAVORITES_FILE):
+        with open(FAVORITES_FILE, 'r', encoding='utf-8') as f:
+            fav_list = [l.strip() for l in f if 'vless' in l]
     
     # --- 1. ПАНЕЛЬ ЧЕРНОГО СПИСКА ---
     body_ctrl = f"### 🎮 Панель Blacklist (Весь wifi.txt)\n🕒 `{update_time}`\n\n"
