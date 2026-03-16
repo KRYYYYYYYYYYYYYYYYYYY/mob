@@ -636,7 +636,7 @@ def main():
     # 2. Сначала берем закрепы (Приоритет №1)
     # Лимит 50 штук
     for l in all_pinned:
-        if len(final_to_sub) >= 50: break
+        if len(final_to_sub) >= 80: break
         base = l.split("#")[0].strip()
         if base not in seen_in_final:
             final_to_sub.append(l)
@@ -692,7 +692,7 @@ def main():
         if l.split("#")[0].strip() in pinned_bases
     )
     
-    print(f"💎 Закрепленных в подписке: {count_pinned} (из лимита 50)")
+    print(f"💎 Закрепленных в подписке: {count_pinned} (из лимита 80)")
     print(f"✅ Всего в wifi.txt: {len(final_to_sub)} (из лимита 200)")
     
     # 3. Сохранение (ТВОЙ БЛОК БЕЗ ИЗМЕНЕНИЙ НАДПИСЕЙ)
