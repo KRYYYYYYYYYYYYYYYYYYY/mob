@@ -19,6 +19,7 @@ BLACKLIST_FILE = 'test1/blacklist.txt'
 WIFI_FILE = 'kr/mob/wifi.txt'
 DEFERRED_FILE = 'test1/deferred.txt'
 INPUT_FILE = 'test1/1.txt'
+FAVORITES_FILE = 'test1/favorites.txt'
 PROFILE_FILE = 'test1/stress_profile.json'
 COUNTRY_CACHE_FILE = 'test1/countries_cache.json'
 THRESHOLD = 50
@@ -61,7 +62,7 @@ def commit_and_push():
         subprocess.run(['git', 'config', 'user.email', 'github-actions[bot]@users.noreply.github.com'], check=True)
         
         # Добавляем все измененные файлы
-        subprocess.run(['git', 'add', WIFI_FILE, BLACKLIST_FILE, VETTED_FILE, RANK_FILE, PINNED_FILE], check=True)
+        subprocess.run(['git', 'add', WIFI_FILE, BLACKLIST_FILE, VETTED_FILE, RANK_FILE, PINNED_FILE, FAVORITES_FILE], check=True)
         
         # Проверяем, есть ли что коммитить
         status = subprocess.run(['git', 'diff', '--cached', '--quiet'])
@@ -142,6 +143,26 @@ def refresh_all_panels(token, repo, ranking_db, vetted_list, pinned_list):
         # УБРАЛИ КАВЫЧКИ
         body_unp += f"- [ ] {full_link.strip()}\n"
     update_issue(repo, 'unpin_control', body_unp, env_gh)
+
+    # --- 4. ПАНЕЛЬ ИЗБРАННОЕ (Возможные) ---
+    fav_list = []
+    if os.path.exists(FAVORITES_FILE):
+        with open(FAVORITES_FILE, 'r', encoding='utf-8') as f:
+            fav_list = [l.strip() for l in f if 'vless' in l]
+    
+    fav_bases = {l.split('#')[0].strip() for l in fav_list}
+    
+    body_fav = f"### ⭐ Избранные серверы (Возможные)\n🕒 `{update_time}`\n\n"
+    body_fav += "- [ ] 🏆 **ПОДТВЕРДИТЬ_ИЗБРАННОЕ**\n\n---\n\n"
+    
+    all_candidates = get_wifi_candidates([]) # Получаем все из wifi.txt
+    for link in all_candidates:
+        base = link.split('#')[0].strip()
+        # Если сервер уже в избранном — рисуем закрашенный чекбокс
+        mark = "[x]" if base in fav_bases else "[ ]"
+        body_fav += f"- {mark} {link.strip()}\n"
+    
+    update_issue(repo, 'fav_control', body_fav, env_gh)
 
 # --- ХИРУРГИЧЕСКОЕ УДАЛЕНИЕ ---
 def remove_from_all(base_part):
@@ -258,6 +279,47 @@ def process_all_controls(token, repo, vetted_list, pinned_list, ranking_db):
                     with open(PINNED_FILE, 'w', encoding='utf-8') as pf:
                         pf.write("\n".join(pinned_list) + ("\n" if pinned_list else ""))
                     executed_any = True
+
+        # --- 4. УПРАВЛЕНИЕ ИЗБРАННЫМ (Label: fav_control) ---
+        out = subprocess.check_output(['gh', 'issue', 'list', '--repo', repo, '--label', 'fav_control', '--json', 'body'], env=env_gh)
+        data = json.loads(out)
+        if data:
+            body = data[0]['body']
+            if "ПОДТВЕРДИТЬ_ИЗБРАННОЕ" in body and "[x]" in body:
+                # Читаем текущее избранное
+                current_favs = []
+                if os.path.exists(FAVORITES_FILE):
+                    with open(FAVORITES_FILE, 'r', encoding='utf-8') as f:
+                        current_favs = [l.strip() for l in f if 'vless' in l]
+                
+                # Собираем ВСЕ строки с чекбоксами из Issue
+                new_fav_list = []
+                for line in body.splitlines():
+                    if 'vless://' in line and ('- [x]' in line or '- [ ]' in line):
+                        is_checked = '- [x]' in line
+                        # Извлекаем чистую ссылку (убираем чекбокс)
+                        link = line.split('vless://', 1)[1].strip()
+                        full_link = 'vless://' + link
+                        
+                        if is_checked:
+                            # Добавляем смайл ⭐ в название, если его там нет
+                            if '#' in full_link:
+                                parts = full_link.split('#', 1)
+                                if not parts[1].strip().startswith('⭐'):
+                                    full_link = f"{parts[0]}#⭐ {parts[1].strip()}"
+                            else:
+                                full_link += "#⭐ Избранное"
+                            new_fav_list.append(full_link)
+                        else:
+                            # Если галочки нет, но в ссылке есть наш смайл — убираем его
+                            if '⭐' in full_link:
+                                full_link = full_link.replace('⭐ ', '').replace('⭐', '')
+                            # Мы НЕ добавляем его в new_fav_list, так как галочка снята
+
+                # Сохраняем обновленный список избранного
+                with open(FAVORITES_FILE, 'w', encoding='utf-8') as f:
+                    f.write("\n".join(new_fav_list) + ("\n" if new_fav_list else ""))
+                executed_any = True
 
     except Exception as e:
         print(f"⚠️ Ошибка обработки команд: {e}")
