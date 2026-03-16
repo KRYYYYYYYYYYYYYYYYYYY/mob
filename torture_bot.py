@@ -108,30 +108,33 @@ def update_issue_from_file(repo, label, file_path, env):
 def refresh_all_panels(token, repo, ranking_db, vetted_list, pinned_list):
     update_time = time.strftime("%d.%m.%Y %H:%M:%S")
     env_gh = {**os.environ, "GH_TOKEN": token}
-
-    # --- 0. ПРЕДВАРИТЕЛЬНАЯ ЗАГРУЗКА ИЗБРАННОГО ---
-    # Это решает проблему UnboundLocalError
+    
+    # --- ШАГ 0: ГЛОБАЛЬНАЯ ПОДГОТОВКА ДАННЫХ ДЛЯ ВСЕХ ПАНЕЛЕЙ ---
     fav_list = []
     if os.path.exists(FAVORITES_FILE):
         with open(FAVORITES_FILE, 'r', encoding='utf-8') as f:
             fav_list = [l.strip() for l in f if 'vless' in l]
     
-    # --- 1. ПАНЕЛЬ ЧЕРНОГО СПИСКА ---
+    # Мы создаем fav_bases здесь, в самом начале, 
+    # чтобы переменная была видна во всей функции
+    fav_bases = {l.split('#')[0].strip() for l in fav_list}
+
+    # --- 1. ПАНЕЛЬ ЧЕРНОГО СПИСКА (control) ---
     body_ctrl = f"### 🎮 Панель Blacklist (Весь wifi.txt)\n🕒 `{update_time}`\n\n"
     body_ctrl += "- [ ] 💀 **ПОДТВЕРДИТЬ_БАН**\n\n---\n\n"
-    # Теперь передаем оба списка, чтобы не предлагать забанить то, что в избранном или закрепе
+    
+    # Теперь и fav_list, и pinned_list доступны для фильтрации
     wifi_to_ban = get_wifi_candidates(pinned_list, fav_list)
+    
     if wifi_to_ban:
         for full_link in wifi_to_ban:
             body_ctrl += f"- [ ] {full_link.strip()}\n"
     else:
         body_ctrl += "_Список пуст_\n"
 
-    # СОХРАНЯЕМ В ТОТ САМЫЙ ФАЙЛ
+    # Сохранение и обновление Issue...
     with open('test1/issue_body.txt', 'w', encoding='utf-8') as f:
         f.write(body_ctrl)
-    
-    # Обновляем Issue в GitHub, используя этот файл
     update_issue_from_file(repo, 'control', 'test1/issue_body.txt', env_gh)
 
    # --- 2. ПАНЕЛЬ КАНДИДАТОВ ---
