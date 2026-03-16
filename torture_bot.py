@@ -156,28 +156,27 @@ def refresh_all_panels(token, repo, ranking_db, vetted_list, pinned_list):
         body_unp += f"- [ ] {full_link.strip()}\n"
     update_issue(repo, 'unpin_control', body_unp, env_gh)
 
-    # --- 4. ПАНЕЛЬ ИЗБРАННОЕ (Возможные) ---
-    # Переменные fav_list и fav_bases уже должны быть загружены в начале функции
-    
-    body_fav = f"### ⭐ Избранные серверы (Возможные)\n🕒 `{update_time}`\n\n"
+    # --- 4. ПАНЕЛЬ ИЗБРАННОЕ ---
+    body_fav = f"### ⭐ Избранные серверы\n🕒 `{update_time}`\n\n"
     body_fav += "- [ ] 🏆 **ПОДТВЕРДИТЬ_ИЗБРАННОЕ**\n\n---\n\n"
     
-    # Используем нашу исправленную функцию, которая исключает закрепы и текущее избранное
-    all_candidates = get_wifi_candidates(pinned_list, fav_list) 
+    # Загружаем текущие избранные базы, чтобы знать, где оставить [x]
+    current_fav_bases = {l.split('#')[0].strip() for l in fav_list}
+    
+    # Получаем кандидатов (те, кто в wifi.txt, но не в закрепах)
+    all_candidates = get_wifi_candidates(pinned_list, []) 
     
     if all_candidates:
         for link in all_candidates:
             link_clean = link.strip()
-            # Нам нужно проверить базу ссылки, чтобы понять, стоит ли уже крестик
-            current_base = link_clean.split('#')[0].strip()
+            base_part = link_clean.split('#')[0].strip()
             
-            # Если сервер по какой-то причине уже в fav_bases, ставим [x], иначе [ ]
-            mark = "[x]" if current_base in fav_bases else "[ ]"
+            # ЛОГИКА СОХРАНЕНИЯ ГАЛОЧКИ:
+            # Если база ссылки уже есть в файле favorites.txt, ставим [x]
+            mark = "[x]" if base_part in current_fav_bases else "[ ]"
             body_fav += f"- {mark} {link_clean}\n"
     else:
-        body_fav += "_Нет новых кандидатов для избранного_\n"
-    
-    update_issue(repo, 'fav_control', body_fav, env_gh)
+        body_fav += "_Нет кандидатов_\n"
 
 # --- ХИРУРГИЧЕСКОЕ УДАЛЕНИЕ ---
 def remove_from_all(base_part):
