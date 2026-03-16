@@ -160,23 +160,31 @@ def refresh_all_panels(token, repo, ranking_db, vetted_list, pinned_list):
     body_fav = f"### ⭐ Избранные серверы\n🕒 `{update_time}`\n\n"
     body_fav += "- [ ] 🏆 **ПОДТВЕРДИТЬ_ИЗБРАННОЕ**\n\n---\n\n"
     
-    # Загружаем текущие избранные базы, чтобы знать, где оставить [x]
-    current_fav_bases = {l.split('#')[0].strip() for l in fav_list}
-    
-    # Получаем кандидатов (те, кто в wifi.txt, но не в закрепах)
+    # 1. Загружаем то, что уже лежит в избранном (база : полная_строка_со_звездой)
+    fav_map = {}
+    if os.path.exists(FAVORITES_FILE):
+        with open(FAVORITES_FILE, 'r', encoding='utf-8') as f:
+            for l in f:
+                if 'vless://' in l:
+                    base = l.split('#')[0].strip()
+                    fav_map[base] = l.strip()
+
+    # 2. Получаем всех кандидатов из wifi.txt (за вычетом закрепов)
     all_candidates = get_wifi_candidates(pinned_list, []) 
     
-    if all_candidates:
-        for link in all_candidates:
-            link_clean = link.strip()
-            base_part = link_clean.split('#')[0].strip()
-            
-            # ЛОГИКА СОХРАНЕНИЯ ГАЛОЧКИ:
-            # Если база ссылки уже есть в файле favorites.txt, ставим [x]
-            mark = "[x]" if base_part in current_fav_bases else "[ ]"
-            body_fav += f"- {mark} {link_clean}\n"
-    else:
-        body_fav += "_Нет кандидатов_\n"
+    for link in all_candidates:
+        link_clean = link.strip()
+        base = link_clean.split('#')[0].strip()
+        
+        # Если база сервера есть в нашем fav_map — значит он избранный
+        if base in fav_map:
+            # Рисуем КРЕСТИК и берем имя со звездой из карты
+            body_fav += f"- [x] {fav_map[base]}\n"
+        else:
+            # Рисуем ПУСТОЙ чекбокс и обычную ссылку
+            body_fav += f"- [ ] {link_clean}\n"
+    
+    update_issue(repo, 'fav_control', body_fav, env_gh)
 
 # --- ХИРУРГИЧЕСКОЕ УДАЛЕНИЕ ---
 def remove_from_all(base_part):
@@ -299,42 +307,52 @@ def process_all_controls(token, repo, vetted_list, pinned_list, ranking_db):
         data = json.loads(out)
         if data:
             body = data[0]['body']
-            # Проверяем кнопку подтверждения (любой регистр X)
             if "ПОДТВЕРДИТЬ_ИЗБРАННОЕ" in body and "[x]" in body.lower():
                 new_fav_list = []
-                
+                checked_bases = {} # Словарь {база: новое_имя_со_звездой}
+
                 for line in body.splitlines():
-                    # Ищем строку с vless и чекбоксом через регулярку
-                    match = re.search(r'- \[[xX ]\]\s+(vless://[^\n\r]+)', line)
+                    match = re.search(r'- \[[xX ]\]\s+(vless://[^\n\r#]+)(?:#([^\n\r]+))?', line)
                     if match:
-                        full_link = match.group(1).strip()
+                        base_part = match.group(1).strip()
+                        raw_name = match.group(2).strip() if match.group(2) else "Server"
                         is_checked = '- [x]' in line.lower()
                         
-                        # Разбираем ссылку на адрес и имя
-                        if '#' in full_link:
-                            base_part, name_part = full_link.split('#', 1)
-                        else:
-                            base_part = full_link
-                            name_part = "Избранное"
-                        
-                        # Чистим имя от старых звезд и пробелов
-                        name_part = name_part.replace('⭐', '').strip()
+                        clean_name = raw_name.replace('⭐', '').strip()
                         
                         if is_checked:
-                            # Лепим звезду только тем, кто отмечен
-                            new_link = f"{base_part}#⭐ {name_part}"
+                            new_name = f"⭐ {clean_name}"
+                            new_link = f"{base_part}#{new_name}"
                             new_fav_list.append(new_link)
+                            checked_bases[base_part] = new_name
 
-                # Перезаписываем файл избранного
+                # 1. Сохраняем в favorites.txt
                 with open(FAVORITES_FILE, 'w', encoding='utf-8') as f:
                     f.write("\n".join(new_fav_list) + ("\n" if new_fav_list else ""))
-                
-                print(f"⭐ Обновлено избранное: {len(new_fav_list)} серверов.")
-                executed_any = True
 
-                # Сохраняем обновленный список избранного
-                with open(FAVORITES_FILE, 'w', encoding='utf-8') as f:
-                    f.write("\n".join(new_fav_list) + ("\n" if new_fav_list else ""))
+                # 2. !!! ГЛАВНОЕ: Переименовываем серверы в wifi.txt !!!
+                if os.path.exists(WIFI_FILE):
+                    with open(WIFI_FILE, 'r', encoding='utf-8') as f:
+                        lines = f.readlines()
+                    
+                    new_wifi_lines = []
+                    for l in lines:
+                        if 'vless://' in l:
+                            b = l.split('#')[0].strip()
+                            if b in checked_bases:
+                                # Если в Issue стоит галочка — ставим звезду в wifi.txt
+                                new_wifi_lines.append(f"{b}#{checked_bases[b]}\n")
+                            else:
+                                # Если галочки нет — убираем звезду из wifi.txt
+                                clean_l = l.replace('⭐', '').strip()
+                                new_wifi_lines.append(clean_l + "\n")
+                        else:
+                            new_wifi_lines.append(l)
+                            
+                    with open(WIFI_FILE, 'w', encoding='utf-8') as f:
+                        f.writelines(new_wifi_lines)
+
+                print(f"⭐ Избранное синхронизировано с wifi.txt: {len(new_fav_list)} шт.")
                 executed_any = True
 
     except Exception as e:
