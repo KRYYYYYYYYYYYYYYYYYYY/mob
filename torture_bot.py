@@ -285,36 +285,38 @@ def process_all_controls(token, repo, vetted_list, pinned_list, ranking_db):
         data = json.loads(out)
         if data:
             body = data[0]['body']
-            if "ПОДТВЕРДИТЬ_ИЗБРАННОЕ" in body and "[x]" in body:
-                # Читаем текущее избранное
-                current_favs = []
-                if os.path.exists(FAVORITES_FILE):
-                    with open(FAVORITES_FILE, 'r', encoding='utf-8') as f:
-                        current_favs = [l.strip() for l in f if 'vless' in l]
-                
-                # Собираем ВСЕ строки с чекбоксами из Issue
+            # Проверяем кнопку подтверждения (любой регистр X)
+            if "ПОДТВЕРДИТЬ_ИЗБРАННОЕ" in body and "[x]" in body.lower():
                 new_fav_list = []
+                
                 for line in body.splitlines():
-                    if 'vless://' in line and ('- [x]' in line or '- [ ]' in line):
-                        is_checked = '- [x]' in line
-                        # Извлекаем чистую ссылку (убираем чекбокс)
-                        link = line.split('vless://', 1)[1].strip()
-                        full_link = 'vless://' + link
+                    # Ищем строку с vless и чекбоксом через регулярку
+                    match = re.search(r'- \[[xX ]\]\s+(vless://[^\n\r]+)', line)
+                    if match:
+                        full_link = match.group(1).strip()
+                        is_checked = '- [x]' in line.lower()
+                        
+                        # Разбираем ссылку на адрес и имя
+                        if '#' in full_link:
+                            base_part, name_part = full_link.split('#', 1)
+                        else:
+                            base_part = full_link
+                            name_part = "Избранное"
+                        
+                        # Чистим имя от старых звезд и пробелов
+                        name_part = name_part.replace('⭐', '').strip()
                         
                         if is_checked:
-                            # Добавляем смайл ⭐ в название, если его там нет
-                            if '#' in full_link:
-                                parts = full_link.split('#', 1)
-                                if not parts[1].strip().startswith('⭐'):
-                                    full_link = f"{parts[0]}#⭐ {parts[1].strip()}"
-                            else:
-                                full_link += "#⭐ Избранное"
-                            new_fav_list.append(full_link)
-                        else:
-                            # Если галочки нет, но в ссылке есть наш смайл — убираем его
-                            if '⭐' in full_link:
-                                full_link = full_link.replace('⭐ ', '').replace('⭐', '')
-                            # Мы НЕ добавляем его в new_fav_list, так как галочка снята
+                            # Лепим звезду только тем, кто отмечен
+                            new_link = f"{base_part}#⭐ {name_part}"
+                            new_fav_list.append(new_link)
+
+                # Перезаписываем файл избранного
+                with open(FAVORITES_FILE, 'w', encoding='utf-8') as f:
+                    f.write("\n".join(new_fav_list) + ("\n" if new_fav_list else ""))
+                
+                print(f"⭐ Обновлено избранное: {len(new_fav_list)} серверов.")
+                executed_any = True
 
                 # Сохраняем обновленный список избранного
                 with open(FAVORITES_FILE, 'w', encoding='utf-8') as f:
