@@ -634,7 +634,7 @@ def main():
     seen_in_final = set()# То самое "сито" для адресов
     
     # 2. Сначала берем закрепы (Приоритет №1)
-    # Лимит 50 штук
+    # Лимит 80 штук
     for l in all_pinned:
         if len(final_to_sub) >= 80: break
         base = l.split("#")[0].strip()
