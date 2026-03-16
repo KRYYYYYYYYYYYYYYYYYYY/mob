@@ -264,8 +264,8 @@ def main_monitor():
             else:
                 others_in_wifi.append(l)
 
-        # Берем только первые 50 закрепов
-        pinned_in_wifi = pinned_in_wifi[:50]
+        # Берем только первые 80 закрепов
+        pinned_in_wifi = pinned_in_wifi[:80]
         
         valid_others = []
         for link in others_in_wifi:
