@@ -15,6 +15,7 @@ PINNED_FILE = 'test1/pinned.txt'
 COUNTRY_CACHE_FILE = 'test1/countries_cache.json'
 PROFILE_FILE = 'test1/stress_profile.json'
 RANK_FILE = 'test1/ranking.json'
+FAVORITES_FILE = 'test1/favorites.txt'
 
 ALLOWED_COUNTRIES = {"US", "DE", "NL", "GB", "FR", "FI", "SG", "JP", "PL", "TR", "RU"}
 
@@ -232,7 +233,21 @@ def main_monitor():
             ranking_db = {}
 
     # Цикл работает 10 минут (600 сек)
+    # Цикл работает 10 минут (600 сек)
     while time.time() - start_run < 600:
+        # --- ШАГ 0: ЗАГРУЗКА ИЗБРАННЫХ (⭐) ---
+        fav_map = {}
+        if os.path.exists(FAVORITES_FILE):
+            try:
+                with open(FAVORITES_FILE, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        if 'vless://' in line:
+                            parts = line.strip().split('#', 1)
+                            base = parts[0].strip()
+                            name = parts[1].strip() if len(parts) > 1 else ""
+                            fav_map[base] = name
+            except Exception: pass
+
         # --- ШАГ 1: СОЗДАЕМ "ПАМЯТЬ" ЗАКРЕПОВ ---
         pinned_bases = set()
         if os.path.exists(PINNED_FILE):
@@ -270,7 +285,14 @@ def main_monitor():
         valid_others = []
         for link in others_in_wifi:
             base = link.split("#")[0].strip()
-            # ПЕРЕДАЕМ ПАМЯТЬ В ЧЕКЕР
+            
+            # ЗАЩИТА ИЗБРАННЫХ: Если сервер в favorites.txt, возвращаем ему имя со звездой
+            if base in fav_map:
+                valid_others.append(f"{base}#{fav_map[base]}")
+                print(f"⭐ [FAVORITE] {base[:20]}... защищен от изменений")
+                continue
+
+            # ПЕРЕДАЕМ ПАМЯТЬ В ЧЕКЕР (для обычных серверов)
             host, _ = extract_host_port(base)
             is_ok, status_code, success_hits, total_hits = deep_kill_check(link, stress_config, pinned_bases)
             
