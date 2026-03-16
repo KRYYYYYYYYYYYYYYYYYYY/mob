@@ -524,9 +524,9 @@ def main():
             print(f"🚫 Пропуск: Сервер в черном списке ({host})")
             continue
 
-        if "type=ws" in base_part.lower() or "type=grpc" in base_part.lower():
-            print(f"📡 Пропуск: Протокол WS/gRPC временно отключен ({host})")
-            continue 
+        # if "type=ws" in base_part.lower() or "type=grpc" in base_part.lower():
+        #     print(f"📡 Пропуск: Протокол WS/gRPC временно отключен ({host})")
+        #     continue 
 
         if not re.search(r'[a-f0-9\-]{36}@', base_part):
             print(f"❓ Пропуск: Неверный формат UUID или ссылки ({host if host else 'unknown'})")
