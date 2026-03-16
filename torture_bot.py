@@ -154,24 +154,25 @@ def refresh_all_panels(token, repo, ranking_db, vetted_list, pinned_list):
     update_issue(repo, 'unpin_control', body_unp, env_gh)
 
     # --- 4. ПАНЕЛЬ ИЗБРАННОЕ (Возможные) ---
-    fav_list = []
-    if os.path.exists(FAVORITES_FILE):
-        with open(FAVORITES_FILE, 'r', encoding='utf-8') as f:
-            fav_list = [l.strip() for l in f if 'vless' in l]
-    
-    fav_bases = {l.split('#')[0].strip() for l in fav_list}
+    # Переменные fav_list и fav_bases уже должны быть загружены в начале функции
     
     body_fav = f"### ⭐ Избранные серверы (Возможные)\n🕒 `{update_time}`\n\n"
     body_fav += "- [ ] 🏆 **ПОДТВЕРДИТЬ_ИЗБРАННОЕ**\n\n---\n\n"
     
-    # Тут тоже исключаем закрепы и уже существующее избранное, 
-    # чтобы список "на выбор" был чистым
+    # Используем нашу исправленную функцию, которая исключает закрепы и текущее избранное
     all_candidates = get_wifi_candidates(pinned_list, fav_list) 
-    for link in all_candidates:
-        body_fav += f"- [ ] {link.strip()}\n"
-        # Если сервер уже в избранном — рисуем закрашенный чекбокс
-        mark = "[x]" if base in fav_bases else "[ ]"
-        body_fav += f"- {mark} {link.strip()}\n"
+    
+    if all_candidates:
+        for link in all_candidates:
+            link_clean = link.strip()
+            # Нам нужно проверить базу ссылки, чтобы понять, стоит ли уже крестик
+            current_base = link_clean.split('#')[0].strip()
+            
+            # Если сервер по какой-то причине уже в fav_bases, ставим [x], иначе [ ]
+            mark = "[x]" if current_base in fav_bases else "[ ]"
+            body_fav += f"- {mark} {link_clean}\n"
+    else:
+        body_fav += "_Нет новых кандидатов для избранного_\n"
     
     update_issue(repo, 'fav_control', body_fav, env_gh)
 
