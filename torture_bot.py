@@ -33,13 +33,15 @@ DEFAULT_PROBE_PATHS = ["/", "/generate_204", "/favicon.ico"]
 
 file_lock = threading.Lock()
 
-def get_wifi_candidates(pinned_list):
-    """Загружает ВСЕ сервера из wifi.txt, которых нет в pinned_list."""
+def get_wifi_candidates(pinned_list, fav_list=None):
+    """Загружает сервера из wifi.txt, исключая закрепы и избранные."""
+    if fav_list is None: fav_list = []
     if not os.path.exists(WIFI_FILE):
         return []
     
-    # Нормализуем закрепы для сравнения (берем только base часть)
-    pinned_bases = {p.split('#')[0].strip() for p in pinned_list}
+    # Собираем базы для исключения (всё, что до #)
+    excluded_bases = {p.split('#')[0].strip() for p in pinned_list}
+    excluded_bases.update({f.split('#')[0].strip() for f in fav_list})
     
     candidates = []
     with open(WIFI_FILE, 'r', encoding='utf-8') as f:
@@ -49,8 +51,8 @@ def get_wifi_candidates(pinned_list):
                 continue
             
             base = line.split('#')[0].strip()
-            if base not in pinned_bases:
-                candidates.append(line) # Сохраняем полную строку для красоты
+            if base not in excluded_bases:
+                candidates.append(line) 
                 
     return candidates
 
@@ -110,10 +112,10 @@ def refresh_all_panels(token, repo, ranking_db, vetted_list, pinned_list):
     # --- 1. ПАНЕЛЬ ЧЕРНОГО СПИСКА ---
     body_ctrl = f"### 🎮 Панель Blacklist (Весь wifi.txt)\n🕒 `{update_time}`\n\n"
     body_ctrl += "- [ ] 💀 **ПОДТВЕРДИТЬ_БАН**\n\n---\n\n"
-    wifi_to_ban = get_wifi_candidates(pinned_list)
+    # Теперь передаем оба списка, чтобы не предлагать забанить то, что в избранном или закрепе
+    wifi_to_ban = get_wifi_candidates(pinned_list, fav_list)
     if wifi_to_ban:
         for full_link in wifi_to_ban:
-            # УБРАЛИ КАВЫЧКИ
             body_ctrl += f"- [ ] {full_link.strip()}\n"
     else:
         body_ctrl += "_Список пуст_\n"
@@ -155,9 +157,11 @@ def refresh_all_panels(token, repo, ranking_db, vetted_list, pinned_list):
     body_fav = f"### ⭐ Избранные серверы (Возможные)\n🕒 `{update_time}`\n\n"
     body_fav += "- [ ] 🏆 **ПОДТВЕРДИТЬ_ИЗБРАННОЕ**\n\n---\n\n"
     
-    all_candidates = get_wifi_candidates([]) # Получаем все из wifi.txt
+    # Тут тоже исключаем закрепы и уже существующее избранное, 
+    # чтобы список "на выбор" был чистым
+    all_candidates = get_wifi_candidates(pinned_list, fav_list) 
     for link in all_candidates:
-        base = link.split('#')[0].strip()
+        body_fav += f"- [ ] {link.strip()}\n"
         # Если сервер уже в избранном — рисуем закрашенный чекбокс
         mark = "[x]" if base in fav_bases else "[ ]"
         body_fav += f"- {mark} {link.strip()}\n"
