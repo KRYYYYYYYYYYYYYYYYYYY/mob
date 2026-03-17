@@ -654,7 +654,7 @@ def main():
     # --- КОНЕЦ ЦИКЛА ПРОВЕРКИ ---
 
     # 1. ПРИОРИТЕТ №1: 💎 ЗАКРЕПЛЕННЫЕ (Самый верх, лимит 130)
-    for l in pinned_in_wifi:
+    for l in pinned_list:
         if len(final_to_sub) >= 130: break
         base = l.split("#")[0].strip()
         if base not in seen_in_final:
