@@ -268,40 +268,48 @@ def main_monitor():
         with open(WIFI_FILE, 'r', encoding='utf-8') as f:
             lines = [l.strip() for l in f if 'vless://' in l]
 
-        # --- ШАГ 2: РАСПРЕДЕЛЯЕМ СЕРВЕРЫ (БЕЗ ДИСКА) ---
+        # --- ШАГ 2: РАСПРЕДЕЛЯЕМ СЕРВЕРЫ ---
         pinned_in_wifi = []
+        fav_in_wifi = []     # Отдельный список для избранных (⭐)
         others_in_wifi = []
+
+        # Загружаем актуальную карту имен избранных
+        fav_map = {}
+        if os.path.exists(FAVORITES_FILE):
+            try:
+                with open(FAVORITES_FILE, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        if 'vless://' in line:
+                            parts = line.strip().split('#', 1)
+                            fav_map[parts[0].strip()] = parts[1].strip() if len(parts) > 1 else ""
+            except Exception: pass
 
         for l in lines:
             base = l.split("#")[0].strip()
             if base in pinned_bases:
                 pinned_in_wifi.append(l)
+            elif base in fav_map:
+                # Сразу восстанавливаем правильное имя со звездой
+                fav_in_wifi.append(f"{base}#{fav_map[base]}")
             else:
                 others_in_wifi.append(l)
 
-        # Берем только первые 130 закрепов
+        # Лимит только для закрепов
         pinned_in_wifi = pinned_in_wifi[:130]
         
         valid_others = []
+        # Теперь цикл идет только по "простым смертным" серверам
         for link in others_in_wifi:
             base = link.split("#")[0].strip()
-            
-            # ЗАЩИТА ИЗБРАННЫХ: Если сервер в favorites.txt, возвращаем ему имя со звездой
-            if base in fav_map:
-                valid_others.append(f"{base}#{fav_map[base]}")
-                print(f"⭐ [FAVORITE] {base[:20]}... защищен от изменений")
-                continue
-
-            # ПЕРЕДАЕМ ПАМЯТЬ В ЧЕКЕР (для обычных серверов)
             host, _ = extract_host_port(base)
+
+            
             is_ok, status_code, success_hits, total_hits = deep_kill_check(link, stress_config, pinned_bases)
             
             if is_ok:
-                # дополнительный фильтр страны, чтобы отсекать лишнее
                 if host and get_country(host) not in ALLOWED_COUNTRIES:
-                    print(f"🌍 {base[:20]}... страна не в whitelist, удален")
-                    if base in ranking_db:
-                        del ranking_db[base]
+                    print(f"🌍 {base[:20]}... страна мимо, удален")
+                    if base in ranking_db: del ranking_db[base]
                     remove_from_all(base)
                     continue
 
@@ -328,7 +336,7 @@ def main_monitor():
             json.dump(ranking_db, f, ensure_ascii=False, indent=4)
 
         # Формируем итоговый wifi.txt (лимит 200)
-        final_list = (pinned_in_wifi + valid_others)[:200]
+        final_list = (pinned_in_wifi + fav_in_wifi + valid_others)[:200]
 
         # --- УМНАЯ ЗАПИСЬ: СОХРАНЯЕМ ТВОЙ ОРИГИНАЛЬНЫЙ ХЕАДЕР ---
         header_to_keep = []
