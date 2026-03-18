@@ -163,32 +163,32 @@ def probe_server(host: str, port: int, base_part: str, stress_config: dict):
                         context.check_hostname = False
                         context.verify_mode = ssl.CERT_NONE
                         with context.wrap_socket(sock, server_hostname=host) as ssock:
-                        # 1. Отправляем запрос
-                        ssock.sendall(request.encode())
-                        
-                        # 2. Имитируем задержку мобильной сети для обхода DPI
-                        if stress_config.get("dpi_sleep", 0) > 0:
-                            time.sleep(stress_config["dpi_sleep"])
-                        
-                        # 3. Ждем ответа от прокси-части (проверка UUID)
-                        ssock.settimeout(stress_config.get("recv_timeout", 1.7))
-                        
-                        try:
-                            # Читаем первые 16 байт. 
-                            # Если UUID неверный — сервер сбросит соединение или пришлет пустоту.
-                            data = ssock.recv(16)
+                            # 1. Отправляем запрос
+                            ssock.sendall(request.encode())
                             
-                            if data and len(data) > 0:
-                                # Если мы получили данные, значит сервер ПРИНЯЛ наш запрос
-                                # и пропустил его через UUID-фильтр.
-                                attempt_ok = True
-                                break
-                            else:
-                                # Получена пустая строка — сервер закрыл соединение (UUID не подошел)
+                            # 2. Имитируем задержку мобильной сети для обхода DPI
+                            if stress_config.get("dpi_sleep", 0) > 0:
+                                time.sleep(stress_config["dpi_sleep"])
+                            
+                            # 3. Ждем ответа от прокси-части (проверка UUID)
+                            ssock.settimeout(stress_config.get("recv_timeout", 1.7))
+                            
+                            try:
+                                # Читаем первые 16 байт. 
+                                # Если UUID неверный — сервер сбросит соединение или пришлет пустоту.
+                                data = ssock.recv(16)
+                                
+                                if data and len(data) > 0:
+                                    # Если мы получили данные, значит сервер ПРИНЯЛ наш запрос
+                                    # и пропустил его через UUID-фильтр.
+                                    attempt_ok = True
+                                    break
+                                else:
+                                    # Получена пустая строка — сервер закрыл соединение (UUID не подошел)
+                                    continue
+                            except (socket.timeout, ConnectionResetError):
+                                # Таймаут или сброс — явный признак, что сервер нас "отшил"
                                 continue
-                        except (socket.timeout, ConnectionResetError):
-                            # Таймаут или сброс — явный признак, что сервер нас "отшил"
-                            continue
                     else:
                         sock.sendall(b'\x05\x01\x00')
                         sock.settimeout(stress_config.get("recv_timeout", 1.7))
