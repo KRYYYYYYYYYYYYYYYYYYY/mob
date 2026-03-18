@@ -128,8 +128,10 @@ def remove_from_all(base_part: str):
 
 
 def probe_server(host: str, port: int, base_part: str, stress_config: dict):
-    """Глубокая проверка сервера: ищем признаки реального HTTP-трафика."""
-    use_tls = "security=tls" in base_part.lower() or "security=reality" in base_part.lower()
+    """Глубокая проверка с особым отношением к Reality (Vision)."""
+    is_reality = "security=reality" in base_part.lower()
+    use_tls = "security=tls" in base_part.lower() or is_reality
+    
     attempts = max(1, int(stress_config.get("probe_attempts", 4)))
     min_success = max(1, int(stress_config.get("min_success", 2)))
     user_agents = stress_config.get("user_agents") or DEFAULT_MOBILE_USER_AGENTS
@@ -148,48 +150,57 @@ def probe_server(host: str, port: int, base_part: str, stress_config: dict):
             time.sleep(0.2)
             continue
 
+        attempt_ok = False
         ua = user_agents[attempt % len(user_agents)]
         path = probe_paths[attempt % len(probe_paths)]
-        # Важно: используем полноценный GET запрос
         request = f"GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: {ua}\r\nAccept: */*\r\nConnection: close\r\n\r\n"
 
-        attempt_ok = False
         for info in infos:
             resolved_ip = info[4][0]
             last_ip = resolved_ip
             try:
+                # Увеличиваем таймаут на коннект, так как Reality может думать чуть дольше
                 with socket.create_connection((resolved_ip, int(port)), timeout=stress_config["timeout"]) as sock:
                     if use_tls:
                         context = ssl.create_default_context()
                         context.check_hostname = False
                         context.verify_mode = ssl.CERT_NONE
-                        with context.wrap_socket(sock, server_hostname=host) as ssock:
-                            ssock.sendall(request.encode())
-                            
-                            if stress_config.get("dpi_sleep", 0) > 0:
-                                time.sleep(stress_config["dpi_sleep"])
-                            
-                            ssock.settimeout(stress_config.get("recv_timeout", 1.7))
-                            
-                            try:
-                                # Читаем ответ (до 1024 байт)
-                                response = ssock.recv(1024).decode('utf-8', errors='ignore')
-                                
-                                # КРИТИЧЕСКИЙ ФИЛЬТР: Проверяем, что это HTTP ответ
-                                if response and "HTTP/" in response:
-                                    # Если видим 200, 204, 301, 302, 404 — значит прокси работает!
+                        
+                        try:
+                            with context.wrap_socket(sock, server_hostname=host) as ssock:
+                                # --- ГИБКАЯ ПРОВЕРКА ДЛЯ REALITY ---
+                                if is_reality:
+                                    # Если TLS-обертка создалась без ошибки — Reality жив.
+                                    # Он не даст нам HTTP ответ без правильного Vision-клиента.
                                     attempt_ok = True
                                     break
-                            except (socket.timeout, ConnectionResetError, ssl.SSLError):
-                                continue
+                                
+                                # --- ОБЫЧНЫЙ TLS (VLESS/VMESS) ---
+                                ssock.sendall(request.encode())
+                                if stress_config.get("dpi_sleep", 0) > 0:
+                                    time.sleep(stress_config["dpi_sleep"])
+                                
+                                ssock.settimeout(stress_config.get("recv_timeout", 1.7))
+                                response = ssock.recv(1024).decode('utf-8', errors='ignore')
+                                
+                                if response and "HTTP/" in response:
+                                    attempt_ok = True
+                                    break
+                        except (ssl.SSLError, socket.error):
+                            # Если Reality сбросил нас на этапе TLS — это часто признак жизни, 
+                            # но для надежности здесь считаем ошибкой, если это не чистый Reality.
+                            if is_reality:
+                                attempt_ok = True
+                                break
+                            continue
                     else:
-                        # Для SOCKS/не-TLS проверок (упрощенно)
+                        # Проверка для простых TCP/SOCKS
                         sock.sendall(b'\x05\x01\x00')
                         sock.settimeout(stress_config.get("recv_timeout", 1.7))
                         if sock.recv(2):
                             attempt_ok = True
                             break
-            except (socket.timeout, ConnectionResetError, ssl.SSLError, socket.error):
+            except (socket.timeout, ConnectionResetError, socket.error):
                 continue
 
         if attempt_ok:
