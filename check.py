@@ -142,18 +142,19 @@ def remove_from_all(base_part: str):
             print(f"⚠️ Ошибка при очистке {path}: {e}")
 
 
-def probe_server(host, port, link, timeout=3):
+def probe_server_go(host, port, link, timeout=3):
     sni = extract_sni(link)
-    # Если SNI не нашли, используем host как запасной вариант
+    # Если SNI нет в ссылке, Reality сервер ждет хотя бы host
     if not sni:
         sni = host
         
     try:
+        # ПЕРЕДАЕМ ВСЕ 4 АРГУМЕНТА ЯВНО
         result = go_lib.CheckReality(
-            host.encode('utf-8'), 
-            int(port), 
-            sni.encode('utf-8'), 
-            timeout
+            host.encode('utf-8'),      # 1. cHost
+            int(port),                 # 2. port
+            sni.encode('utf-8'),       # 3. cSni
+            int(timeout)               # 4. timeout
         )
         return result == 1
     except Exception as e:
@@ -516,7 +517,12 @@ def main():
         print(f"🔍 Тестирую: {host}...", end=" ", flush=True) # Печатаем без переноса строки
 
         checked_today += 1
-        is_alive, resolved_ip, success_hits, total_hits = probe_server(host, int(port), base_part, stress_config)
+        # ВЫЗОВ GO-ЧЕКЕРА
+        is_alive = probe_server_go(host, int(port), link, timeout=stress_config.get("timeout", 3))
+        # Эмулируем старые переменные, чтобы остальной код не сломался
+        resolved_ip = host 
+        success_hits = 1 if is_alive else 0
+        total_hits = 1
 
         remove_from_input_file(base_part)
 
@@ -540,6 +546,7 @@ def main():
 
         # --- ЭТАП 2: ЕСЛИ СЕРВЕР РАБОТАЕТ ---
         if is_alive:
+            print(f"✅ {host}:{port} — РАБОТАЕТ (через Go)")
             # Твоя логика сохранения (БЕЗ ИЗМЕНЕНИЙ СИСТЕМЫ ЗАКРЕПОВ)
             if "security=none" in base_part.lower():
                 print(f"❌ НЕТ ШИФРОВАНИЯ: {host}")
