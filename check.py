@@ -17,7 +17,6 @@ CACHE_FILE = 'test1/countries_cache.json' # Добавь эту констант
 RANKING_FILE = 'test1/ranking.json'
 VETTED_FILE = 'test1/vetted.txt'
 PINNED_FILE = 'test1/pinned.txt'
-FAVORITES_FILE = 'test1/favorites.txt'
 
 EXTERNAL_SOURCE_URL = [
     "https://raw.githubusercontent.com/KRYYYYYYYYYYYYYYYYYYY/crazy_xray_checker/refs/heads/main/result/working.txt",
@@ -371,17 +370,6 @@ def main():
 
     pinned_list = list(clean_pinned.values())
 
-    # 2.5 НОВОЕ: Загружаем Избранные (Favorites/Возможные)
-    fav_list = []
-    fav_bases = set()
-    if os.path.exists(FAVORITES_FILE):
-        with open(FAVORITES_FILE, 'r', encoding='utf-8') as f:
-            fav_list = [line.strip() for line in f if "vless://" in line]
-            # Собираем только "базы" для быстрого сравнения
-            fav_bases = {l.split('#')[0].strip() for l in fav_list}
-    
-    print(f"⭐ Загружено избранных: {len(fav_list)}")
-
     # 2. Загружаем Отложенные (Deferred)
     deferred_base = []
     if os.path.exists('test1/deferred.txt'):
@@ -399,9 +387,9 @@ def main():
     raw_external = download_raw_data(EXTERNAL_SOURCE_URL)
     # СОБИРАЕМ ОЧЕРЕДЬ: База + Отложенные + Новые
     # Это гарантирует, что "старички" из очереди проверятся раньше новичков
-    combined_queue = pinned_list + fav_list + current_base + deferred_base + raw_external
+    combined_queue = pinned_list + deferred_base + raw_external + current_base
 
-    # Убираем дубликаты, сохраняя этот ПРАВИЛЬНЫЙ порядок
+    # Убираем дубликаты, сохраняя этот новый приоритетный порядок
     unique_links = []
     seen_bases = set()
     for link in combined_queue:
@@ -495,22 +483,6 @@ def main():
         
         if base_part in seen_parts and not any(base_part in p for p in pinned_list):
             continue
-
-        # --- ПРИОРЕТЕТ №0: ИЗБРАННЫЕ (⭐) ---
-        found_fav_full = None
-        if base_part in fav_bases:
-            for f_link in fav_list:
-                if base_part == f_link.split("#")[0].strip():
-                    found_fav_full = f_link
-                    break
-            
-            if found_fav_full:
-                seen_parts.add(base_part)
-                working_for_sub.append(found_fav_full.strip())
-                working_for_base.append(base_part) 
-                print(f"⭐ [FAVORITE] {counter} добавлен (Иммунитет)")
-                counter += 1
-                continue
         
         # --- БЛОК ЗАКРЕПОВ (PINNED) ---
         found_pinned_full = None
@@ -652,69 +624,76 @@ def main():
         # --- ВСЕ, ЧТО НЕ УСПЕЛИ ПРОВЕРИТЬ (если набрали 200 раньше конца списка) ---
         new_deferred = unique_links[idx:] 
     # --- КОНЕЦ ЦИКЛА ПРОВЕРКИ ---
-
-    # --- ШАГ 3: РАСПРЕДЕЛЕНИЕ ПО ПРИОРИТЕТАМ ---
+    # --- ЛОГИКА ОЧЕРЕДИ И ЛИМИТОВ (ИСПРАВЛЕНО) ---
+        
+     #   1. Разделяем то, что нашли, на две кучи
+    all_pinned = [l for l in working_for_sub if "💎 [PINNED]" in l]
+    all_others = [l for l in working_for_sub if "💎 [PINNED]" not in l]
     
-    # !!! ВОТ ЭТИ ДВЕ СТРОЧКИ НУЖНО ДОБАВИТЬ ОБЯЗАТЕЛЬНО !!!
     final_to_sub = []
-    seen_in_final = set()
+    seen_in_final = set()# То самое "сито" для адресов
     
-    # Также убедись, что эти списки определены (если чекер их наполнял)
-    # Если в твоем коде они называются иначе, поправь названия ниже
-    all_favorites = fav_list # Твои ⭐
-    all_others = working_for_sub # Твои ✅ ОК из чекера
-
-    # 1. ПРИОРИТЕТ №1: 💎 ЗАКРЕПЛЕННЫЕ (Самый верх, лимит 130)
-    for l in pinned_list:
+    # 2. Сначала берем закрепы (Приоритет №1)
+    # Лимит 130 штук
+    for l in all_pinned:
         if len(final_to_sub) >= 130: break
         base = l.split("#")[0].strip()
         if base not in seen_in_final:
             final_to_sub.append(l)
             seen_in_final.add(base)
-
-    # 2. ПРИОРИТЕТ №2: ⭐ ИЗБРАННЫЕ (Сразу после закрепов)
-    for l in all_favorites:
-        if len(final_to_sub) >= 200: break
-        base = l.split("#")[0].strip()
-        if base not in seen_in_final:
-            final_to_sub.append(l)
-            seen_in_final.add(base)
-
-    # 3. ПРИОРИТЕТ №3: ОБЫЧНЫЕ mob (Добиваем до 200)
+    # 3. Добираем обычные сервера, пока не станет 200 (Приоритет №2)
+    # Но только те, которых еще НЕТ в закрепах
     for l in all_others:
         if len(final_to_sub) >= 200: break
         base = l.split("#")[0].strip()
-        if base not in seen_in_final:
+        if base not in seen_in_final: # ВОТ ОНА — ЗАЩИТА ОТ ДУБЛЯ
             final_to_sub.append(l)
             seen_in_final.add(base)
     
-    # Очередь: всё, что не влезло в 200 + хвост unique_links
-    leftover_from_checked = [l for l in all_others if l.split("#")[0].strip() not in seen_in_final]
-    deferred_final = new_deferred + leftover_from_checked
+    # 4. Формируем deferred.txt (остатки)
+    # Сюда идет то, что не влезло + то, что вообще не проверялось 
+    leftover_from_others = [l for l in all_others if l.split("#")[0].strip() not in seen_in_final]
+    deferred_final = new_deferred + leftover_from_others
     
-    # --- СОХРАНЕНИЕ ФАЙЛОВ (ЕДИНЫЙ БЛОК) ---
+# 5. Сохраняем результат
     
-    # 1. Подписка wifi.txt
-    os.makedirs(os.path.dirname(OUTPUT_FILE), exist_ok=True)
-    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
-        f.write(HEADER.strip() + "\n\n" + "\n".join(final_to_sub))
-    
-    # 2. Рабочая база 1.txt
-    with open(INPUT_FILE, "w", encoding="utf-8") as f: 
-        f.write("\n".join(working_for_base))
-        
-    # 3. Очередь deferred.txt
+    # Сначала сохраняем deferred.txt (очередь на потом)
     with open('test1/deferred.txt', "w", encoding="utf-8") as f:
         f.write("\n".join(deferred_final))
     
-    # 4. Статусы и кэш
+    # ФОРМИРУЕМ ПРАВИЛЬНЫЙ ТЕКСТ ДЛЯ ПОДПИСКИ
+    # .strip() убирает случайные пробелы в начале/конце хедера
+    # \n\n гарантирует, что между командами и ссылками будет пустая строка (важно для iPhone)
+    final_content = HEADER.strip() + "\n\n" + "\n".join(final_to_sub)
+
+    # ЗАПИСЫВАЕМ В ОСНОВНОЙ ФАЙЛ (kr/mob/wifi.txt)
+    os.makedirs(os.path.dirname(OUTPUT_FILE), exist_ok=True)
+    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+        f.write(final_content)
+        
+    # Сохраняем рабочую базу ссылок для следующего запуска чекера
+    os.makedirs(os.path.dirname(INPUT_FILE), exist_ok=True)
+    with open(INPUT_FILE, "w", encoding="utf-8") as f: 
+        f.write("\n".join(working_for_base))
+    
+    # Сохраняем историю и рейтинги
     with open(STATUS_FILE, "w") as f: 
         json.dump(new_history, f)
-    with open(CACHE_FILE, 'w') as f:
-        json.dump(countries_cache, f)
+    with open('test1/ranking.json', "w") as f:
+        json.dump(ranking_db, f)
 
-    print(f"🏁 Готово! Подписка: {len(final_to_sub)}, Очередь: {len(deferred_final)}")
-    print(f"⭐ Избранных: {len(all_favorites)} | 💎 Закрепов: {len([l for l in final_to_sub if '💎' in l])}")
+    print(f"🏁 План выполнен: {len(final_to_sub)} в подписке. Остаток в базе: {len(deferred_final)}")
+    # Базовые части закрепов
+    pinned_bases = {p.split("#")[0].strip() for p in pinned_list}
+    
+    # Сколько закрепов реально попало в подписку
+    count_pinned = sum(
+        1 for l in final_to_sub
+        if l.split("#")[0].strip() in pinned_bases
+    )
+    
+    print(f"💎 Закрепленных в подписке: {count_pinned} (из лимита 130)")
+    print(f"✅ Всего в wifi.txt: {len(final_to_sub)} (из лимита 200)")
     
     # 3. Сохранение (ТВОЙ БЛОК БЕЗ ИЗМЕНЕНИЙ НАДПИСЕЙ)
     os.makedirs(os.path.dirname(INPUT_FILE), exist_ok=True)
