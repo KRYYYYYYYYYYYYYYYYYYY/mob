@@ -255,28 +255,24 @@ def format_uri_host(host: str) -> str:
     return host
 
 def get_country_code(host, cache):
-    # 1. Определяем IP. 
-    # Если это домен — резолвим. Если IPv6 или IPv4 — оставляем как есть.
+    # 1. Сразу определяем IP
     ip = host
     if not is_ipv6(host):
         try:
-            # Пытаемся резолвить только если это похоже на домен (нет двоеточий)
-            # и это не чистый IPv4
             if not re.match(r"^\d{1,3}(\.\d{1,3}){3}$", host):
                 ip = socket.gethostbyname(host)
         except:
             ip = host
 
-    # 2. Проверяем кэш (используем IP как ключ)
+    # 2. МГНОВЕННЫЙ ОТВЕТ: Если IP уже в кэше, выдаем результат БЕЗ пауз
     if ip in cache:
         return cache[ip]
 
-    # 3. Запрос к API
+    # 3. ЗАПРОС К API: Только если IP новый
     try:
-        # Пауза 0.5с — это хорошо, защищает от 429 Too Many Requests
+        # Паузу делаем ТОЛЬКО перед реальным сетевым запросом
         time.sleep(0.5) 
         
-        # Для IPv6 в URL скобки не нужны, ip-api кушает их просто как строку
         clean_ip = ip.replace("[", "").replace("]", "")
         url = f"http://ip-api.com/json/{clean_ip}?fields=status,countryCode"
         
@@ -285,11 +281,10 @@ def get_country_code(host, cache):
             data = json.loads(response.read().decode("utf-8"))
             if data.get("status") == "success":
                 code = data.get("countryCode", "Unknown")
+                # Сразу сохраняем в кэш
                 cache[ip] = code 
                 return code
-    except Exception as e:
-        # Печатаем ошибку только для отладки, если нужно
-        # print(f"GeoIP Error: {e}")
+    except:
         pass
         
     return "Unknown"
