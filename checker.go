@@ -16,32 +16,29 @@ func CheckReality(cHost *C.char, port int, cSni *C.char, timeout int) int {
 	sni := C.GoString(cSni)
 	addr := fmt.Sprintf("%s:%d", host, port)
 
-	// 1. Устанавливаем TCP соединение
+	// 1. Быстрый коннект по TCP
 	conn, err := net.DialTimeout("tcp", addr, time.Duration(timeout)*time.Second)
 	if err != nil {
 		return 0
 	}
 	defer conn.Close()
 
-	// 2. Оборачиваем в uTLS (имитируем Chrome), чтобы обмануть Reality/Vision
+	// 2. Настройка uTLS (имитация браузера)
 	config := &tls.Config{
-		ServerName:         sni,
+		ServerName:         sni, // Тот самый SNI из ссылки!
 		InsecureSkipVerify: true,
 	}
 
 	uconn := utls.UClient(conn, config, utls.HelloChrome_Auto)
-	
-	// Устанавливаем дедлайн для хендшейка
 	uconn.SetDeadline(time.Now().Add(time.Duration(timeout) * time.Second))
 
-	// 3. Выполняем Handshake
+	// 3. Пытаемся "договориться" с Reality
 	err = uconn.Handshake()
 	if err != nil {
-		// Если хендшейк сорвался — это либо не Reality, либо мы в бане
-		return 0
+		return 0 // Сервер отклонил наш "браузерный" запрос
 	}
 
-	return 1 // Жив и прошел проверку отпечатков!
+	return 1 // Успех! Сервер признал в нас своего
 }
 
 func main() {}
