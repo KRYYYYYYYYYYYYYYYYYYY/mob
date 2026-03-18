@@ -8,6 +8,15 @@ import urllib.request
 import time
 import subprocess
 import ipaddress
+import ctypes
+
+# Путь к библиотеке (в Github Actions она будет в корне)
+lib_path = os.path.abspath("libchecker.so")
+go_lib = ctypes.cdll.LoadLibrary(lib_path)
+
+# Аргументы: host (string), port (int), sni (string), timeout (int)
+go_lib.CheckReality.argtypes = [ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_int]
+go_lib.CheckReality.restype = ctypes.c_int
 
 # Настройки путей
 INPUT_FILE = 'test1/1.txt'
@@ -127,91 +136,18 @@ def remove_from_all(base_part: str):
             print(f"⚠️ Ошибка при очистке {path}: {e}")
 
 
-def probe_server(host: str, port: int, base_part: str, stress_config: dict):
-    """Глубокая проверка с особым отношением к Reality (Vision)."""
-    is_reality = "security=reality" in base_part.lower()
-    use_tls = "security=tls" in base_part.lower() or is_reality
-    
-    attempts = max(1, int(stress_config.get("probe_attempts", 4)))
-    min_success = max(1, int(stress_config.get("min_success", 2)))
-    user_agents = stress_config.get("user_agents") or DEFAULT_MOBILE_USER_AGENTS
-    probe_paths = stress_config.get("probe_paths") or DEFAULT_PROBE_PATHS
-
-    success = 0
-    last_ip = None
-
-    for attempt in range(attempts):
-        try:
-            infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
-        except socket.gaierror:
-            infos = []
-
-        if not infos:
-            time.sleep(0.2)
-            continue
-
-        attempt_ok = False
-        ua = user_agents[attempt % len(user_agents)]
-        path = probe_paths[attempt % len(probe_paths)]
-        request = f"GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: {ua}\r\nAccept: */*\r\nConnection: close\r\n\r\n"
-
-        for info in infos:
-            resolved_ip = info[4][0]
-            last_ip = resolved_ip
-            try:
-                # Увеличиваем таймаут на коннект, так как Reality может думать чуть дольше
-                with socket.create_connection((resolved_ip, int(port)), timeout=stress_config["timeout"]) as sock:
-                    if use_tls:
-                        context = ssl.create_default_context()
-                        context.check_hostname = False
-                        context.verify_mode = ssl.CERT_NONE
-                        
-                        try:
-                            with context.wrap_socket(sock, server_hostname=host) as ssock:
-                                # --- ГИБКАЯ ПРОВЕРКА ДЛЯ REALITY ---
-                                if is_reality:
-                                    # Если TLS-обертка создалась без ошибки — Reality жив.
-                                    # Он не даст нам HTTP ответ без правильного Vision-клиента.
-                                    attempt_ok = True
-                                    break
-                                
-                                # --- ОБЫЧНЫЙ TLS (VLESS/VMESS) ---
-                                ssock.sendall(request.encode())
-                                if stress_config.get("dpi_sleep", 0) > 0:
-                                    time.sleep(stress_config["dpi_sleep"])
-                                
-                                ssock.settimeout(stress_config.get("recv_timeout", 1.7))
-                                response = ssock.recv(1024).decode('utf-8', errors='ignore')
-                                
-                                if response and "HTTP/" in response:
-                                    attempt_ok = True
-                                    break
-                        except (ssl.SSLError, socket.error):
-                            # Если Reality сбросил нас на этапе TLS — это часто признак жизни, 
-                            # но для надежности здесь считаем ошибкой, если это не чистый Reality.
-                            if is_reality:
-                                attempt_ok = True
-                                break
-                            continue
-                    else:
-                        # Проверка для простых TCP/SOCKS
-                        sock.sendall(b'\x05\x01\x00')
-                        sock.settimeout(stress_config.get("recv_timeout", 1.7))
-                        if sock.recv(2):
-                            attempt_ok = True
-                            break
-            except (socket.timeout, ConnectionResetError, socket.error):
-                continue
-
-        if attempt_ok:
-            success += 1
-            if success >= min_success:
-                return True, last_ip, success, attempts
-
-        if attempt < attempts - 1:
-            time.sleep(stress_config.get("between_attempts_sleep", 0.35))
-
-    return False, last_ip, success, attempts
+def probe_server_go(host, port, sni, timeout=3):
+    try:
+        # Важно передавать SNI, иначе Reality не ответит!
+        result = go_lib.CheckReality(
+            host.encode('utf-8'), 
+            int(port), 
+            sni.encode('utf-8'), 
+            timeout
+        )
+        return result == 1
+    except:
+        return False
     
 def remove_from_input_file(base_to_remove: str):
     """Удаляет конкретную ссылку из 1.txt по её базовой части"""
