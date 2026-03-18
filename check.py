@@ -613,10 +613,10 @@ def main():
                     new_history[base_part] = fail_time
                     
                     # Добавляем в подписку с меткой ожидания
-                    temp_link = rebuild_link_name(link, f"⏳ mob {counter}")
-                    working_for_sub.append(temp_link)
+                    # temp_link = rebuild_link_name(link, f"⏳ mob {counter}")
+                    # working_for_sub.append(temp_link)
                     
-                    print(f"⏳ DOWN ({country}): {host} (оставлен шанс, mob {counter})")
+                    print(f"⏳ DOWN ({country}): {host} (пошел нахуй)")
                     counter += 1
             else:
                 print(f"🗑️ Удален (тайм-аут): {host}")
