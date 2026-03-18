@@ -10,14 +10,6 @@ import subprocess
 import ipaddress
 import ctypes
 
-# Путь к библиотеке (в Github Actions она будет в корне)
-lib_path = os.path.abspath("libchecker.so")
-go_lib = ctypes.cdll.LoadLibrary(lib_path)
-
-# Аргументы: host (string), port (int), sni (string), timeout (int)
-go_lib.CheckReality.argtypes = [ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_int]
-go_lib.CheckReality.restype = ctypes.c_int
-
 # Настройки путей
 INPUT_FILE = 'test1/1.txt'
 OUTPUT_FILE = 'kr/mob/wifi.txt'
@@ -47,6 +39,20 @@ DEFAULT_MOBILE_USER_AGENTS = [
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1",
 ]
 DEFAULT_PROBE_PATHS = ["/", "/generate_204", "/favicon.ico"]
+
+# Подключаем Go-движок
+lib_path = os.path.abspath("libchecker.so")
+if not os.path.exists(lib_path):
+    print("❌ ОШИБКА: Библиотека libchecker.so не найдена!")
+else:
+    go_lib = ctypes.cdll.LoadLibrary(lib_path)
+    go_lib.CheckReality.argtypes = [ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_int]
+    go_lib.CheckReality.restype = ctypes.c_int
+
+def extract_sni(link):
+    # Ищем sni=... до следующего символа &, ? или конца строки
+    match = re.search(r"sni=([^&?#\s]+)", link)
+    return match.group(1) if match else ""
 
 
 def download_raw_data(urls):
@@ -136,9 +142,13 @@ def remove_from_all(base_part: str):
             print(f"⚠️ Ошибка при очистке {path}: {e}")
 
 
-def probe_server_go(host, port, sni, timeout=3):
+def probe_server(host, port, link, timeout=3):
+    sni = extract_sni(link)
+    # Если SNI не нашли, используем host как запасной вариант
+    if not sni:
+        sni = host
+        
     try:
-        # Важно передавать SNI, иначе Reality не ответит!
         result = go_lib.CheckReality(
             host.encode('utf-8'), 
             int(port), 
@@ -146,7 +156,8 @@ def probe_server_go(host, port, sni, timeout=3):
             timeout
         )
         return result == 1
-    except:
+    except Exception as e:
+        print(f"⚠️ Ошибка вызова Go: {e}")
         return False
     
 def remove_from_input_file(base_to_remove: str):
