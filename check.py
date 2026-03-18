@@ -128,7 +128,7 @@ def remove_from_all(base_part: str):
 
 
 def probe_server(host: str, port: int, base_part: str, stress_config: dict):
-    """Проверка сервера с повторами и разными сценариями трафика (anti-DPI профиль)."""
+    """Глубокая проверка сервера: ищем признаки реального HTTP-трафика."""
     use_tls = "security=tls" in base_part.lower() or "security=reality" in base_part.lower()
     attempts = max(1, int(stress_config.get("probe_attempts", 4)))
     min_success = max(1, int(stress_config.get("min_success", 2)))
@@ -150,6 +150,7 @@ def probe_server(host: str, port: int, base_part: str, stress_config: dict):
 
         ua = user_agents[attempt % len(user_agents)]
         path = probe_paths[attempt % len(probe_paths)]
+        # Важно: используем полноценный GET запрос
         request = f"GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: {ua}\r\nAccept: */*\r\nConnection: close\r\n\r\n"
 
         attempt_ok = False
@@ -163,33 +164,26 @@ def probe_server(host: str, port: int, base_part: str, stress_config: dict):
                         context.check_hostname = False
                         context.verify_mode = ssl.CERT_NONE
                         with context.wrap_socket(sock, server_hostname=host) as ssock:
-                            # 1. Отправляем запрос
                             ssock.sendall(request.encode())
                             
-                            # 2. Имитируем задержку мобильной сети для обхода DPI
                             if stress_config.get("dpi_sleep", 0) > 0:
                                 time.sleep(stress_config["dpi_sleep"])
                             
-                            # 3. Ждем ответа от прокси-части (проверка UUID)
                             ssock.settimeout(stress_config.get("recv_timeout", 1.7))
                             
                             try:
-                                # Читаем первые 16 байт. 
-                                # Если UUID неверный — сервер сбросит соединение или пришлет пустоту.
-                                data = ssock.recv(16)
+                                # Читаем ответ (до 1024 байт)
+                                response = ssock.recv(1024).decode('utf-8', errors='ignore')
                                 
-                                if data and len(data) > 0:
-                                    # Если мы получили данные, значит сервер ПРИНЯЛ наш запрос
-                                    # и пропустил его через UUID-фильтр.
+                                # КРИТИЧЕСКИЙ ФИЛЬТР: Проверяем, что это HTTP ответ
+                                if response and "HTTP/" in response:
+                                    # Если видим 200, 204, 301, 302, 404 — значит прокси работает!
                                     attempt_ok = True
                                     break
-                                else:
-                                    # Получена пустая строка — сервер закрыл соединение (UUID не подошел)
-                                    continue
-                            except (socket.timeout, ConnectionResetError):
-                                # Таймаут или сброс — явный признак, что сервер нас "отшил"
+                            except (socket.timeout, ConnectionResetError, ssl.SSLError):
                                 continue
                     else:
+                        # Для SOCKS/не-TLS проверок (упрощенно)
                         sock.sendall(b'\x05\x01\x00')
                         sock.settimeout(stress_config.get("recv_timeout", 1.7))
                         if sock.recv(2):
