@@ -2,7 +2,6 @@ package main
 
 import "C"
 import (
-	"crypto/tls"
 	"fmt"
 	"net"
 	"time"
@@ -16,29 +15,34 @@ func CheckReality(cHost *C.char, port int, cSni *C.char, timeout int) int {
 	sni := C.GoString(cSni)
 	addr := fmt.Sprintf("%s:%d", host, port)
 
-	// 1. Быстрый коннект по TCP
+	// 1. Устанавливаем TCP соединение
 	conn, err := net.DialTimeout("tcp", addr, time.Duration(timeout)*time.Second)
 	if err != nil {
 		return 0
 	}
 	defer conn.Close()
 
-	// 2. Настройка uTLS (имитация браузера)
-	config := &tls.Config{
-		ServerName:         sni, // Тот самый SNI из ссылки!
+	// 2. Настройка конфига ЧЕРЕЗ utls (важно!)
+	// Мы убрали "crypto/tls" из импорта, чтобы не было конфликта типов
+	config := &utls.Config{
+		ServerName:         sni,
 		InsecureSkipVerify: true,
 	}
 
+	// Создаем клиента с отпечатком Chrome
 	uconn := utls.UClient(conn, config, utls.HelloChrome_Auto)
+	
+	// Устанавливаем общий лимит времени
 	uconn.SetDeadline(time.Now().Add(time.Duration(timeout) * time.Second))
 
-	// 3. Пытаемся "договориться" с Reality
+	// 3. Выполняем Handshake
 	err = uconn.Handshake()
 	if err != nil {
-		return 0 // Сервер отклонил наш "браузерный" запрос
+		// Если Reality-сервер не принял наш "отпечаток", он разорвет связь здесь
+		return 0
 	}
 
-	return 1 // Успех! Сервер признал в нас своего
+	return 1 
 }
 
 func main() {}
