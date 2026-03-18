@@ -607,8 +607,8 @@ def main():
                 country = get_country_code(host, countries_cache)
                 # Оставляем только если страна нам подходит
                 if country in ALLOWED_COUNTRIES:
-                    # Сохраняем в базу (1.txt), чтобы проверить в следующий раз
-                    working_for_base.append(base_part)
+                    # # Сохраняем в базу (1.txt), чтобы проверить в следующий раз
+                    # working_for_base.append(base_part)
                     # Записываем в новую историю время падения (чтобы счетчик тикал дальше)
                     new_history[base_part] = fail_time
                     
