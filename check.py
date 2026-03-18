@@ -164,14 +164,32 @@ def probe_server(host: str, port: int, base_part: str, stress_config: dict):
                         context.check_hostname = False
                         context.verify_mode = ssl.CERT_NONE
                         with context.wrap_socket(sock, server_hostname=host) as ssock:
-                            ssock.sendall(request.encode())
-                            if stress_config["dpi_sleep"] > 0:
-                                time.sleep(stress_config["dpi_sleep"])
-                            ssock.settimeout(stress_config.get("recv_timeout", 1.7))
-                            head = ssock.recv(8)
-                            if head:
+                        # 1. Отправляем запрос
+                        ssock.sendall(request.encode())
+                        
+                        # 2. Имитируем задержку мобильной сети для обхода DPI
+                        if stress_config.get("dpi_sleep", 0) > 0:
+                            time.sleep(stress_config["dpi_sleep"])
+                        
+                        # 3. Ждем ответа от прокси-части (проверка UUID)
+                        ssock.settimeout(stress_config.get("recv_timeout", 1.7))
+                        
+                        try:
+                            # Читаем первые 16 байт. 
+                            # Если UUID неверный — сервер сбросит соединение или пришлет пустоту.
+                            data = ssock.recv(16)
+                            
+                            if data and len(data) > 0:
+                                # Если мы получили данные, значит сервер ПРИНЯЛ наш запрос
+                                # и пропустил его через UUID-фильтр.
                                 attempt_ok = True
                                 break
+                            else:
+                                # Получена пустая строка — сервер закрыл соединение (UUID не подошел)
+                                continue
+                        except (socket.timeout, ConnectionResetError):
+                            # Таймаут или сброс — явный признак, что сервер нас "отшил"
+                            continue
                     else:
                         sock.sendall(b'\x05\x01\x00')
                         sock.settimeout(stress_config.get("recv_timeout", 1.7))
@@ -429,8 +447,12 @@ def main():
     MAX_TO_CHECK = 300  # <--- ДОБАВЬ ЭТО (лимит, чтобы скрипт не шел до конца очереди вечно)
     seen_ips = set()
     # ----------------------------------------------------------
-# --- ЦИКЛ ПРОВЕРКИ (ИЩЕМ 200 РАБОЧИХ) ---
+    # --- ЦИКЛ ПРОВЕРКИ (ИЩЕМ 200 РАБОЧИХ) ---
+
+    # --- ПЕРЕД ЦИКЛОМ: Создаем реестр IP ---
+    ip_counts = {} 
     print(f"📡 Начинаю проверку. Цель: 200 серверов. Всего в очереди: {len(unique_links)}")
+    
     
     seen_parts = set()
     
@@ -468,6 +490,8 @@ def main():
                     stress_config["probe_paths"] = [str(x) for x in data["probe_paths"] if str(x).strip()]
         except: 
             pass
+
+    
     # Работаем, пока не набрали 200 в подписку ИЛИ пока не кончились ссылки в unique_links
     while len(working_for_sub) < 200 and idx < len(unique_links):
         if checked_today >= MAX_TO_CHECK:
@@ -548,11 +572,22 @@ def main():
         checked_today += 1
         is_alive, resolved_ip, success_hits, total_hits = probe_server(host, int(port), base_part, stress_config)
 
+        # 1. Сначала отсекаем мертвые IP, которые уже видели (твоя логика)
         if resolved_ip and resolved_ip in seen_ips and not is_alive:
             print("♻️ Пропуск: IP уже встречался и сейчас недоступен")
             continue
 
+        # 2. Если сервер ЖИВ, проверяем лимит на количество (НОВЫЙ БЛОК)
         if is_alive and resolved_ip:
+            # Увеличиваем счетчик для этого IP
+            ip_counts[resolved_ip] = ip_counts.get(resolved_ip, 0) + 1
+            
+            # Если это уже 6-й живой сервер на одном IP — скипаем
+            if ip_counts[resolved_ip] > 5:
+                print(f"♻️ Пропуск: IP {resolved_ip} переполнен (лимит 5 конфигов)")
+                continue 
+
+            # Если лимит прошел — добавляем в список увиденных
             seen_ips.add(resolved_ip)
 
         # --- ЭТАП 2: ЕСЛИ СЕРВЕР РАБОТАЕТ ---
@@ -606,18 +641,18 @@ def main():
             if now - fail_time < GRACE_PERIOD:
                 country = get_country_code(host, countries_cache)
                 # Оставляем только если страна нам подходит
-                if country in ALLOWED_COUNTRIES:
-                    # # Сохраняем в базу (1.txt), чтобы проверить в следующий раз
-                    # working_for_base.append(base_part)
-                    # Записываем в новую историю время падения (чтобы счетчик тикал дальше)
-                    new_history[base_part] = fail_time
+                # if country in ALLOWED_COUNTRIES:
+                #     # Сохраняем в базу (1.txt), чтобы проверить в следующий раз
+                #     # working_for_base.append(base_part)
+                #     # Записываем в новую историю время падения (чтобы счетчик тикал дальше)
+                #     new_history[base_part] = fail_time
                     
-                    # Добавляем в подписку с меткой ожидания
-                    # temp_link = rebuild_link_name(link, f"⏳ mob {counter}")
-                    # working_for_sub.append(temp_link)
+                #     # Добавляем в подписку с меткой ожидания
+                #     # temp_link = rebuild_link_name(link, f"⏳ mob {counter}")
+                #     # working_for_sub.append(temp_link)
                     
-                    print(f"⏳ DOWN ({country}): {host} (пошел нахуй)")
-                    counter += 1
+                #     print(f"⏳ DOWN ({country}): {host} (пошел нахуй)")
+                #     counter += 1
             else:
                 print(f"🗑️ Удален (тайм-аут): {host}")
 
