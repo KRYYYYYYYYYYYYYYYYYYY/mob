@@ -20,6 +20,7 @@ VETTED_FILE = 'test1/vetted.txt'
 PINNED_FILE = 'test1/pinned.txt'
 
 EXTERNAL_SOURCE_URL = [
+    "https://raw.githubusercontent.com/KRYYYYYYYYYYYYYYYYYYY/crazy_xray_checker/refs/heads/main/result/working.txt"
 ]
 
 GRACE_PERIOD = 2 * 24 * 60 * 60 # 48 часов
