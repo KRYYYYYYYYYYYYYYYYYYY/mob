@@ -560,6 +560,8 @@ def main():
         checked_today += 1
         is_alive, resolved_ip, success_hits, total_hits = probe_server(host, int(port), base_part, stress_config)
 
+        remove_from_input_file(base_part)
+
         # 1. Сначала отсекаем мертвые IP, которые уже видели (твоя логика)
         if resolved_ip and resolved_ip in seen_ips and not is_alive:
             print("♻️ Пропуск: IP уже встречался и сейчас недоступен")
@@ -589,8 +591,6 @@ def main():
             if country not in ALLOWED_COUNTRIES:
                 print(f"🌍 МИМО: Страна {country} не в белом списке ({host})")
                 continue
-
-            remove_from_input_file(base_part)
     
             working_for_base.append(base_part)
             # ip_str = f"[{resolved_ip}]" if is_ipv6(resolved_ip) else resolved_ip
