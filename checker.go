@@ -2,15 +2,15 @@ package main
 
 import "C"
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"time"
 
 	"github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/core"
-	"github.com/xtls/xray-core/infra/conf"
+	"github.com/xtls/xray-core/infra/conf/serial"
 
-	// Интеграция всех протоколов
 	_ "github.com/xtls/xray-core/main/distro/all"
 )
 
@@ -23,60 +23,45 @@ func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C
 	sid := C.GoString(cSid)
 	flow := C.GoString(cFlow)
 
-	// Настройка VLESS Reality Outbound
-	vlessOutbound := &conf.OutboundDetourConfig{
-		Protocol: "vless",
-		Settings: &conf.ConfigRaw{
-			"vnext": []interface{}{
-				map[string]interface{}{
-					"address": addr,
-					"port":    uint16(cPort),
-					"users": []interface{}{
-						map[string]interface{}{
-							"id":         uuid,
-							"encryption": "none",
-							"flow":       flow,
-						},
-					},
-				},
+	// Формируем конфиг через JSON - это гарантирует отсутствие ошибок типов Go
+	configJSON := fmt.Sprintf(`{
+		"inbounds": [{
+			"port": 10001,
+			"listen": "127.0.0.1",
+			"protocol": "socks",
+			"settings": { "auth": "noauth", "udp": false }
+		}],
+		"outbounds": [{
+			"protocol": "vless",
+			"settings": {
+				"vnext": [{
+					"address": "%s",
+					"port": %d,
+					"users": [{ "id": "%s", "encryption": "none", "flow": "%s" }]
+				}]
 			},
-		},
-		StreamSetting: &conf.StreamConfig{
-			Network:  conf.TransportProtocolPtr("tcp"),
-			Security: "reality",
-			REALITYSettings: &conf.RealityConfig{
-				Show:        false,
-				Fingerprint: "chrome",
-				ServerName:  sni,
-				PublicKey:   pbk,
-				ShortId:     sid,
-				SpiderX:     "/",
-			},
-		},
-	}
+			"streamSettings": {
+				"network": "tcp",
+				"security": "reality",
+				"realitySettings": {
+					"show": false,
+					"fingerprint": "chrome",
+					"serverName": "%s",
+					"publicKey": "%s",
+					"shortId": "%s",
+					"spiderX": "/"
+				}
+			}
+		}]
+	}`, addr, cPort, uuid, flow, sni, pbk, sid)
 
-	// Внутренний Socks5 вход
-	listenAddr := conf.NewAddress(net.ParseAddress("127.0.0.1"))
-	socksInbound := &conf.InboundDetourConfig{
-		Protocol: "socks",
-		Listen:   listenAddr,
-		PortList: &conf.PortRange{From: 10001, To: 10001},
-		Settings: &conf.ConfigRaw{
-			"auth": "noauth",
-			"udp":  false,
-		},
-	}
-
-	cfg := &conf.Config{
-		InboundConfigs:  []conf.InboundDetourConfig{*socksInbound},
-		OutboundConfigs: []conf.OutboundDetourConfig{*vlessOutbound},
-	}
-
-	serverConfig, err := cfg.Build()
+	// Парсим JSON в структуру конфигурации Xray
+	serverConfig, err := serial.DecodeJSONConfig(context.Background(), nil, []byte(configJSON))
 	if err != nil {
 		return 0
 	}
 
+	// Запуск ядра
 	instance, err := core.New(serverConfig)
 	if err != nil {
 		return 0
@@ -87,22 +72,18 @@ func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C
 	}
 	defer instance.Close()
 
-	// Ожидание инициализации ядра
 	time.Sleep(200 * time.Millisecond)
 
-	// Настройка прокси для HTTP клиента
-	proxyUrl, _ := http.ProxyFromEnvironment(nil)
-	proxyUrl, _ = proxyUrl.Parse("socks5://127.0.0.1:10001")
-
+	// Настройка HTTP клиента через Socks5
+	proxyURL, _ := net.ParseProxyURL("socks5://127.0.0.1:10001")
 	client := &http.Client{
 		Transport: &http.Transport{
-			Proxy:             http.ProxyURL(proxyUrl),
+			Proxy: http.ProxyURL(proxyURL),
 			DisableKeepAlives: true,
 		},
 		Timeout: time.Duration(timeout) * time.Second,
 	}
 
-	// Финальная проверка L7
 	resp, err := client.Get("http://cp.cloudflare.com/generate_204")
 	if err != nil {
 		return 0
