@@ -27,9 +27,12 @@ jobs:
 
       - name: Build Go L7 Library
         run: |
-          rm -f go.mod go.sum # Удаляем старые файлы, если они есть
+          rm -f go.mod go.sum
           go mod init proxy_checker
           go get github.com/xtls/xray-core@v1.8.24
+          # Добавляем все нужные модули явно
+          go get github.com/xtls/xray-core/infra/conf/serial@v1.8.24
+          go get github.com/xtls/xray-core/common/net@v1.8.24
           go mod tidy
           go build -buildmode=c-shared -ldflags="-s -w" -o libchecker.so checker.go
           
