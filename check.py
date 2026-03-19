@@ -562,6 +562,17 @@ def main():
             
             counter += 1
             continue
+
+        # --- БЛОК ФАВОРИТОВ (FAVORITES) ---
+        if base_part in fav_bases:
+            seen_parts.add(base_part)
+            # Берем ссылку как есть, или даем ей красивое имя
+            final_fav_link = rebuild_link_name(clean_link, f"⭐ [FAV] {counter}")
+            working_for_sub.append(final_fav_link)
+            
+            print(f"⭐ [FAVORITE] {counter} добавлен (защищен)")
+            counter += 1
+            continue
             
         # --- ФИЛЬТРЫ И ПРОВЕРКИ ---
         if base_part in blacklist:
