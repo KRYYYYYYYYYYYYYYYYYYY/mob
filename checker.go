@@ -93,7 +93,7 @@ func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C
 	}
 
 	// Делаем реальный запрос
-	resp, err := client.Get("http://cp.cloudflare.com/generate_204")
+	resp, err := client.Get("https://www.gstatic.com/generate_204")
 	if err != nil {
 		return 0
 	}
