@@ -27,17 +27,10 @@ jobs:
 
       - name: Build Go L7 Library
         run: |
-          # Инициализируем модуль, если его нет
-          [ -f go.mod ] || go mod init checker
-          
-          # Подтягиваем ядро Xray и все необходимые зависимости
+          rm -f go.mod go.sum # Удаляем старые файлы, если они есть
+          go mod init proxy_checker
           go get github.com/xtls/xray-core@v1.8.24
-          
-          # Критически важно: подтягиваем зависимости для корректной работы L7
           go mod tidy
-          
-          # Компилируем библиотеку. 
-          # Мы используем -ldflags="-s -w", чтобы уменьшить размер .so файла
           go build -buildmode=c-shared -ldflags="-s -w" -o libchecker.so checker.go
           
       - name: Set up Python
