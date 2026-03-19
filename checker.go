@@ -2,8 +2,6 @@ package main
 
 import "C"
 import (
-	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"time"
@@ -12,8 +10,8 @@ import (
 	"github.com/xtls/xray-core/core"
 	"github.com/xtls/xray-core/infra/conf"
 
-	// Эти импорты нужны, чтобы Xray внутри понимал протоколы
-	_ "github.com/xtls/xray-core/main/distro/all" 
+	// Интеграция всех протоколов
+	_ "github.com/xtls/xray-core/main/distro/all"
 )
 
 //export CheckVlessL7
@@ -32,7 +30,7 @@ func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C
 			"vnext": []interface{}{
 				map[string]interface{}{
 					"address": addr,
-					"port":    cPort,
+					"port":    uint16(cPort),
 					"users": []interface{}{
 						map[string]interface{}{
 							"id":         uuid,
@@ -44,9 +42,9 @@ func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C
 			},
 		},
 		StreamSetting: &conf.StreamConfig{
-			Network:  conf.TransportProtocol("tcp"),
+			Network:  conf.TransportProtocolPtr("tcp"),
 			Security: "reality",
-			RealitySettings: &conf.RealityConfig{
+			REALITYSettings: &conf.RealityConfig{
 				Show:        false,
 				Fingerprint: "chrome",
 				ServerName:  sni,
@@ -57,11 +55,12 @@ func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C
 		},
 	}
 
-	// Внутренний Socks5 вход (на нем Xray будет ждать наш HTTP запрос)
+	// Внутренний Socks5 вход
+	listenAddr := conf.NewAddress(net.ParseAddress("127.0.0.1"))
 	socksInbound := &conf.InboundDetourConfig{
 		Protocol: "socks",
-		Listen:   &conf.Address{Address: net.ParseAddress("127.0.0.1")},
-		Port:     &conf.PortRange{From: 10001, To: 10001},
+		Listen:   listenAddr,
+		PortList: &conf.PortRange{From: 10001, To: 10001},
 		Settings: &conf.ConfigRaw{
 			"auth": "noauth",
 			"udp":  false,
@@ -73,13 +72,11 @@ func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C
 		OutboundConfigs: []conf.OutboundDetourConfig{*vlessOutbound},
 	}
 
-	// Строим конфиг
 	serverConfig, err := cfg.Build()
 	if err != nil {
 		return 0
 	}
 
-	// Запускаем ядро
 	instance, err := core.New(serverConfig)
 	if err != nil {
 		return 0
@@ -90,21 +87,22 @@ func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C
 	}
 	defer instance.Close()
 
-	// Даем ядру 100мс, чтобы инициализировать сокеты
-	time.Sleep(100 * time.Millisecond)
+	// Ожидание инициализации ядра
+	time.Sleep(200 * time.Millisecond)
 
-	// Тестируем интернет через созданный инстанс
-	proxyUrl, _ := net.ParseProxyURL("socks5://127.0.0.1:10001")
+	// Настройка прокси для HTTP клиента
+	proxyUrl, _ := http.ProxyFromEnvironment(nil)
+	proxyUrl, _ = proxyUrl.Parse("socks5://127.0.0.1:10001")
+
 	client := &http.Client{
 		Transport: &http.Transport{
-			Proxy: http.ProxyURL(proxyUrl),
-			// Отключаем Keep-Alive, чтобы чекер не висел
-			DisableKeepAlives: true, 
+			Proxy:             http.ProxyURL(proxyUrl),
+			DisableKeepAlives: true,
 		},
 		Timeout: time.Duration(timeout) * time.Second,
 	}
 
-	// Проверка через Cloudflare (самый быстрый и стабильный способ)
+	// Финальная проверка L7
 	resp, err := client.Get("http://cp.cloudflare.com/generate_204")
 	if err != nil {
 		return 0
