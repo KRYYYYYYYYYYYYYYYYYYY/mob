@@ -62,22 +62,20 @@ else:
     go_lib.CheckVlessL7.restype = ctypes.c_int
 
 def probe_vless_l7(link, target_sni, timeout=5):
-    """Парсит VLESS ссылку и отправляет её в Go-ядро для L7 проверки."""
+    """Парсит VLESS ссылку и возвращает пинг в мс (0 если ошибка)."""
     try:
         parsed = urllib.parse.urlparse(link)
         params = urllib.parse.parse_qs(parsed.query)
         
-        # Извлекаем хост и порт
         _, host, port = extract_host_port(link)
         
-        # Данные из ссылки
         uuid = parsed.username if parsed.username else ""
         pbk = params.get('pbk', [''])[0]
         sid = params.get('sid', [''])[0]
         flow = params.get('flow', [''])[0]
         
-        # Вызов Go
-        result = go_lib.CheckVlessL7(
+        # Вызов Go (теперь возвращает int с миллисекундами)
+        latency = go_lib.CheckVlessL7(
             host.encode('utf-8'),
             int(port),
             uuid.encode('utf-8'),
@@ -87,10 +85,10 @@ def probe_vless_l7(link, target_sni, timeout=5):
             flow.encode('utf-8'),
             int(timeout)
         )
-        return result == 1
+        return latency # Вернет 0 или время в мс
     except Exception as e:
         print(f"⚠️ Ошибка L7 чекера: {e}")
-        return False
+        return 0
 
 def extract_sni(link):
     # Твоя текущая функция
@@ -597,28 +595,30 @@ def main():
         candidates = extract_sni_candidates(link)
         is_alive = False
         final_used_sni = ""
-
-        print(f"🔍 L7 Тест: {host}:{port}...", end=" ", flush=True)
+        current_latency = 0 # Сюда сохраним пинг
 
         for cand_sni in candidates:
             if any(word in cand_sni.lower() for word in BAD_SNI_KEYWORDS):
                 continue
             
-            # ВЫЗЫВАЕМ ТВОЮ НОВУЮ ФУНКЦИЮ
-            # Она внутри поднимет Xray, подставит UUID, PBK и проверит интернет
-            success = probe_vless_l7(link, cand_sni, timeout=int(stress_config.get("timeout", 5)))
+            # Вызываем обновленную функцию
+            latency = probe_vless_l7(link, cand_sni, timeout=int(stress_config.get("timeout", 5)))
             
-            if success:
+            if latency > 0:
                 is_alive = True
+                current_latency = latency
                 final_used_sni = cand_sni
                 break 
 
         if not is_alive:
-            # Последняя попытка с родным SNI из ссылки
+            # Последняя попытка с родным SNI
             native_sni = extract_sni(link)
             if native_sni:
-                is_alive = probe_vless_l7(link, native_sni, timeout=int(stress_config.get("timeout", 5)))
-                final_used_sni = native_sni if is_alive else ""
+                latency = probe_vless_l7(link, native_sni, timeout=int(stress_config.get("timeout", 5)))
+                if latency > 0:
+                    is_alive = True
+                    current_latency = latency
+                    final_used_sni = native_sni
 
         # Настраиваем переменные для совместимости с твоим кодом ниже
         checked_today += 1
@@ -668,11 +668,13 @@ def main():
             if "sni=" not in sub_link.lower() and not is_ipv6(host):
                 sep = "&" if "?" in sub_link else "?"
                 sub_link += f"{sep}sni={host}"
-            
-            final_link = rebuild_link_name(sub_link, f"mob {counter}")
+            # Собираем красивое имя с пингом
+            ping_label = f"{current_latency}ms"
+            final_link = rebuild_link_name(sub_link, f"mob {counter} [{ping_label}]")
             working_for_sub.append(final_link)
             
-            print(f"✅ ОК {len(working_for_sub)}/200 ({country}): {host} -> {resolved_ip} [{success_hits}/{total_hits}] (mob {counter})")
+            # Красивый лог в консоль
+            print(f"✅ ОК {len(working_for_sub)}/200 ({country}): {host} -> {current_latency}ms (mob {counter})")
             counter += 1
     
         # --- ЭТАП 3: ЕСЛИ СЕРВЕР НЕ ОТВЕЧАЕТ ---
