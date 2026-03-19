@@ -352,8 +352,7 @@ def main_monitor():
                 "# profile-title: 🏳️Мобильный инет🏳️",
                 "# remark: 🏳️Мобильный инет🏳️",
                 "# announce: Подписка для использования ТОЛЬКО на мобильном интернете в условиях БЕЛЫХ СПИСКОВ!",
-                "# profile-update-interval: 2",
-                "#providerid ioZjl2e1",
+                "# profile-update-interval: 2"
             ]
 
         # Записываем всё обратно
