@@ -52,9 +52,46 @@ else:
     go_lib.CheckReality.restype = ctypes.c_int
 
 def extract_sni(link):
-    # Ищем sni=... до следующего символа &, ? или конца строки
+    # Твоя текущая функция
     match = re.search(r"sni=([^&?#\s]+)", link)
     return match.group(1) if match else ""
+
+# --- НОВЫЙ БЛОК: ФИЛЬТРАЦИЯ И КАНДИДАТЫ ---
+BAD_SNI_KEYWORDS = ['google', 'apple', 'microsoft', 'facebook', 'netflix', 'youtube']
+
+def is_sni_suspicious(link):
+    """Проверяет, нет ли в SNI мусорных доменов (для мобильных сетей это важно)."""
+    sni = extract_sni(link).lower()
+    if not sni: 
+        return False
+    for word in BAD_SNI_KEYWORDS:
+        if word in sni:
+            return True
+    return False
+
+def extract_sni_candidates(link):
+    """Вытягивает список потенциальных SNI из разных частей ссылки."""
+    candidates = []
+    parsed = urllib.parse.urlparse(link)
+    params = urllib.parse.parse_qs(parsed.query)
+    
+    # 1. Текущий SNI
+    sni = params.get('sni', [''])[0]
+    if sni: candidates.append(sni)
+    
+    # 2. Host Header
+    host_hdr = params.get('host', [''])[0]
+    if host_hdr and host_hdr not in candidates: candidates.append(host_hdr)
+    
+    # 3. Домен из адреса (если это не IP)
+    try:
+        ipaddress.ip_address(parsed.hostname)
+    except ValueError:
+        if parsed.hostname and parsed.hostname not in candidates:
+            candidates.append(parsed.hostname)
+            
+    return candidates
+# ------------------------------------------
 
 
 def download_raw_data(urls):
@@ -458,6 +495,12 @@ def main():
             break
         link = unique_links[idx]
         idx += 1 # Сдвигаем указатель
+
+        # --- ДОБАВЛЯЕМ ТУТ ---
+        if is_sni_suspicious(link):
+            print(f"🚫 Скип (Bad SNI): {link.split('sni=')[-1][:20]}...")
+            continue
+        # ---------------------
         
         clean_link = link.strip()
         base_part = clean_link.split("#", 1)[0].strip()
@@ -689,23 +732,6 @@ def main():
     print(f"✅ Всего в wifi.txt: {len(final_to_sub)} (из лимита 200)")
     print(f"💾 В базе 1.txt сохранено: {len(final_base_to_save)} серверов (включая защиту фаворитов)")
     print(f"⏳ В очереди deferred.txt: {len(deferred_final)}")
-    
-    # 3. Сохранение (ТВОЙ БЛОК БЕЗ ИЗМЕНЕНИЙ НАДПИСЕЙ)
-    os.makedirs(os.path.dirname(INPUT_FILE), exist_ok=True)
-    with open(INPUT_FILE, "w", encoding="utf-8") as f: 
-        f.write("\n".join(working_for_base))
-    
-    with open(STATUS_FILE, "w") as f: 
-        json.dump(new_history, f)
-
-    os.makedirs(os.path.dirname(OUTPUT_FILE), exist_ok=True)
-    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
-        f.write(HEADER + "\n".join(final_to_sub))
-
-    with open(CACHE_FILE, 'w') as f:
-        json.dump(countries_cache, f)
-
-    print(f"🏁 Готово! Подписка обновлена.")
 
 if __name__ == "__main__":
     main()
