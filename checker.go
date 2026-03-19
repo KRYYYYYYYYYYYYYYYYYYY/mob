@@ -2,7 +2,7 @@ package main
 
 import "C"
 import (
-	"context"
+	"bytes"
 	"fmt"
 	"net/http"
 	"time"
@@ -23,7 +23,7 @@ func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C
 	sid := C.GoString(cSid)
 	flow := C.GoString(cFlow)
 
-	// Формируем конфиг через JSON - это гарантирует отсутствие ошибок типов Go
+	// Конфиг в формате JSON
 	configJSON := fmt.Sprintf(`{
 		"inbounds": [{
 			"port": 10001,
@@ -55,13 +55,19 @@ func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C
 		}]
 	}`, addr, cPort, uuid, flow, sni, pbk, sid)
 
-	// Парсим JSON в структуру конфигурации Xray
-	serverConfig, err := serial.DecodeJSONConfig(context.Background(), nil, []byte(configJSON))
+	// 1. Декодируем JSON (только 1 аргумент - io.Reader)
+	rawConfig, err := serial.DecodeJSONConfig(bytes.NewReader([]byte(configJSON)))
 	if err != nil {
 		return 0
 	}
 
-	// Запуск ядра
+	// 2. Преобразуем в системный формат ядра (*core.Config)
+	serverConfig, err := rawConfig.Build()
+	if err != nil {
+		return 0
+	}
+
+	// 3. Запуск ядра
 	instance, err := core.New(serverConfig)
 	if err != nil {
 		return 0
@@ -72,10 +78,12 @@ func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C
 	}
 	defer instance.Close()
 
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(250 * time.Millisecond)
 
-	// Настройка HTTP клиента через Socks5
+	// Настройка прокси для теста
+	// Используем стандартную библиотеку для создания URL прокси
 	proxyURL, _ := net.ParseProxyURL("socks5://127.0.0.1:10001")
+	
 	client := &http.Client{
 		Transport: &http.Transport{
 			Proxy: http.ProxyURL(proxyURL),
