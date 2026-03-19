@@ -41,14 +41,56 @@ DEFAULT_MOBILE_USER_AGENTS = [
 ]
 DEFAULT_PROBE_PATHS = ["/", "/generate_204", "/favicon.ico"]
 
-# Подключаем Go-движок
+# Подключаем новую библиотеку
 lib_path = os.path.abspath("libchecker.so")
 if not os.path.exists(lib_path):
     print("❌ ОШИБКА: Библиотека libchecker.so не найдена!")
 else:
     go_lib = ctypes.cdll.LoadLibrary(lib_path)
-    go_lib.CheckReality.argtypes = [ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_int]
-    go_lib.CheckReality.restype = ctypes.c_int
+    
+    # Описываем аргументы для функции CheckVlessL7
+    go_lib.CheckVlessL7.argtypes = [
+        ctypes.c_char_p, # addr (host)
+        ctypes.c_int,    # port
+        ctypes.c_char_p, # uuid
+        ctypes.c_char_p, # sni
+        ctypes.c_char_p, # pbk
+        ctypes.c_char_p, # sid
+        ctypes.c_char_p, # flow
+        ctypes.c_int     # timeout
+    ]
+    go_lib.CheckVlessL7.restype = ctypes.c_int
+
+def probe_vless_l7(link, target_sni, timeout=5):
+    """Парсит VLESS ссылку и отправляет её в Go-ядро для L7 проверки."""
+    try:
+        parsed = urllib.parse.urlparse(link)
+        params = urllib.parse.parse_qs(parsed.query)
+        
+        # Извлекаем хост и порт
+        _, host, port = extract_host_port(link)
+        
+        # Данные из ссылки
+        uuid = parsed.username if parsed.username else ""
+        pbk = params.get('pbk', [''])[0]
+        sid = params.get('sid', [''])[0]
+        flow = params.get('flow', [''])[0]
+        
+        # Вызов Go
+        result = go_lib.CheckVlessL7(
+            host.encode('utf-8'),
+            int(port),
+            uuid.encode('utf-8'),
+            target_sni.encode('utf-8'),
+            pbk.encode('utf-8'),
+            sid.encode('utf-8'),
+            flow.encode('utf-8'),
+            int(timeout)
+        )
+        return result == 1
+    except Exception as e:
+        print(f"⚠️ Ошибка L7 чекера: {e}")
+        return False
 
 def extract_sni(link):
     # Твоя текущая функция
@@ -179,25 +221,6 @@ def remove_from_all(base_part: str):
         except Exception as e:
             print(f"⚠️ Ошибка при очистке {path}: {e}")
 
-
-def probe_server_go(host, port, link, timeout=3):
-    sni = extract_sni(link)
-    # Если SNI нет в ссылке, Reality сервер ждет хотя бы host
-    if not sni:
-        sni = host
-        
-    try:
-        # ПЕРЕДАЕМ ВСЕ 4 АРГУМЕНТА ЯВНО
-        result = go_lib.CheckReality(
-            host.encode('utf-8'),      # 1. cHost
-            int(port),                 # 2. port
-            sni.encode('utf-8'),       # 3. cSni
-            int(timeout)               # 4. timeout
-        )
-        return result == 1
-    except Exception as e:
-        print(f"⚠️ Ошибка вызова Go: {e}")
-        return False
     
 def remove_from_input_file(base_to_remove: str):
     """Удаляет конкретную ссылку из 1.txt по её базовой части"""
@@ -570,30 +593,32 @@ def main():
         # --- ПРОВЕРКА СОЕДИНЕНИЯ (ОБНОВЛЕННЫЙ БЛОК) ---
         print(f"🔍 Тестирую: {host}:{port}...", end=" ", flush=True)
 
-        # 1. Собираем кандидатов SNI
+        # --- УМНАЯ ПРОВЕРКА L7 С ПЕРЕБОРОМ SNI ---
         candidates = extract_sni_candidates(link)
         is_alive = False
         final_used_sni = ""
 
-        # 2. Перебор SNI кандидатов (умная проверка)
+        print(f"🔍 L7 Тест: {host}:{port}...", end=" ", flush=True)
+
         for cand_sni in candidates:
-            # Пропускаем заведомо плохие домены для мобилок
             if any(word in cand_sni.lower() for word in BAD_SNI_KEYWORDS):
                 continue
             
-            # Пробуем текущего кандидата
-            success = probe_server_go(host, int(port), f"{base_part}?sni={cand_sni}", timeout=stress_config.get("timeout", 3))
+            # ВЫЗЫВАЕМ ТВОЮ НОВУЮ ФУНКЦИЮ
+            # Она внутри поднимет Xray, подставит UUID, PBK и проверит интернет
+            success = probe_vless_l7(link, cand_sni, timeout=int(stress_config.get("timeout", 5)))
             
             if success:
                 is_alive = True
                 final_used_sni = cand_sni
-                break # Нашли рабочий, выходим из цикла кандидатов
+                break 
 
-        # 3. Если перебор не помог, пробуем оригинал из ссылки (на всякий случай)
         if not is_alive:
+            # Последняя попытка с родным SNI из ссылки
             native_sni = extract_sni(link)
-            is_alive = probe_server_go(host, int(port), link, timeout=stress_config.get("timeout", 3))
-            final_used_sni = native_sni if is_alive else ""
+            if native_sni:
+                is_alive = probe_vless_l7(link, native_sni, timeout=int(stress_config.get("timeout", 5)))
+                final_used_sni = native_sni if is_alive else ""
 
         # Настраиваем переменные для совместимости с твоим кодом ниже
         checked_today += 1
