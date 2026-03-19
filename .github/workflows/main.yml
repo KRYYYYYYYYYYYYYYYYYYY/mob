@@ -29,11 +29,11 @@ jobs:
         run: |
           rm -f go.mod go.sum
           go mod init proxy_checker
+          # Тянем основное ядро и парсер JSON
           go get github.com/xtls/xray-core@v1.8.24
-          # Добавляем все нужные модули явно
           go get github.com/xtls/xray-core/infra/conf/serial@v1.8.24
-          go get github.com/xtls/xray-core/common/net@v1.8.24
           go mod tidy
+          # Компиляция с флагами для уменьшения веса
           go build -buildmode=c-shared -ldflags="-s -w" -o libchecker.so checker.go
           
       - name: Set up Python
