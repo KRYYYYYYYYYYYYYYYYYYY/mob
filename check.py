@@ -567,17 +567,41 @@ def main():
             remove_from_input_file(base_part) # Чистим из 1.txt
             continue
 
-        # --- ПРОВЕРКА СОЕДИНЕНИЯ ---
-        print(f"🔍 Тестирую: {host}...", end=" ", flush=True) # Печатаем без переноса строки
+        # --- ПРОВЕРКА СОЕДИНЕНИЯ (ОБНОВЛЕННЫЙ БЛОК) ---
+        print(f"🔍 Тестирую: {host}:{port}...", end=" ", flush=True)
 
+        # 1. Собираем кандидатов SNI
+        candidates = extract_sni_candidates(link)
+        is_alive = False
+        final_used_sni = ""
+
+        # 2. Перебор SNI кандидатов (умная проверка)
+        for cand_sni in candidates:
+            # Пропускаем заведомо плохие домены для мобилок
+            if any(word in cand_sni.lower() for word in BAD_SNI_KEYWORDS):
+                continue
+            
+            # Пробуем текущего кандидата
+            success = probe_server_go(host, int(port), f"{base_part}?sni={cand_sni}", timeout=stress_config.get("timeout", 3))
+            
+            if success:
+                is_alive = True
+                final_used_sni = cand_sni
+                break # Нашли рабочий, выходим из цикла кандидатов
+
+        # 3. Если перебор не помог, пробуем оригинал из ссылки (на всякий случай)
+        if not is_alive:
+            native_sni = extract_sni(link)
+            is_alive = probe_server_go(host, int(port), link, timeout=stress_config.get("timeout", 3))
+            final_used_sni = native_sni if is_alive else ""
+
+        # Настраиваем переменные для совместимости с твоим кодом ниже
         checked_today += 1
-        # ВЫЗОВ GO-ЧЕКЕРА
-        is_alive = probe_server_go(host, int(port), link, timeout=stress_config.get("timeout", 3))
-        # Эмулируем старые переменные, чтобы остальной код не сломался
         resolved_ip = host 
         success_hits = 1 if is_alive else 0
         total_hits = 1
 
+        # Удаляем из входного файла, так как мы его уже "потрогали"
         remove_from_input_file(base_part)
 
         # 1. Сначала отсекаем мертвые IP, которые уже видели (твоя логика)
