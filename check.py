@@ -18,6 +18,7 @@ CACHE_FILE = 'test1/countries_cache.json' # Добавь эту констант
 RANKING_FILE = 'test1/ranking.json'
 VETTED_FILE = 'test1/vetted.txt'
 PINNED_FILE = 'test1/pinned.txt'
+FAVORITES_FILE = 'test1/favorites.txt'
 
 EXTERNAL_SOURCE_URL = [
     "https://raw.githubusercontent.com/KRYYYYYYYYYYYYYYYYYYY/crazy_xray_checker/refs/heads/main/result/working.txt"
@@ -336,6 +337,16 @@ def main():
 
     pinned_list = list(clean_pinned.values())
 
+    # 2. Загружаем Фавориты (НОВЫЙ БЛОК)
+    fav_bases = set()
+    if os.path.exists(FAVORITES_FILE):
+        with open(FAVORITES_FILE, 'r', encoding='utf-8') as f:
+            for line in f:
+                if "vless://" in line:
+                    # Извлекаем только базу, чтобы сравнивать
+                    fav_bases.add(line.split("#")[0].strip())
+    print(f"⭐ Загружено фаворитов для защиты: {len(fav_bases)}")
+
     # 2. Загружаем Отложенные (Deferred)
     deferred_base = []
     if os.path.exists('test1/deferred.txt'):
@@ -644,45 +655,40 @@ def main():
     leftover_from_others = [l for l in all_others if l.split("#")[0].strip() not in seen_in_final]
     deferred_final = new_deferred + leftover_from_others
     
-# 5. Сохраняем результат
+    # --- ИТОГОВОЕ СОХРАНЕНИЕ (ЕДИНЫЙ БЛОК) ---
+
+    # 1. Сохраняем подписку (wifi.txt) - то, что идет пользователю
+    os.makedirs(os.path.dirname(OUTPUT_FILE), exist_ok=True)
+    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+        # Используем .strip() для хедера и объединяем с финальным списком
+        f.write(HEADER.strip() + "\n\n" + "\n".join(final_to_sub))
+
+    # 2. Сохраняем рабочую базу (1.txt) - С ЗАЩИТОЙ
+    # Собираем: те, кто выжил сегодня + те, кто в фаворитах + те, кто в закрепах
+    # set() уберет дубликаты
+    final_base_to_save = list(set(working_for_base) | fav_bases | set(clean_pinned.keys()))
     
-    # Сначала сохраняем deferred.txt (очередь на потом)
+    os.makedirs(os.path.dirname(INPUT_FILE), exist_ok=True)
+    with open(INPUT_FILE, "w", encoding="utf-8") as f: 
+        f.write("\n".join(final_base_to_save))
+
+    # 3. Сохраняем очередь на будущее (deferred.txt)
     with open('test1/deferred.txt', "w", encoding="utf-8") as f:
         f.write("\n".join(deferred_final))
     
-    # ФОРМИРУЕМ ПРАВИЛЬНЫЙ ТЕКСТ ДЛЯ ПОДПИСКИ
-    # .strip() убирает случайные пробелы в начале/конце хедера
-    # \n\n гарантирует, что между командами и ссылками будет пустая строка (важно для iPhone)
-    final_content = HEADER.strip() + "\n\n" + "\n".join(final_to_sub)
-
-    # ЗАПИСЫВАЕМ В ОСНОВНОЙ ФАЙЛ (kr/mob/wifi.txt)
-    os.makedirs(os.path.dirname(OUTPUT_FILE), exist_ok=True)
-    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
-        f.write(final_content)
-        
-    # Сохраняем рабочую базу ссылок для следующего запуска чекера
-    os.makedirs(os.path.dirname(INPUT_FILE), exist_ok=True)
-    with open(INPUT_FILE, "w", encoding="utf-8") as f: 
-        f.write("\n".join(working_for_base))
-    
-    # Сохраняем историю и рейтинги
+    # 4. Сохраняем системные файлы (история, рейтинги, кэш)
     with open(STATUS_FILE, "w") as f: 
         json.dump(new_history, f)
     with open('test1/ranking.json', "w") as f:
         json.dump(ranking_db, f)
+    with open(CACHE_FILE, 'w') as f:
+        json.dump(countries_cache, f)
 
-    print(f"🏁 План выполнен: {len(final_to_sub)} в подписке. Остаток в базе: {len(deferred_final)}")
-    # Базовые части закрепов
-    pinned_bases = {p.split("#")[0].strip() for p in pinned_list}
-    
-    # Сколько закрепов реально попало в подписку
-    count_pinned = sum(
-        1 for l in final_to_sub
-        if l.split("#")[0].strip() in pinned_bases
-    )
-    
-    print(f"💎 Закрепленных в подписке: {count_pinned} (из лимита 130)")
+    # Итоговые отчеты в консоль
+    print(f"\n🏁 План выполнен!")
     print(f"✅ Всего в wifi.txt: {len(final_to_sub)} (из лимита 200)")
+    print(f"💾 В базе 1.txt сохранено: {len(final_base_to_save)} серверов (включая защиту фаворитов)")
+    print(f"⏳ В очереди deferred.txt: {len(deferred_final)}")
     
     # 3. Сохранение (ТВОЙ БЛОК БЕЗ ИЗМЕНЕНИЙ НАДПИСЕЙ)
     os.makedirs(os.path.dirname(INPUT_FILE), exist_ok=True)
