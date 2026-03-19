@@ -5,9 +5,9 @@ import (
 	"bytes"
 	"fmt"
 	"net/http"
+	"net/url"
 	"time"
 
-	"github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/core"
 	"github.com/xtls/xray-core/infra/conf/serial"
 
@@ -23,7 +23,7 @@ func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C
 	sid := C.GoString(cSid)
 	flow := C.GoString(cFlow)
 
-	// Конфиг в формате JSON
+	// Конфиг JSON (проверенная структура для v1.8.24)
 	configJSON := fmt.Sprintf(`{
 		"inbounds": [{
 			"port": 10001,
@@ -55,19 +55,19 @@ func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C
 		}]
 	}`, addr, cPort, uuid, flow, sni, pbk, sid)
 
-	// 1. Декодируем JSON (только 1 аргумент - io.Reader)
+	// 1. Декодируем JSON
 	rawConfig, err := serial.DecodeJSONConfig(bytes.NewReader([]byte(configJSON)))
 	if err != nil {
 		return 0
 	}
 
-	// 2. Преобразуем в системный формат ядра (*core.Config)
+	// 2. Строим системный конфиг
 	serverConfig, err := rawConfig.Build()
 	if err != nil {
 		return 0
 	}
 
-	// 3. Запуск ядра
+	// 3. Создаем инстанс ядра
 	instance, err := core.New(serverConfig)
 	if err != nil {
 		return 0
@@ -78,11 +78,11 @@ func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C
 	}
 	defer instance.Close()
 
+	// Небольшая пауза для запуска воркеров внутри Xray
 	time.Sleep(250 * time.Millisecond)
 
-	// Настройка прокси для теста
-	// Используем стандартную библиотеку для создания URL прокси
-	proxyURL, _ := net.ParseProxyURL("socks5://127.0.0.1:10001")
+	// 4. Проверка через стандартный http.Client
+	proxyURL, _ := url.Parse("socks5://127.0.0.1:10001")
 	
 	client := &http.Client{
 		Transport: &http.Transport{
@@ -92,6 +92,7 @@ func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C
 		Timeout: time.Duration(timeout) * time.Second,
 	}
 
+	// Делаем реальный запрос
 	resp, err := client.Get("http://cp.cloudflare.com/generate_204")
 	if err != nil {
 		return 0
