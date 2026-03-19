@@ -30,7 +30,6 @@ HEADER = """# profile-title: 🏳️Мобильный инет🏳️
 # remark: 🏳️Мобильный инет🏳️
 # announce: Подписка для использования ТОЛЬКО на мобильном интернете в условиях БЕЛЫХ СПИСКОВ!
 # profile-update-interval: 2
-#providerid ioZjl2e1
 """
 
 ALLOWED_COUNTRIES = {"US", "DE", "NL", "GB", "FR", "FI", "SG", "JP", "PL", "TR", "RU"}
