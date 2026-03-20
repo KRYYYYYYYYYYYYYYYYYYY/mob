@@ -1,16 +1,388 @@
-{
-  "version": 1,
-  "remarks": "My Happ Config",
-  "outbounds": [
-    {
-      "type": "remote",
-      "tag": "server-1",
-      "url": "https://raw.githubusercontent.com/KRYYYYYYYYYYYYYYYYYYY/mob/refs/hesds/main/test_raw/test1.json"
+[
+  {
+    "remarks": "🇳🇱 Нидерланды 🔥",
+    "dns": {},
+    "routing": {
+      "rules": [
+        {
+          "type": "field",
+          "domain": [
+            "domain:2gis.ru",
+            "domain:ads.x5.ru",
+            "domain:2gis.com",
+            "domain:aif.ru",
+            "domain:aeroflot.ru",
+            "domain:alfabank.ru",
+            "domain:avito.ru",
+            "domain:beeline.ru",
+            "domain:burgerkingrus.ru",
+            "domain:dellin.ru",
+            "domain:drive2.ru",
+            "domain:dzen.ru",
+            "domain:flypobeda.ru",
+            "domain:forbes.ru",
+            "domain:gazeta.ru",
+            "domain:gazprombank.ru",
+            "domain:gismeteo.ru",
+            "domain:gosuslugi.ru",
+            "domain:hh.ru",
+            "domain:kontur.ru",
+            "domain:kontur.host",
+            "domain:kp.ru",
+            "domain:kuper.ru",
+            "domain:lenta.ru",
+            "domain:mail.ru",
+            "domain:max.ru",
+            "domain:megamarket.ru",
+            "domain:megamarket.tech",
+            "domain:megafon.ru",
+            "domain:moex.com",
+            "domain:motivtelecom.ru",
+            "domain:ozon.ru",
+            "domain:pervye.ru",
+            "domain:psbank.ru",
+            "domain:rambler.ru",
+            "domain:rambler-co.ru",
+            "domain:rbc.ru",
+            "domain:reg.ru",
+            "domain:reviews.2gis.com",
+            "domain:rg.ru",
+            "domain:ria.ru",
+            "domain:ruwiki.ru",
+            "domain:rustore.ru",
+            "domain:rutube.ru",
+            "domain:rzd.ru",
+            "domain:sirena-travel.ru",
+            "domain:sravni.ru",
+            "domain:t-j.ru",
+            "domain:t2.ru",
+            "domain:tank-online.com",
+            "domain:taximaxim.ru",
+            "domain:tbank-online.com",
+            "domain:tildaapi.com",
+            "domain:tns-counter.ru",
+            "domain:trvl.yandex.net",
+            "domain:tutu.ru",
+            "domain:vk.com",
+            "domain:vk.ru",
+            "domain:vkvideo.ru",
+            "domain:vtb.ru",
+            "domain:x5.ru",
+            "domain:ya.ru",
+            "domain:yandex.ru",
+            "domain:yandex.net",
+            "domain:yandex.com",
+            "domain:yastatic.net",
+            "domain:yandexcloud.net",
+            "full:go.yandex",
+            "full:ru.ruwiki.ru",
+            "domain:xn--90acagbhgpca7c8c7f.xn--p1ai",
+            "domain:xn--80ajghhoc2aj1c8b.xn--p1ai",
+            "domain:xn--90aivcdt6dxbc.xn--p1ai",
+            "domain:xn--b1aew.xn--p1ai"
+          ],
+          "outboundTag": "direct"
+        },
+        {
+          "type": "field",
+          "protocol": [
+            "bittorrent"
+          ],
+          "outboundTag": "direct"
+        },
+        {
+          "ip": [
+            "89.208.85.188",
+            "37.139.42.140",
+            "37.139.43.80",
+            "5.188.140.234",
+            "5.188.141.236",
+            "37.139.42.151",
+            "91.219.227.12",
+            "146.185.209.253",
+            "37.139.43.244",
+            "37.139.43.149",
+            "37.139.43.26",
+            "72.57.0.0/16"
+          ],
+          "outboundTag": "direct"
+        }
+      ],
+      "domainMatcher": "hybrid",
+      "domainStrategy": "AsIs"
     },
-    {
-      "type": "remote",
-      "tag": "server-2",
-      "url": "https://raw.githubusercontent.com/KRYYYYYYYYYYYYYYYYYYY/mob/refs/heads/main/test_raw/test2.json"
-    }
-  ]
-}
+    "inbounds": [
+      {
+        "tag": "socks",
+        "port": 10808,
+        "listen": "127.0.0.1",
+        "protocol": "socks",
+        "settings": {
+          "udp": true,
+          "auth": "noauth"
+        },
+        "sniffing": {
+          "enabled": true,
+          "routeOnly": true,
+          "destOverride": [
+            "http",
+            "tls",
+            "quic"
+          ]
+        }
+      },
+      {
+        "tag": "http",
+        "port": 10809,
+        "listen": "127.0.0.1",
+        "protocol": "http",
+        "settings": {
+          "allowTransparent": false
+        },
+        "sniffing": {
+          "enabled": true,
+          "routeOnly": true,
+          "destOverride": [
+            "http",
+            "tls",
+            "quic"
+          ]
+        }
+      }
+    ],
+    "outbounds": [
+      {
+        "tag": "proxy",
+        "protocol": "vless",
+        "settings": {
+          "vnext": [
+            {
+              "address": "72.57.78.53",
+              "port": 443,
+              "users": [
+                {
+                  "id": "034f514d-a3f3-4e94-a3eb-b5338e8b93fa",
+                  "encryption": "none",
+                  "flow": "xtls-rprx-vision"
+                }
+              ]
+            }
+          ]
+        },
+        "streamSettings": {
+          "network": "tcp",
+          "security": "reality",
+          "realitySettings": {
+            "serverName": "pimg.mycdn.me",
+            "shortId": "f03597",
+            "publicKey": "gbP2G_j0cmFvgmWaWLpzZavEzQiPzky-fApmbF2BWxU",
+            "fingerprint": "ios",
+            "spiderX": "/",
+            "show": false
+          }
+        }
+      },
+      {
+        "tag": "direct",
+        "protocol": "freedom"
+      },
+      {
+        "tag": "block",
+        "protocol": "blackhole"
+      }
+    ]
+  },
+  {
+    "remarks": "🇩🇪 Германия 🔥",
+    "dns": {},
+    "routing": {
+      "rules": [
+        {
+          "type": "field",
+          "domain": [
+            "domain:2gis.ru",
+            "domain:ads.x5.ru",
+            "domain:2gis.com",
+            "domain:aif.ru",
+            "domain:aeroflot.ru",
+            "domain:alfabank.ru",
+            "domain:avito.ru",
+            "domain:beeline.ru",
+            "domain:burgerkingrus.ru",
+            "domain:dellin.ru",
+            "domain:drive2.ru",
+            "domain:dzen.ru",
+            "domain:flypobeda.ru",
+            "domain:forbes.ru",
+            "domain:gazeta.ru",
+            "domain:gazprombank.ru",
+            "domain:gismeteo.ru",
+            "domain:gosuslugi.ru",
+            "domain:hh.ru",
+            "domain:kontur.ru",
+            "domain:kontur.host",
+            "domain:kp.ru",
+            "domain:kuper.ru",
+            "domain:lenta.ru",
+            "domain:mail.ru",
+            "domain:max.ru",
+            "domain:megamarket.ru",
+            "domain:megamarket.tech",
+            "domain:megafon.ru",
+            "domain:moex.com",
+            "domain:motivtelecom.ru",
+            "domain:ozon.ru",
+            "domain:pervye.ru",
+            "domain:psbank.ru",
+            "domain:rambler.ru",
+            "domain:rambler-co.ru",
+            "domain:rbc.ru",
+            "domain:reg.ru",
+            "domain:reviews.2gis.com",
+            "domain:rg.ru",
+            "domain:ria.ru",
+            "domain:ruwiki.ru",
+            "domain:rustore.ru",
+            "domain:rutube.ru",
+            "domain:rzd.ru",
+            "domain:sirena-travel.ru",
+            "domain:sravni.ru",
+            "domain:t-j.ru",
+            "domain:t2.ru",
+            "domain:tank-online.com",
+            "domain:taximaxim.ru",
+            "domain:tbank-online.com",
+            "domain:tildaapi.com",
+            "domain:tns-counter.ru",
+            "domain:trvl.yandex.net",
+            "domain:tutu.ru",
+            "domain:vk.com",
+            "domain:vk.ru",
+            "domain:vkvideo.ru",
+            "domain:vtb.ru",
+            "domain:x5.ru",
+            "domain:ya.ru",
+            "domain:yandex.ru",
+            "domain:yandex.net",
+            "domain:yandex.com",
+            "domain:yastatic.net",
+            "domain:yandexcloud.net",
+            "full:go.yandex",
+            "full:ru.ruwiki.ru",
+            "domain:xn--90acagbhgpca7c8c7f.xn--p1ai",
+            "domain:xn--80ajghhoc2aj1c8b.xn--p1ai",
+            "domain:xn--90aivcdt6dxbc.xn--p1ai",
+            "domain:xn--b1aew.xn--p1ai"
+          ],
+          "outboundTag": "direct"
+        },
+        {
+          "type": "field",
+          "protocol": [
+            "bittorrent"
+          ],
+          "outboundTag": "direct"
+        },
+        {
+          "ip": [
+            "89.208.85.188",
+            "37.139.42.140",
+            "37.139.43.80",
+            "5.188.140.234",
+            "5.188.141.236",
+            "37.139.42.151",
+            "91.219.227.12",
+            "146.185.209.253",
+            "37.139.43.244",
+            "37.139.43.149",
+            "37.139.43.26",
+            "72.57.0.0/16"
+          ],
+          "outboundTag": "direct"
+        }
+      ],
+      "domainMatcher": "hybrid",
+      "domainStrategy": "AsIs"
+    },
+    "inbounds": [
+      {
+        "tag": "socks",
+        "port": 10808,
+        "listen": "127.0.0.1",
+        "protocol": "socks",
+        "settings": {
+          "udp": true,
+          "auth": "noauth"
+        },
+        "sniffing": {
+          "enabled": true,
+          "routeOnly": true,
+          "destOverride": [
+            "http",
+            "tls",
+            "quic"
+          ]
+        }
+      },
+      {
+        "tag": "http",
+        "port": 10809,
+        "listen": "127.0.0.1",
+        "protocol": "http",
+        "settings": {
+          "allowTransparent": false
+        },
+        "sniffing": {
+          "enabled": true,
+          "routeOnly": true,
+          "destOverride": [
+            "http",
+            "tls",
+            "quic"
+          ]
+        }
+      }
+    ],
+    "outbounds": [
+      {
+        "tag": "proxy",
+        "protocol": "vless",
+        "settings": {
+          "vnext": [
+            {
+              "address": "212.11.62.168",
+              "port": 8443,
+              "users": [
+                {
+                  "id": "034f514d-a3f3-4e94-a3eb-b5338e8b93fa",
+                  "encryption": "none",
+                  "flow": "xtls-rprx-vision"
+                }
+              ]
+            }
+          ]
+        },
+        "streamSettings": {
+          "network": "tcp",
+          "security": "reality",
+          "realitySettings": {
+            "serverName": "ya.ru",
+            "shortId": "1fdea407109a1750",
+            "publicKey": "gbP2G_j0cmFvgmWaWLpzZavEzQiPzky-fApmbF2BWxU",
+            "fingerprint": "edge",
+            "spiderX": "/",
+            "show": false
+          }
+        }
+      },
+      {
+        "tag": "direct",
+        "protocol": "freedom"
+      },
+      {
+        "tag": "block",
+        "protocol": "blackhole"
+      }
+    ]
+  }
+]
