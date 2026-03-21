@@ -1,11 +1,9 @@
 {
-  "remarks": "🚀 ГЛОБАЛЬНЫЙ АВТОВЫБОР (Все сервера)",
-  "log": {
-    "loglevel": "warning"
-  },
+  "remarks": "🚀 ГЛОБАЛЬНЫЙ АВТОВЫБОР (Исправлено)",
+  "log": { "loglevel": "warning" },
   "dns": {
     "fallbackStrategy": "disabledIfAnyMatch",
-    "servers":
+    "servers": ["1.1.1.1", "8.8.8.8"]
   },
   "inbounds": [
     {
@@ -4147,6 +4145,8 @@
         }
       }
     }
+    { "tag": "direct", "protocol": "freedom" },
+    { "tag": "block", "protocol": "blackhole" }
   ],
   "observatory": {
     "subjectSelector": ["🇪", "🇳", "🇩", "🇵", "🇫", "🇰", "🇷", "🇬", "🇺", "🇯", "v"],
