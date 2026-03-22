@@ -139,8 +139,8 @@ func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C
 		"http://cp.cloudflare.com/generate_204",
 	}
 	probeUAs := []string{
-		"Mozilla/5.0 (Linux; Android 13; SM-A336B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.179 Mobile Safari/537.36 happ/1.0",
-		"okhttp/4.12.0 v2rayNG/1.9.28",
+		"Mozilla/5.0 (Linux; Android 13; SM-A336B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.179 Mobile Safari/537.36 happ/3.15.1",
+		"okhttp/4.12.0 v2rayNG/1.12.28",
 	}
 	successHits := 0
 	firstSuccessLatency := 0
