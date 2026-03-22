@@ -36,6 +36,27 @@ DEFAULT_PROBE_PATHS = ["/", "/generate_204", "/favicon.ico"]
 file_lock = threading.Lock()
 go_lib = None
 
+def normalize_rank_entry(base: str, data):
+    """Унифицирует формат ranking.json: dict(rank, link, ...)."""
+    if isinstance(data, dict):
+        rank = int(data.get("rank", 0) or 0)
+        entry = dict(data)
+        entry["rank"] = max(0, rank)
+        entry["link"] = entry.get("link", base)
+        return entry
+    if isinstance(data, (int, float)):
+        return {"rank": max(0, int(data)), "link": base}
+    return {"rank": 0, "link": base}
+
+def decrease_rank(ranking_db, base, delta=30, note="FAIL"):
+    """Безопасно снижает ранг даже для legacy-формата (int)."""
+    if base not in ranking_db:
+        return
+    entry = normalize_rank_entry(base, ranking_db[base])
+    entry["rank"] = max(0, int(entry.get("rank", 0)) - int(delta))
+    entry["last_torture"] = note
+    ranking_db[base] = entry
+
 def init_checker_lib():
     """Подключает Go L7 checker (libchecker.so) для инспектора mob."""
     global go_lib
@@ -593,7 +614,9 @@ def main_torturer():
     ranking_db = {}
     if os.path.exists(RANK_FILE):
         with open(RANK_FILE, 'r', encoding='utf-8') as f:
-            ranking_db = json.load(f)
+            loaded = json.load(f)
+            if isinstance(loaded, dict):
+                ranking_db = {base: normalize_rank_entry(base, data) for base, data in loaded.items()}
             
     def load_lines(path):
         if os.path.exists(path):
@@ -683,8 +706,9 @@ def main_torturer():
     seen_addresses = set() # Сюда пишем хост:порт
 
     for base, data in ranking_db.items():
-        rank = data.get("rank", 0) if isinstance(data, dict) else data
-        link = data.get("link", base) if isinstance(data, dict) else base
+        entry = normalize_rank_entry(base, data)
+        rank = entry.get("rank", 0)
+        link = entry.get("link", base)
         
         host, port = extract_host_port(base)
         if not host or not port:
@@ -753,9 +777,8 @@ def main_torturer():
                 if base in ranking_db:
                     del ranking_db[base]
             else:
-                if status == "OK" and base in ranking_db and isinstance(ranking_db[base], dict):
-                    ranking_db[base]['rank'] = max(0, ranking_db[base].get('rank', 50) - 30)
-                    ranking_db[base]['last_torture'] = f"FAIL {success_hits}/{total_hits}"
+                if status == "OK":
+                    decrease_rank(ranking_db, base, delta=30, note=f"FAIL {success_hits}/{total_hits}")
                 elif status in {"IPv6_BAN", "ERROR"}:
                     if base in ranking_db:
                         del ranking_db[base]
@@ -763,11 +786,6 @@ def main_torturer():
                         add_to_blacklist(base)
                     remove_from_all(base)
                 
-                # Если сервер просто не прошел пытку (статус OK, но success False)
-                elif status == "OK":
-                    if base in ranking_db:
-                        ranking_db[base]['rank'] = max(0, ranking_db[base].get('rank', 50) - 30)
-                        ranking_db[base]['last_torture'] = "FAIL"
 
         with open(RANK_FILE, 'w', encoding='utf-8') as f:
             json.dump(ranking_db, f, ensure_ascii=False, indent=4)
@@ -782,7 +800,7 @@ def main_torturer():
     
     # ФИНАЛЬНЫЙ СИНХРОН С GITHUB
     print("🔄 Финальное обновление панелей после инспекции...")
-    refresh_all_panels(token, repo, list(ranking_db.keys()), vetted_list, pinned_list)
+    refresh_all_panels(token, repo, ranking_db, vetted_list, pinned_list)
     commit_and_push()
     
 if __name__ == "__main__":
