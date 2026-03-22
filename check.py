@@ -19,6 +19,7 @@ RANKING_FILE = 'test1/ranking.json'
 VETTED_FILE = 'test1/vetted.txt'
 PINNED_FILE = 'test1/pinned.txt'
 FAVORITES_FILE = 'test1/favorites.txt'
+BLACKLIST_FILE = 'test1/blacklist.txt'
 
 EXTERNAL_SOURCE_URL = [
     "https://raw.githubusercontent.com/KRYYYYYYYYYYYYYYYYYYY/crazy_xray_checker/refs/heads/main/result/working.txt"
@@ -28,7 +29,7 @@ GRACE_PERIOD = 2 * 24 * 60 * 60 # 48 часов
 
 HEADER = """# profile-title: 🏳️Мобильный инет🏳️
 # remark: 🏳️Мобильный инет🏳️
-# announce: Подписка для использования ТОЛЬКО на мобильном интернете в условиях БЕЛЫХ СПИСКОВ!
+# announce: Подписка для использования ТОЛЬКО на мобильном интернете в условиях БЕЛЫХ СПИСКОВ! P.s. Бесплатная подписка не гарантирует рабочих серверов, в общем, а уж 24/7 - тем более. Сугубо ваше право ее использовать или нет (отказ от ответственности).
 # profile-update-interval: 2
 """
 
