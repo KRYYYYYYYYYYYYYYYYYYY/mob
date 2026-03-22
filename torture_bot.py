@@ -30,6 +30,8 @@ DEFAULT_MOBILE_USER_AGENTS = [
     "Mozilla/5.0 (Linux; Android 13; SM-A336B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36",
     "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1",
+    "Mozilla/5.0 (Linux; Android 13; SM-A336B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.179 Mobile Safari/537.36 happ/1.0",
+    "okhttp/4.12.0 v2rayNG/1.9.28",
 ]
 DEFAULT_PROBE_PATHS = ["/", "/generate_204", "/favicon.ico"]
 
@@ -56,6 +58,23 @@ def decrease_rank(ranking_db, base, delta=30, note="FAIL"):
     entry["rank"] = max(0, int(entry.get("rank", 0)) - int(delta))
     entry["last_torture"] = note
     ranking_db[base] = entry
+
+def l7_multi_probe(link: str, stress_config: dict, fallback_sni: str) -> bool:
+    """Проверка кворумом по нескольким SNI-кандидатам для лучшего совпадения с мобилкой."""
+    timeout_sec = max(1, int(stress_config.get("timeout", 3)))
+    min_hits = max(1, int(stress_config.get("l7_min_success", 2)))
+    max_candidates = max(1, int(stress_config.get("l7_max_candidates", 3)))
+    sni_candidates = extract_sni_candidates(link)
+    if fallback_sni and fallback_sni not in sni_candidates:
+        sni_candidates.append(fallback_sni)
+    sni_candidates = sni_candidates[:max_candidates]
+    hits = 0
+    for cand_sni in sni_candidates:
+        if probe_vless_l7(link, cand_sni, timeout_sec=timeout_sec) > 0:
+            hits += 1
+            if hits >= min_hits:
+                return True
+    return False
 
 def init_checker_lib():
     """Подключает Go L7 checker (libchecker.so) для инспектора mob."""
@@ -295,6 +314,8 @@ def load_stress_config():
         "torture_total_attempts": 20,
         "torture_min_success": 20,
         "torture_cycle_sleep": 60,
+        "l7_min_success": 2,
+        "l7_max_candidates": 3,
         "user_agents": list(DEFAULT_MOBILE_USER_AGENTS),
         "probe_paths": list(DEFAULT_PROBE_PATHS),
     }
@@ -311,8 +332,12 @@ def load_stress_config():
             config["torture_total_attempts"] = int(data.get("torture_total_attempts", config["torture_total_attempts"]))
             config["torture_min_success"] = int(data.get("torture_min_success", config["torture_min_success"]))
             config["torture_cycle_sleep"] = int(data.get("torture_cycle_sleep", config["torture_cycle_sleep"]))
+            config["l7_min_success"] = int(data.get("l7_min_success", config["l7_min_success"]))
+            config["l7_max_candidates"] = int(data.get("l7_max_candidates", config["l7_max_candidates"]))
             if isinstance(data.get("mobile_user_agents"), list) and data.get("mobile_user_agents"):
                 config["user_agents"] = [str(x) for x in data["mobile_user_agents"] if str(x).strip()]
+            elif isinstance(data.get("user_agents"), list) and data.get("user_agents"):
+                config["user_agents"] = [str(x) for x in data["user_agents"] if str(x).strip()]
             if isinstance(data.get("probe_paths"), list) and data.get("probe_paths"):
                 config["probe_paths"] = [str(x) for x in data["probe_paths"] if str(x).strip()]
         except Exception:
@@ -539,16 +564,8 @@ def torture_check(link, stress_config, resolved_ip):
 
     success = 0
     for i in range(total_attempts):
-        # 0) Пробуем Go L7 checker (если доступен)
-        l7_ok = False
-        timeout_sec = max(1, int(stress_config.get("timeout", 3)))
-        for cand_sni in extract_sni_candidates(link):
-            if probe_vless_l7(link, cand_sni, timeout_sec=timeout_sec) > 0:
-                l7_ok = True
-                break
-        if not l7_ok:
-            fallback_sni = extract_sni(link) or server_hostname
-            l7_ok = probe_vless_l7(link, fallback_sni, timeout_sec=timeout_sec) > 0
+        fallback_sni = extract_sni(link) or server_hostname
+        l7_ok = l7_multi_probe(link, stress_config, fallback_sni)
         if l7_ok:
             success += 1
             if success >= min_success:
