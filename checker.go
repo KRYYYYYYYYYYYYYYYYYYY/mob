@@ -139,7 +139,7 @@ func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C
 		"http://cp.cloudflare.com/generate_204",
 	}
 	probeUAs := []string{
-		"Happ/3.15.1 (com.happproxy; build:xxx; Android 16; Samsung SM-A336B)",
+		"Happ/3.15.1 (com.happproxy; Android 16; Samsung SM-A336B)",
 		"okhttp/4.12.0 v2rayNG/1.12.28",
 	}
 	successHits := 0
