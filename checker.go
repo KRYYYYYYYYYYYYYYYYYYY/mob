@@ -138,8 +138,22 @@ func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C
 		"https://connectivitycheck.gstatic.com/generate_204",
 		"http://cp.cloudflare.com/generate_204",
 	}
-	for _, probeURL := range probeURLs {
-		resp, err := client.Get(probeURL)
+	probeUAs := []string{
+		"Mozilla/5.0 (Linux; Android 13; SM-A336B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.179 Mobile Safari/537.36 happ/1.0",
+		"okhttp/4.12.0 v2rayNG/1.9.28",
+	}
+	successHits := 0
+	firstSuccessLatency := 0
+	for idx, probeURL := range probeURLs {
+		req, err := http.NewRequest(http.MethodGet, probeURL, nil)
+		if err != nil {
+			continue
+		}
+		req.Header.Set("Accept", "*/*")
+		req.Header.Set("Connection", "close")
+		req.Header.Set("User-Agent", probeUAs[idx%len(probeUAs)])
+
+		resp, err := client.Do(req)
 		if err != nil {
 			continue
 		}
@@ -147,8 +161,14 @@ func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C
 		resp.Body.Close()
 
 		if resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusOK {
-			return int(time.Since(start).Milliseconds())
+			successHits++
+			if firstSuccessLatency == 0 {
+				firstSuccessLatency = int(time.Since(start).Milliseconds())
+			}
 		}
+	}
+	if successHits >= 2 {
+		return firstSuccessLatency
 	}
 
 	return 0
