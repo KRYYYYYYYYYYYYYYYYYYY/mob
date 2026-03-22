@@ -388,8 +388,9 @@ def l7_multi_probe(link: str, stress_config: dict):
 
     hits = 0
     best_latency = 0
-    for _ in range(probe_attempts):
-            latency = probe_vless_l7(link, cand_sni, timeout=timeout_sec)
+    for candidate_sni in candidates:
+        for _ in range(probe_attempts):
+            latency = probe_vless_l7(link, candidate_sni, timeout=timeout_sec)
             if latency > 0:
                 hits += 1
                 if best_latency == 0 or latency < best_latency:
