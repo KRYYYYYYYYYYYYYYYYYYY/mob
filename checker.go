@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -132,16 +133,22 @@ func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C
 	}
 
 	start := time.Now()
-	// Используем Google для проверки, как в твоем коде
-	resp, err := client.Get("https://www.gstatic.com/generate_204")
-	if err != nil {
-		return 0
+	probeURLs := []string{
+		"https://www.gstatic.com/generate_204",
+		"https://connectivitycheck.gstatic.com/generate_204",
+		"http://cp.cloudflare.com/generate_204",
 	}
-	defer resp.Body.Close()
+	for _, probeURL := range probeURLs {
+		resp, err := client.Get(probeURL)
+		if err != nil {
+			continue
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
 
-	if resp.StatusCode == 204 {
-		// Возвращаем пинг в миллисекундах
-		return int(time.Since(start).Milliseconds())
+		if resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusOK {
+			return int(time.Since(start).Milliseconds())
+		}
 	}
 
 	return 0
