@@ -349,6 +349,24 @@ def add_to_blacklist(base_part):
         with open(BLACKLIST_FILE, 'a') as f:
             f.write(base_part + "\n")
 
+def normalize_rank_entry(base_part: str, entry):
+    """Приводит запись ranking.json к единому виду."""
+    if isinstance(entry, dict):
+        rank = int(entry.get("rank", 0) or 0)
+        link = entry.get("link", base_part)
+        return {"rank": max(0, rank), "link": link}
+    if isinstance(entry, (int, float)):
+        return {"rank": max(0, int(entry)), "link": base_part}
+    return {"rank": 0, "link": base_part}
+
+def ranking_sort_key(link: str, ranking_db: dict):
+    """Сортировка: высокий rank → сначала, далее короткий base для стабильности."""
+    base = link.split('#')[0].strip()
+    rank = 0
+    if base in ranking_db:
+        rank = normalize_rank_entry(base, ranking_db[base]).get("rank", 0)
+    return (-rank, base)
+
 def main():
     import subprocess
     token = os.getenv("GH_TOKEN")
@@ -367,11 +385,16 @@ def main():
         with open(BLACKLIST_FILE, 'r') as f:
             blacklist = {line.strip() for line in f if line.strip()}
 
-    ranking_file = 'test1/ranking.json'
     ranking_db = {}
-    if os.path.exists(ranking_file):
+    if os.path.exists(RANKING_FILE):
         try:
-            with open(ranking_file, "r") as f: ranking_db = json.load(f)
+            with open(RANKING_FILE, "r") as f:
+                loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    ranking_db = {
+                        base: normalize_rank_entry(base, entry)
+                        for base, entry in loaded.items()
+                    }
         except: ranking_db = {}
 
     vetted_list = []
@@ -456,6 +479,7 @@ def main():
         if base not in seen_immortals and base not in seen_in_queue and base not in blacklist:
             check_queue.append(link)
             seen_in_queue.add(base)
+    check_queue.sort(key=lambda l: ranking_sort_key(l, ranking_db))
 
     # --- [ШАГ 3: ПОДГОТОВКА К ЦИКЛУ] ---
     working_for_sub = immortals[:200] # Сразу забиваем подписку бессмертными
@@ -585,7 +609,8 @@ def main():
             counter += 1
         else:
             print(f"💀 Мертв")
-            if base_part in ranking_db: del ranking_db[base_part]
+            if base_part in ranking_db:
+                del ranking_db[base_part]
             fail_time = history.get(base_part, now)
             if now - fail_time > 86400:
                 with open(BLACKLIST_FILE, 'a') as bl:
@@ -607,6 +632,9 @@ def main():
     final_base_to_save = list(seen_immortals | set(working_for_base))
     with open(INPUT_FILE, "w", encoding="utf-8") as f:
         f.write("\n".join(final_base_to_save))
+
+    with open(RANKING_FILE, "w", encoding="utf-8") as f:
+        json.dump(ranking_db, f, ensure_ascii=False, indent=4)
 
     print(f"🏁 Завершено. Подписка: {len(working_for_sub)}, Очередь: {len(new_deferred)}")
 
