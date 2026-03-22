@@ -5,6 +5,8 @@ import ssl
 import re
 import json
 import subprocess
+import ctypes
+import urllib.parse
 import requests
 import psutil
 from concurrent.futures import ThreadPoolExecutor
@@ -32,6 +34,67 @@ DEFAULT_MOBILE_USER_AGENTS = [
 DEFAULT_PROBE_PATHS = ["/", "/generate_204", "/favicon.ico"]
 
 file_lock = threading.Lock()
+go_lib = None
+
+def init_checker_lib():
+    """Подключает Go L7 checker (libchecker.so) для инспектора mob."""
+    global go_lib
+    lib_path = os.path.abspath("libchecker.so")
+    if not os.path.exists(lib_path):
+        print("⚠️ libchecker.so не найден, инспектор продолжит legacy-проверками.")
+        return
+
+    go_lib = ctypes.cdll.LoadLibrary(lib_path)
+    go_lib.CheckVlessL7.argtypes = [
+        ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_char_p,
+        ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int
+    ]
+    go_lib.CheckVlessL7.restype = ctypes.c_int
+
+
+def extract_sni(link: str) -> str:
+    parsed = urllib.parse.urlparse(link)
+    params = urllib.parse.parse_qs(parsed.query)
+    return params.get("sni", [""])[0]
+
+def extract_sni_candidates(link: str):
+    parsed = urllib.parse.urlparse(link)
+    params = urllib.parse.parse_qs(parsed.query)
+    candidates = []
+    for key in ("sni", "host"):
+        value = params.get(key, [""])[0].strip()
+        if value and value not in candidates:
+            candidates.append(value)
+    if parsed.hostname and parsed.hostname not in candidates:
+        candidates.append(parsed.hostname)
+    return candidates
+
+def probe_vless_l7(link: str, target_sni: str, timeout_sec: int = 5) -> int:
+    if go_lib is None:
+        return 0
+
+    try:
+        parsed = urllib.parse.urlparse(link)
+        params = urllib.parse.parse_qs(parsed.query)
+        host, port = extract_host_port(link)
+        if not host or not port:
+            return 0
+        uuid = parsed.username if parsed.username else ""
+        pbk = params.get('pbk', [''])[0]
+        sid = params.get('sid', [''])[0]
+        flow = params.get('flow', [''])[0]
+        return int(go_lib.CheckVlessL7(
+            host.encode('utf-8'),
+            int(port),
+            uuid.encode('utf-8'),
+            (target_sni or "").encode('utf-8'),
+            pbk.encode('utf-8'),
+            sid.encode('utf-8'),
+            flow.encode('utf-8'),
+            int(timeout_sec)
+        ))
+    except Exception:
+        return 0
 
 def get_wifi_candidates(pinned_list, fav_list=None):
     """Загружает сервера из wifi.txt, исключая закрепы и избранные."""
@@ -433,10 +496,12 @@ def extract_host_port(link: str):
             pass
     return None, None
 
+
 # --- ОБНОВЛЕННАЯ ПЫТКА ---
 def torture_check(link, stress_config, resolved_ip):
     host, port = extract_host_port(link)
     if not host or not port:
+
         return False, 0, 0
     is_tls = "security=tls" in link.lower() or "security=reality" in link.lower()
     
@@ -453,6 +518,24 @@ def torture_check(link, stress_config, resolved_ip):
 
     success = 0
     for i in range(total_attempts):
+        # 0) Пробуем Go L7 checker (если доступен)
+        l7_ok = False
+        timeout_sec = max(1, int(stress_config.get("timeout", 3)))
+        for cand_sni in extract_sni_candidates(link):
+            if probe_vless_l7(link, cand_sni, timeout_sec=timeout_sec) > 0:
+                l7_ok = True
+                break
+        if not l7_ok:
+            fallback_sni = extract_sni(link) or server_hostname
+            l7_ok = probe_vless_l7(link, fallback_sni, timeout_sec=timeout_sec) > 0
+        if l7_ok:
+            success += 1
+            if success >= min_success:
+                return True, success, total_attempts
+            if i < total_attempts - 1:
+                time.sleep(stress_config.get("between_attempts_sleep", 0.35))
+            continue
+
         ua = user_agents[i % len(user_agents)]
         path = probe_paths[i % len(probe_paths)]
         payload = (
@@ -511,7 +594,7 @@ def main_torturer():
     if os.path.exists(RANK_FILE):
         with open(RANK_FILE, 'r', encoding='utf-8') as f:
             ranking_db = json.load(f)
-
+            
     def load_lines(path):
         if os.path.exists(path):
             with open(path, 'r', encoding='utf-8') as f:
@@ -581,7 +664,6 @@ def main_torturer():
         print("☕ Команд нет, расписания нет. Пытки не требуются. Выход.")
         commit_and_push() # На всякий случай пушим, если были мелкие правки
         return
-
     # --- ШАГ 4: ДАЛЬШЕ ИДУТ ПЫТКИ ---
     print("🚀 Начинаю инспекцию серверов...")
 
@@ -589,7 +671,6 @@ def main_torturer():
     if not ranking_db:
         print("⌛ База пуста. Пытать некого.")
         return
-
     # Подготовка множеств для пыток
     vetted_set = {l.split('#')[0].strip() for l in vetted_list}
     pinned_set = {l.split('#')[0].strip() for l in pinned_list}
@@ -705,4 +786,5 @@ def main_torturer():
     commit_and_push()
     
 if __name__ == "__main__":
+    init_checker_lib()
     main_torturer()
