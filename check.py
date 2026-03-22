@@ -39,6 +39,9 @@ DEFAULT_MOBILE_USER_AGENTS = [
     "Mozilla/5.0 (Linux; Android 13; SM-A336B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36",
     "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1",
+    # Ближе к реальному трафику с Samsung A33 + Android-клиентов
+    "Mozilla/5.0 (Linux; Android 13; SM-A336B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.179 Mobile Safari/537.36 happ/1.0",
+    "okhttp/4.12.0 v2rayNG/1.9.28",
 ]
 DEFAULT_PROBE_PATHS = ["/", "/generate_204", "/favicon.ico"]
 
@@ -367,6 +370,32 @@ def ranking_sort_key(link: str, ranking_db: dict):
         rank = normalize_rank_entry(base, ranking_db[base]).get("rank", 0)
     return (-rank, base)
 
+def l7_multi_probe(link: str, stress_config: dict):
+    """Многократный L7-пробник: снижает ложные 'ОК', если сервер нестабилен в мобильной сети."""
+    min_hits = max(1, int(stress_config.get("l7_min_success", 2)))
+    max_candidates = max(1, int(stress_config.get("l7_max_candidates", 3)))
+    timeout_sec = int(max(1, stress_config.get("timeout", 5)))
+
+    candidates = extract_sni_candidates(link)
+    if not candidates:
+        native_sni = extract_sni(link)
+        if native_sni:
+            candidates = [native_sni]
+    candidates = [c for c in candidates if c and not any(w in c.lower() for w in BAD_SNI_KEYWORDS)]
+    candidates = candidates[:max_candidates]
+
+    hits = 0
+    best_latency = 0
+    for cand_sni in candidates:
+        latency = probe_vless_l7(link, cand_sni, timeout=timeout_sec)
+        if latency > 0:
+            hits += 1
+            if best_latency == 0 or latency < best_latency:
+                best_latency = latency
+            if hits >= min_hits:
+                return True, best_latency
+    return False, 0
+
 def main():
     import subprocess
     token = os.getenv("GH_TOKEN")
@@ -499,6 +528,8 @@ def main():
         "timeout": 2.5, "dpi_sleep": 0.5, "target_mtu": 1280,
         "probe_attempts": 4, "min_success": 2, "recv_timeout": 1.7,
         "between_attempts_sleep": 0.35,
+        "l7_min_success": 2,
+        "l7_max_candidates": 3,
         "user_agents": list(DEFAULT_MOBILE_USER_AGENTS),
         "probe_paths": list(DEFAULT_PROBE_PATHS),
     }
@@ -511,10 +542,14 @@ def main():
                 stress_config["target_mtu"] = data.get("target_mtu", 1280)
                 stress_config["probe_attempts"] = int(data.get("probe_attempts", stress_config["probe_attempts"]))
                 stress_config["min_success"] = int(data.get("min_success", stress_config["min_success"]))
+                stress_config["l7_min_success"] = int(data.get("l7_min_success", stress_config["l7_min_success"]))
+                stress_config["l7_max_candidates"] = int(data.get("l7_max_candidates", stress_config["l7_max_candidates"]))
                 stress_config["recv_timeout"] = float(data.get("recv_timeout", stress_config["recv_timeout"]))
                 stress_config["between_attempts_sleep"] = float(data.get("between_attempts_sleep", stress_config["between_attempts_sleep"]))
                 if isinstance(data.get("mobile_user_agents"), list) and data.get("mobile_user_agents"):
                     stress_config["user_agents"] = [str(x) for x in data["mobile_user_agents"] if str(x).strip()]
+                elif isinstance(data.get("user_agents"), list) and data.get("user_agents"):
+                    stress_config["user_agents"] = [str(x) for x in data["user_agents"] if str(x).strip()]
                 if isinstance(data.get("probe_paths"), list) and data.get("probe_paths"):
                     stress_config["probe_paths"] = [str(x) for x in data["probe_paths"] if str(x).strip()]
         except: pass
@@ -554,26 +589,7 @@ def main():
 
         # --- ТВОЯ ПРОВЕРКА L7 ---
         print(f"🔍 Тестирую: {host}:{port}...", end=" ", flush=True)
-        candidates = extract_sni_candidates(link)
-        is_alive = False
-        current_latency = 0
-
-        for cand_sni in candidates:
-            if any(word in cand_sni.lower() for word in BAD_SNI_KEYWORDS):
-                continue
-            latency = probe_vless_l7(link, cand_sni, timeout=int(stress_config.get("timeout", 5)))
-            if latency > 0:
-                is_alive = True
-                current_latency = latency
-                break 
-
-        if not is_alive:
-            native_sni = extract_sni(link)
-            if native_sni:
-                latency = probe_vless_l7(link, native_sni, timeout=int(stress_config.get("timeout", 5)))
-                if latency > 0:
-                    is_alive = True
-                    current_latency = latency
+        is_alive, current_latency = l7_multi_probe(link, stress_config)
 
         checked_today += 1
         resolved_ip = host
