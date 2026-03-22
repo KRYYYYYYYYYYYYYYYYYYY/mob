@@ -10,6 +10,7 @@ import subprocess
 import ipaddress
 import ctypes
 
+
 # Настройки путей
 INPUT_FILE = 'test1/1.txt'
 OUTPUT_FILE = 'kr/mob/wifi.txt'
