@@ -42,27 +42,34 @@ DEFAULT_MOBILE_USER_AGENTS = [
 DEFAULT_PROBE_PATHS = ["/", "/generate_204", "/favicon.ico"]
 
 # Подключаем новую библиотеку
-lib_path = os.path.abspath("libchecker.so")
-if not os.path.exists(lib_path):
-    print("❌ ОШИБКА: Библиотека libchecker.so не найдена!")
-else:
+go_lib = None
+
+
+def init_checker_lib() -> None:
+    """Инициализирует Go-библиотеку проверки, если она доступна."""
+    global go_lib
+    lib_path = os.path.abspath("libchecker.so")
+    if not os.path.exists(lib_path):
+        print("❌ ОШИБКА: Библиотека libchecker.so не найдена!")
+        return
+
     go_lib = ctypes.cdll.LoadLibrary(lib_path)
-    
-    # Описываем аргументы для функции CheckVlessL7
     go_lib.CheckVlessL7.argtypes = [
-        ctypes.c_char_p, # addr (host)
-        ctypes.c_int,    # port
-        ctypes.c_char_p, # uuid
-        ctypes.c_char_p, # sni
-        ctypes.c_char_p, # pbk
-        ctypes.c_char_p, # sid
-        ctypes.c_char_p, # flow
-        ctypes.c_int     # timeout
+        ctypes.c_char_p,  # addr (host)
+        ctypes.c_int,     # port
+        ctypes.c_char_p,  # uuid
+        ctypes.c_char_p,  # sni
+        ctypes.c_char_p,  # pbk
+        ctypes.c_char_p,  # sid
+        ctypes.c_char_p,  # flow
+        ctypes.c_int      # timeout
     ]
     go_lib.CheckVlessL7.restype = ctypes.c_int
 
 def probe_vless_l7(link, target_sni, timeout=5):
     """Парсит VLESS ссылку и возвращает пинг в мс (0 если ошибка)."""
+    if go_lib is None:
+        return 0
     try:
         parsed = urllib.parse.urlparse(link)
         params = urllib.parse.parse_qs(parsed.query)
@@ -91,9 +98,9 @@ def probe_vless_l7(link, target_sni, timeout=5):
         return 0
 
 def extract_sni(link):
-    # Твоя текущая функция
-    match = re.search(r"sni=([^&?#\s]+)", link)
-    return match.group(1) if match else ""
+    parsed = urllib.parse.urlparse(link)
+    params = urllib.parse.parse_qs(parsed.query)
+    return params.get("sni", [""])[0]
 
 # --- НОВЫЙ БЛОК: ФИЛЬТРАЦИЯ И КАНДИДАТЫ ---
 BAD_SNI_KEYWORDS = ['google', 'apple', 'microsoft', 'facebook', 'netflix', 'youtube']
@@ -228,8 +235,8 @@ def remove_from_input_file(base_to_remove: str):
         with open(INPUT_FILE, 'r', encoding='utf-8') as f:
             lines = f.readlines()
         
-        # Оставляем только те строки, которые НЕ содержат этот base_part
-        new_lines = [l for l in lines if base_to_remove not in l]
+        # Оставляем только те строки, у которых не совпадает базовая часть
+        new_lines = [l for l in lines if l.split('#')[0].strip() != base_to_remove]
         
         if len(lines) != len(new_lines):
             with open(INPUT_FILE, 'w', encoding='utf-8') as f:
@@ -242,8 +249,13 @@ def is_ipv6(host: str) -> bool:
     Проверяет, является ли строка IPv6.
     Работает и со скобками (для URL), и без них (после парсинга).
     """
-    if not host: return False
-    return ":" in host
+    if not host:
+        return False
+    try:
+        ipaddress.ip_address(host.strip("[]"))
+        return ":" in host
+    except ValueError:
+        return False
 
 def extract_host_port(link: str):
     """
@@ -328,12 +340,12 @@ def safe_gh_call(cmd, token):
 def add_to_blacklist(base_part):
     """Добавляет сервер в файл blacklist.txt, если его там нет."""
     current_bl = set()
-    if os.path.exists('test1/blacklist.txt'):
-        with open('test1/blacklist.txt', 'r') as f:
+    if os.path.exists(BLACKLIST_FILE):
+        with open(BLACKLIST_FILE, 'r') as f:
             current_bl = {line.strip() for line in f if line.strip()}
     
     if base_part not in current_bl:
-        with open('test1/blacklist.txt', 'a') as f:
+        with open(BLACKLIST_FILE, 'a') as f:
             f.write(base_part + "\n")
 
 def main():
@@ -350,8 +362,8 @@ def main():
 
     # --- ЗАГРУЗКА СПИСКОВ И НАСТРОЕК ---
     blacklist = set()
-    if os.path.exists('test1/blacklist.txt'):
-        with open('test1/blacklist.txt', 'r') as f:
+    if os.path.exists(BLACKLIST_FILE):
+        with open(BLACKLIST_FILE, 'r') as f:
             blacklist = {line.strip() for line in f if line.strip()}
 
     ranking_file = 'test1/ranking.json'
@@ -575,7 +587,8 @@ def main():
             if base_part in ranking_db: del ranking_db[base_part]
             fail_time = history.get(base_part, now)
             if now - fail_time > 86400:
-                with open('test1/blacklist.txt', 'a') as bl: bl.write(base_part + "\n")
+                with open(BLACKLIST_FILE, 'a') as bl:
+                    bl.write(base_part + "\n")
 
     # --- [ШАГ 5: ФИНАЛЬНОЕ СОХРАНЕНИЕ] ---
     
@@ -597,4 +610,5 @@ def main():
     print(f"🏁 Завершено. Подписка: {len(working_for_sub)}, Очередь: {len(new_deferred)}")
 
 if __name__ == "__main__":
+    init_checker_lib()
     main()
