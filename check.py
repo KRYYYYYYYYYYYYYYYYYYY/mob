@@ -40,7 +40,7 @@ DEFAULT_MOBILE_USER_AGENTS = [
     "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1",
     # Ближе к реальному трафику с Samsung A33 + Android-клиентов
-    "Happ/3.15.1 (com.happproxy; build:xxx; Android 16; Samsung SM-A336B)",
+    "Happ/3.15.1 (com.happproxy; Android 16; Samsung SM-A336B)",
     "okhttp/4.12.0 v2rayNG/1.12.28",
 ]
 DEFAULT_PROBE_PATHS = ["/", "/generate_204", "/favicon.ico"]
@@ -374,6 +374,8 @@ def l7_multi_probe(link: str, stress_config: dict):
     """Многократный L7-пробник: снижает ложные 'ОК', если сервер нестабилен в мобильной сети."""
     min_hits = max(1, int(stress_config.get("l7_min_success", 2)))
     max_candidates = max(1, int(stress_config.get("l7_max_candidates", 3)))
+    probe_attempts = max(1, int(stress_config.get("probe_attempts", 4)))
+    between_attempts_sleep = max(0.0, float(stress_config.get("between_attempts_sleep", 0.35)))
     timeout_sec = int(max(1, stress_config.get("timeout", 5)))
 
     candidates = extract_sni_candidates(link)
@@ -386,14 +388,16 @@ def l7_multi_probe(link: str, stress_config: dict):
 
     hits = 0
     best_latency = 0
-    for cand_sni in candidates:
-        latency = probe_vless_l7(link, cand_sni, timeout=timeout_sec)
-        if latency > 0:
-            hits += 1
-            if best_latency == 0 or latency < best_latency:
-                best_latency = latency
-            if hits >= min_hits:
-                return True, best_latency
+    for _ in range(probe_attempts):
+            latency = probe_vless_l7(link, cand_sni, timeout=timeout_sec)
+            if latency > 0:
+                hits += 1
+                if best_latency == 0 or latency < best_latency:
+                    best_latency = latency
+                if hits >= min_hits:
+                    return True, best_latency
+            if between_attempts_sleep > 0:
+                time.sleep(between_attempts_sleep)
     return False, 0
 
 def main():
