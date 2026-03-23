@@ -443,11 +443,6 @@ def main():
         with open('test1/pinned.txt', 'r', encoding='utf-8') as f:
             pinned_list = [line.strip() for line in f if "vless://" in line]
     
-    clean_pinned = {}
-    for p in pinned_list:
-        base = p.split("#")[0].strip()
-        clean_pinned[base] = p
-    pinned_list = list(clean_pinned.values())
     print(f"📦 Загружено закрепов: {len(pinned_list)}")
 
     # 2. Загружаем Фавориты (Favorites)
@@ -495,9 +490,8 @@ def main():
     # Потом фавориты
     for f_link in fav_full_links:
         base = f_link.split("#")[0].strip()
-        if base not in seen_immortals:
-            immortals.append(f_link)
-            seen_immortals.add(base)
+        immortals.append(p)
+        seen_immortals.add(base)
 
     print(f"🛡️ Итого бессмертных в начале списка: {len(immortals)}")
 
