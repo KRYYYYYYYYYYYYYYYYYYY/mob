@@ -35,6 +35,7 @@ DEFAULT_MOBILE_USER_AGENTS = [
     "okhttp/4.12.0 v2rayNG/1.12.28",
 ]
 DEFAULT_PROBE_PATHS = ["/", "/generate_204", "/favicon.ico"]
+BAD_SNI_KEYWORDS = ['google', 'apple', 'microsoft', 'facebook', 'netflix', 'youtube']
 
 file_lock = threading.Lock()
 go_lib = None
@@ -65,16 +66,25 @@ def l7_multi_probe(link: str, stress_config: dict, fallback_sni: str) -> bool:
     timeout_sec = max(1, int(stress_config.get("timeout", 3)))
     min_hits = max(1, int(stress_config.get("l7_min_success", 2)))
     max_candidates = max(1, int(stress_config.get("l7_max_candidates", 3)))
+    probe_attempts = max(1, int(stress_config.get("probe_attempts", 4)))
+    between_attempts_sleep = max(0.0, float(stress_config.get("between_attempts_sleep", 0.35)))
     sni_candidates = extract_sni_candidates(link)
     if fallback_sni and fallback_sni not in sni_candidates:
         sni_candidates.append(fallback_sni)
+    sni_candidates = [
+        c for c in sni_candidates
+        if c and not any(word in c.lower() for word in BAD_SNI_KEYWORDS)
+    ]
     sni_candidates = sni_candidates[:max_candidates]
     hits = 0
-    for cand_sni in sni_candidates:
-        if probe_vless_l7(link, cand_sni, timeout_sec=timeout_sec) > 0:
-            hits += 1
-            if hits >= min_hits:
-                return True
+    for candidate_sni in sni_candidates:
+        for _ in range(probe_attempts):
+            if probe_vless_l7(link, candidate_sni, timeout_sec=timeout_sec) > 0:
+                hits += 1
+                if hits >= min_hits:
+                    return True
+            if between_attempts_sleep > 0:
+                time.sleep(between_attempts_sleep)
     return False
 
 def init_checker_lib():
