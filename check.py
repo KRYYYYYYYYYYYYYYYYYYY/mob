@@ -48,6 +48,8 @@ DEFAULT_MOBILE_USER_AGENTS = [
 DEFAULT_PROBE_PATHS = ["/", "/generate_204", "/favicon.ico"]
 CHECK_WORKERS = 8
 CHECK_BATCH_SIZE = 48
+TCP_PRECHECK_TIMEOUT = 1.2
+MAX_CANDIDATE_TIME = 18.0
 
 # Подключаем новую библиотеку
 go_lib = None
@@ -382,6 +384,11 @@ def l7_multi_probe(link: str, stress_config: dict):
     probe_attempts = max(1, int(stress_config.get("probe_attempts", 4)))
     between_attempts_sleep = max(0.0, float(stress_config.get("between_attempts_sleep", 0.35)))
     timeout_sec = int(max(1, stress_config.get("timeout", 5)))
+    max_candidate_time = max(
+        4.0,
+        float(os.getenv("CHECK_MAX_CANDIDATE_SEC", stress_config.get("max_candidate_sec", MAX_CANDIDATE_TIME))),
+    )
+    deadline = time.monotonic() + max_candidate_time
 
     candidates = extract_sni_candidates(link)
     if not candidates:
@@ -395,6 +402,8 @@ def l7_multi_probe(link: str, stress_config: dict):
     best_latency = 0
     for candidate_sni in candidates:
         for _ in range(probe_attempts):
+            if time.monotonic() >= deadline:
+                return False, 0
             latency = probe_vless_l7(link, candidate_sni, timeout=timeout_sec)
             if latency > 0:
                 hits += 1
@@ -402,12 +411,31 @@ def l7_multi_probe(link: str, stress_config: dict):
                     best_latency = latency
                 if hits >= min_hits:
                     return True, best_latency
-            if between_attempts_sleep > 0:
+            if latency > 0 and between_attempts_sleep > 0:
                 time.sleep(between_attempts_sleep)
     return False, 0
 
+def tcp_precheck(host: str, port: str) -> bool:
+    """Быстрый фильтр мертвых endpoint'ов перед дорогой L7-проверкой."""
+    try:
+        with socket.create_connection((host, int(port)), timeout=TCP_PRECHECK_TIMEOUT):
+            return True
+    except Exception:
+        return False
+
 def probe_candidate(base_part: str, link: str, host: str, port: str, stress_config: dict, countries_cache: dict):
     """Проверка кандидата в worker-потоке: L7 + страна."""
+    if not tcp_precheck(host, port):
+        return {
+            "base": base_part,
+            "host": host,
+            "port": port,
+            "alive": False,
+            "latency": 0,
+            "country": "Unknown",
+            "reason": "tcp_fail",
+        }
+
     is_alive, current_latency = l7_multi_probe(link, stress_config)
     if not is_alive:
         return {
@@ -417,6 +445,7 @@ def probe_candidate(base_part: str, link: str, host: str, port: str, stress_conf
             "alive": False,
             "latency": 0,
             "country": "Unknown",
+            "reason": "l7_fail",
         }
 
     country = get_country_code(host, countries_cache)
@@ -427,6 +456,7 @@ def probe_candidate(base_part: str, link: str, host: str, port: str, stress_conf
         "alive": True,
         "latency": int(current_latency),
         "country": country,
+        "reason": "ok",
     }
 
 def main():
@@ -648,7 +678,8 @@ def main():
                     }
 
                 if not result["alive"]:
-                    log(f"💀 Мертв: {host}:{port}")
+                    reason = result.get("reason", "fail")
+                    log(f"💀 Мертв: {host}:{port} ({reason})")
                     if base_part in ranking_db:
                         del ranking_db[base_part]
                     fail_time = history.get(base_part, now)
