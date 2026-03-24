@@ -21,7 +21,7 @@ jobs:
     permissions:
       actions: read
       contents: write
-      issues: write
+      # issues permissions intentionally omitted: issue-control moved to control-bot.yml
 
     steps:
       - name: 📂 Checkout Code
@@ -104,11 +104,7 @@ jobs:
       - name: ⛓️ Run Torturer
         if: steps.gate.outputs.should_run == 'true'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          GITHUB_EVENT_NAME: ${{ github.event_name }}
-          TORTURE_SKIP_CONTROLS: '1'
+          # keep checker runtime env minimal; control env belongs to control-bot.yml
           LD_LIBRARY_PATH: .
         run: python torture_bot.py
 
