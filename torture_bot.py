@@ -4,7 +4,6 @@ import os
 import ssl
 import re
 import json
-import subprocess
 import ctypes
 import urllib.parse
 import requests
@@ -170,28 +169,6 @@ def get_wifi_candidates(pinned_list, fav_list=None):
                 
     return candidates
 
-def commit_and_push():
-    """Отправляет все измененные файлы обратно в репозиторий."""
-    try:
-        # Настройка пользователя (нужна для коммита)
-        subprocess.run(['git', 'config', 'user.name', 'github-actions[bot]'], check=True)
-        subprocess.run(['git', 'config', 'user.email', 'github-actions[bot]@users.noreply.github.com'], check=True)
-        
-        # Добавляем все измененные файлы
-        subprocess.run(['git', 'add', WIFI_FILE, BLACKLIST_FILE, VETTED_FILE, RANK_FILE, PINNED_FILE, FAVORITES_FILE], check=True)
-        
-        # Проверяем, есть ли что коммитить
-        status = subprocess.run(['git', 'diff', '--cached', '--quiet'])
-        if status.returncode != 0:
-            subprocess.run(['git', 'commit', '-m', '🤖 Автоматическое обновление списков и бан-листа'], check=True)
-            subprocess.run(['git', 'push'], check=True)
-            print("✅ Все изменения успешно запушены в репозиторий!")
-        else:
-            print("yml Новых изменений для коммита не найдено.")
-            
-    except Exception as e:
-        print(f"⚠️ Ошибка при выполнении Git Push: {e}")
-
 def add_to_blacklist(base_part):
     """Добавляет сервер в бан-лист, игнорируя дубликаты"""
     existing = set()
@@ -204,103 +181,6 @@ def add_to_blacklist(base_part):
             f.write(base_part + "\n")
         print(f"💀 [BLACKLIST] Забанен: {base_part[:30]}...")
 
-def update_issue_from_file(repo, label, file_path, env):
-    try:
-        cmd_get = ['gh', 'issue', 'list', '--repo', repo, '--label', label, '--json', 'number']
-        data = json.loads(subprocess.check_output(cmd_get, env=env))
-        if data:
-            num = str(data[0]['number'])
-            subprocess.run([
-                'gh', 'issue', 'edit', num, 
-                '--repo', repo, 
-                '--body-file', file_path
-            ], env=env, check=True)
-    except Exception as e:
-        print(f"⚠️ Ошибка загрузки {file_path} в GitHub: {e}")
-
-
-def refresh_all_panels(token, repo, ranking_db, vetted_list, pinned_list):
-    update_time = time.strftime("%d.%m.%Y %H:%M:%S")
-    env_gh = {**os.environ, "GH_TOKEN": token}
-    
-    # --- ШАГ 0: ГЛОБАЛЬНАЯ ПОДГОТОВКА ДАННЫХ ДЛЯ ВСЕХ ПАНЕЛЕЙ ---
-    fav_list = []
-    if os.path.exists(FAVORITES_FILE):
-        with open(FAVORITES_FILE, 'r', encoding='utf-8') as f:
-            fav_list = [l.strip() for l in f if 'vless' in l]
-    
-    # Мы создаем fav_bases здесь, в самом начале, 
-    # чтобы переменная была видна во всей функции
-    fav_bases = {l.split('#')[0].strip() for l in fav_list}
-
-    # --- 1. ПАНЕЛЬ ЧЕРНОГО СПИСКА (control) ---
-    body_ctrl = f"### 🎮 Панель Blacklist (Весь wifi.txt)\n🕒 `{update_time}`\n\n"
-    body_ctrl += "- [ ] 💀 **ПОДТВЕРДИТЬ_БАН**\n\n---\n\n"
-    
-    # Теперь и fav_list, и pinned_list доступны для фильтрации
-    wifi_to_ban = get_wifi_candidates(pinned_list, fav_list)
-    
-    if wifi_to_ban:
-        for full_link in wifi_to_ban:
-            body_ctrl += f"- [ ] {full_link.strip()}\n"
-    else:
-        body_ctrl += "_Список пуст_\n"
-
-    # Сохранение и обновление Issue...
-    with open('test1/issue_body.txt', 'w', encoding='utf-8') as f:
-        f.write(body_ctrl)
-    update_issue_from_file(repo, 'control', 'test1/issue_body.txt', env_gh)
-
-   # --- 2. ПАНЕЛЬ КАНДИДАТОВ ---
-    body_pin = f"### 💎 Кандидаты в Элиту\n🕒 `{update_time}`\n\n"
-    body_pin += "- [ ] ✅ **ПРИМЕНИТЬ_PIN_BAN**\n\n---\n\n"
-    for full_link in vetted_list:
-        # УБИРАЕМ split('#')[0]. Нам нужна ПОЛНАЯ ссылка в чекбоксе.
-        body_pin += f"📡 {full_link}\n"
-        body_pin += f"- [ ] PIN: {full_link.strip()}\n" 
-        body_pin += f"- [ ] BAN: {full_link.strip()}\n"
-        body_pin += "\n---\n"
-    update_issue(repo, 'pin_control', body_pin, env_gh)
-
-    # --- 3. ПАНЕЛЬ ЗАКРЕПОВ ---
-    body_unp = f"### 👑 Управление Закрепами\n🕒 `{update_time}`\n\n"
-    body_unp += "- [ ] 🔓 **ПОДТВЕРДИТЬ_РАСПИН**\n\n---\n\n"
-    for full_link in pinned_list:
-        # УБРАЛИ КАВЫЧКИ
-        body_unp += f"- [ ] {full_link.strip()}\n"
-    update_issue(repo, 'unpin_control', body_unp, env_gh)
-
-    # --- 4. ПАНЕЛЬ ИЗБРАННОЕ ---
-    body_fav = f"### ⭐ Избранные серверы\n🕒 `{update_time}`\n\n"
-    body_fav += "- [ ] 🏆 **ПОДТВЕРДИТЬ_ИЗБРАННОЕ**\n\n---\n\n"
-    
-    # 1. Загружаем то, что уже лежит в избранном (база : полная_строка_со_звездой)
-    fav_map = {}
-    if os.path.exists(FAVORITES_FILE):
-        with open(FAVORITES_FILE, 'r', encoding='utf-8') as f:
-            for l in f:
-                if 'vless://' in l:
-                    base = l.split('#')[0].strip()
-                    fav_map[base] = l.strip()
-
-    # 2. Получаем всех кандидатов из wifi.txt (за вычетом закрепов)
-    all_candidates = get_wifi_candidates(pinned_list, []) 
-    
-    for link in all_candidates:
-        link_clean = link.strip()
-        base = link_clean.split('#')[0].strip()
-        
-        # Если база сервера есть в нашем fav_map — значит он избранный
-        if base in fav_map:
-            # Рисуем КРЕСТИК и берем имя со звездой из карты
-            body_fav += f"- [x] {fav_map[base]}\n"
-        else:
-            # Рисуем ПУСТОЙ чекбокс и обычную ссылку
-            body_fav += f"- [ ] {link_clean}\n"
-    
-    update_issue(repo, 'fav_control', body_fav, env_gh)
-
-# --- ХИРУРГИЧЕСКОЕ УДАЛЕНИЕ ---
 def remove_from_all(base_part):
     for path in [WIFI_FILE, DEFERRED_FILE, INPUT_FILE, VETTED_FILE]: 
         if os.path.exists(path):
@@ -354,161 +234,6 @@ def load_stress_config():
         except Exception:
             pass
     return config
-
-def process_all_controls(token, repo, vetted_list, pinned_list, ranking_db):
-    executed_any = False
-    env_gh = {**os.environ, "GH_TOKEN": token}
-
-    # ИСПРАВЛЕНО: теперь берем всё до конца строки [^\n\r], а не до пробела
-    def find_checked_vless(text):
-        found = re.findall(r'\[[xX]\]\s+(vless://[^\n\r`\'"]+)', text)
-        return [l.strip().rstrip(':') for l in found]
-
-    try:
-        # --- 1. ПАНЕЛЬ ЧЕРНОГО СПИСКА (Label: control) ---
-        out = subprocess.check_output(['gh', 'issue', 'list', '--repo', repo, '--label', 'control', '--json', 'body'], env=env_gh)
-        data = json.loads(out)
-        if data:
-            body = data[0]['body']
-            if "ПОДТВЕРДИТЬ_БАН" in body and "[x]" in body:
-                links = find_checked_vless(body)
-                for base_full in links:
-                    base = base_full.split('#')[0].strip()
-                    add_to_blacklist(base)
-                    remove_from_all(base)
-                    if base in ranking_db: del ranking_db[base]
-                    executed_any = True
-
-        # --- 2. PIN/BAN КАНДИДАТОВ (Label: pin_control) ---
-        out = subprocess.check_output(['gh', 'issue', 'list', '--repo', repo, '--label', 'pin_control', '--json', 'body'], env=env_gh)
-        data = json.loads(out)
-        if data:
-            body = data[0]['body']
-            if "ПРИМЕНИТЬ_PIN_BAN" in body and "[x]" in body:
-                # ИСПРАВЛЕНО: Забираем всю строку целиком до конца
-                to_pin = re.findall(r'\[[xX]\]\s+PIN:\s+(vless://[^\n\r`\'"]+)', body)
-                to_ban = re.findall(r'\[[xX]\]\s+BAN:\s+(vless://[^\n\r`\'"]+)', body)
-                
-                for s in to_pin:
-                    base_full = s.strip().rstrip(':')
-                    base = base_full.split('#')[0].strip()
-                    if all(base != p.split("#")[0].strip() for p in pinned_list):
-                        with open(PINNED_FILE, 'a', encoding='utf-8') as pf:
-                            pf.write(base_full + "\n")
-                        pinned_list.append(base_full)
-                    # Чистим из элиты после пина
-                    vetted_list = [v for v in vetted_list if v.split('#')[0].strip() != base]
-                    executed_any = True
-
-                for s in to_ban:
-                    base_full = s.strip().rstrip(':')
-                    base = base_full.split('#')[0].strip()
-                    add_to_blacklist(base)
-                    remove_from_all(base)
-                    vetted_list = [v for v in vetted_list if v.split('#')[0].strip() != base]
-                    executed_any = True
-
-        # --- 3. РАЗЗАКРЕПЛЕНИЕ (Label: unpin_control) ---
-        out = subprocess.check_output(['gh', 'issue', 'list', '--repo', repo, '--label', 'unpin_control', '--json', 'body'], env=env_gh)
-        data = json.loads(out)
-        if data:
-            body = data[0]['body']
-            if "ПОДТВЕРДИТЬ_РАСПИН" in body and "[x]" in body:
-                links = find_checked_vless(body)
-                if links:
-                    to_unpin_bases = {l.split('#')[0].strip() for l in links}
-                    pinned_list = [s for s in pinned_list if s.split("#")[0].strip() not in to_unpin_bases]
-                    with open(PINNED_FILE, 'w', encoding='utf-8') as pf:
-                        pf.write("\n".join(pinned_list) + ("\n" if pinned_list else ""))
-                    executed_any = True
-
-        # --- 4. УПРАВЛЕНИЕ ИЗБРАННЫМ (Label: fav_control) ---
-        out = subprocess.check_output(['gh', 'issue', 'list', '--repo', repo, '--label', 'fav_control', '--json', 'body'], env=env_gh)
-        data = json.loads(out)
-        if data:
-            body = data[0]['body']
-            if "ПОДТВЕРДИТЬ_ИЗБРАННОЕ" in body and "[x]" in body.lower():
-                new_fav_list = []
-                checked_bases = {} # Словарь {база: новое_имя_со_звездой}
-
-                for line in body.splitlines():
-                    match = re.search(r'- \[[xX ]\]\s+(vless://[^\n\r#]+)(?:#([^\n\r]+))?', line)
-                    if match:
-                        base_part = match.group(1).strip()
-                        raw_name = match.group(2).strip() if match.group(2) else "Server"
-                        is_checked = '- [x]' in line.lower()
-                        
-                        clean_name = raw_name.replace('⭐', '').strip()
-                        
-                        if is_checked:
-                            new_name = f"⭐ {clean_name}"
-                            new_link = f"{base_part}#{new_name}"
-                            new_fav_list.append(new_link)
-                            checked_bases[base_part] = new_name
-
-                # 1. Сохраняем в favorites.txt
-                with open(FAVORITES_FILE, 'w', encoding='utf-8') as f:
-                    f.write("\n".join(new_fav_list) + ("\n" if new_fav_list else ""))
-
-                # 2. !!! ГЛАВНОЕ: Переименовываем серверы в wifi.txt !!!
-                if os.path.exists(WIFI_FILE):
-                    with open(WIFI_FILE, 'r', encoding='utf-8') as f:
-                        lines = f.readlines()
-                    
-                    new_wifi_lines = []
-                    for l in lines:
-                        if 'vless://' in l:
-                            b = l.split('#')[0].strip()
-                            if b in checked_bases:
-                                # Если в Issue стоит галочка — ставим звезду в wifi.txt
-                                new_wifi_lines.append(f"{b}#{checked_bases[b]}\n")
-                            else:
-                                # Если галочки нет — убираем звезду из wifi.txt
-                                clean_l = l.replace('⭐', '').strip()
-                                new_wifi_lines.append(clean_l + "\n")
-                        else:
-                            new_wifi_lines.append(l)
-                            
-                    with open(WIFI_FILE, 'w', encoding='utf-8') as f:
-                        f.writelines(new_wifi_lines)
-
-                print(f"⭐ Избранное синхронизировано с wifi.txt: {len(new_fav_list)} шт.")
-                executed_any = True
-
-    except Exception as e:
-        print(f"⚠️ Ошибка обработки команд: {e}")
-
-    return vetted_list, pinned_list, executed_any
-
-def update_issue(repo, label, body, env):
-    """Техническая функция для редактирования Issue."""
-    try:
-        # 1. Получаем номер issue
-        cmd = ['gh', 'issue', 'list', '--repo', repo, '--label', label, '--json', 'number']
-        # Используем decode('utf-8') для безопасности
-        output = subprocess.check_output(cmd, env=env).decode('utf-8')
-        data = json.loads(output)
-        
-        if data:
-            num = str(data[0]['number'])
-            
-            # 2. Пишем во временный файл
-            tmp_file = f"tmp_body_{label}.txt" # Уникальное имя на случай гонки потоков
-            with open(tmp_file, "w", encoding="utf-8") as f: 
-                f.write(body)
-            
-            # 3. Редактируем через файл
-            subprocess.run([
-                'gh', 'issue', 'edit', num, 
-                '--repo', repo, 
-                '--body-file', tmp_file
-            ], env=env, check=True)
-            
-            # 4. Подчищаем за собой
-            if os.path.exists(tmp_file):
-                os.remove(tmp_file)
-    except Exception as e:
-        print(f"⚠️ Ошибка обновления панели {label}: {e}")
 
 def get_country(host):
     if not os.path.exists(COUNTRY_CACHE_FILE):
@@ -635,9 +360,6 @@ def is_ipv6(host):
     return ":" in host if host else False
 
 def main_torturer():
-    token = os.getenv("GH_TOKEN")
-    repo = os.getenv("GITHUB_REPOSITORY")
-
     # --- СНАЧАЛА ЗАГРУЖАЕМ ВСЁ ИЗ ФАЙЛОВ ---
     ranking_db = {}
     if os.path.exists(RANK_FILE):
@@ -670,53 +392,8 @@ def main_torturer():
 
     working_for_base = list(ranking_db.keys())
 
-    # --- ШАГ 2: ВЫПОЛНЕНИЕ КОМАНД ---
-    vetted_list, pinned_list, executed = process_all_controls(
-        token, repo, vetted_list, pinned_list, ranking_db
-    )
-
-    is_scheduled = os.getenv("GITHUB_EVENT_NAME") == "schedule"
-    is_manual = os.getenv("GITHUB_EVENT_NAME") == "workflow_dispatch"
-
-    # --- ПРЕДОХРАНИТЕЛЬ ---
-    # Если это клик по Issue (событие edited), но кнопка "Подтвердить" НЕ нажата:
-    if not executed and not is_scheduled and not is_manual:
-        print("☕ Кнопка подтверждения не нажата. Бот уходит тихо, не трогая GitHub.")
-        # МЫ НЕ ВЫЗЫВАЕМ refresh_all_panels здесь!
-        # Твои галочки остаются висеть в GitHub, бот их не затирает.
-        return 
-
-    # Если мы здесь, значит либо нажата кнопка, либо это запуск по расписанию
-    if executed:
-        print("🧹 Команды выполнены, фиксирую изменения в файлы...")
-        with open(VETTED_FILE, 'w', encoding='utf-8') as vf:
-            vf.write("\n".join(vetted_list) + ("\n" if vetted_list else ""))
-        with open(RANK_FILE, 'w', encoding='utf-8') as f:
-            json.dump(ranking_db, f, ensure_ascii=False, indent=4)
-
-    # Обновляем панели ТОЛЬКО если что-то реально произошло
-    print("📝 Обновляю панели в GitHub...")
-    refresh_all_panels(token, repo, ranking_db, vetted_list, pinned_list)
-
-    # --- ВОТ СЮДА ВСТАВЛЯЕМ ПРИОРИТЕТ ВЫПОЛНЕНИЯ ISSUES ---
-
-    # 1. Если была нажата кнопка (executed), мы уже всё сделали.
-    # Выходим, чтобы не запускать пытки, которые длятся часами.
-    if executed:
-        print("✅ Команды из Issues выполнены, панели обновлены. Завершаю работу (Priority: Issues).")
-        commit_and_push()
-        return 
-
-    # 2. Если это запуск по расписанию (schedule), то идем пытать.
-    if is_scheduled:
-        print("⏰ Запуск по расписанию. Перехожу к инспекции (пыткам)...")
-    else:
-        # Если это ручной запуск (workflow_dispatch) без нажатых кнопок — тоже выходим
-        print("☕ Команд нет, расписания нет. Пытки не требуются. Выход.")
-        commit_and_push() # На всякий случай пушим, если были мелкие правки
-        return
-    # --- ШАГ 4: ДАЛЬШЕ ИДУТ ПЫТКИ ---
-    print("🚀 Начинаю инспекцию серверов...")
+    # --- В ЭТОЙ ВЕРСИИ БОТ ТОЛЬКО ИНСПЕКТИРУЕТ ---
+    print("⏰ Перехожу к инспекции (пыткам)...")
 
     # --- ШАГ 4: ПЕРЕХОД К ПЫТКАМ ---
     if not ranking_db:
@@ -820,16 +497,7 @@ def main_torturer():
     else:
         print("⌛ Нет новых кандидатов для пыток.")
 
-    # ПЕРЕЧИТЫВАЕМ актуальный список элиты, 
-    # потому что туда добавились новые серверы во время пыток
-    if os.path.exists(VETTED_FILE):
-        with open(VETTED_FILE, 'r', encoding='utf-8') as f:
-            vetted_list = [l.strip() for l in f if 'vless' in l]
-    
-    # ФИНАЛЬНЫЙ СИНХРОН С GITHUB
-    print("🔄 Финальное обновление панелей после инспекции...")
-    refresh_all_panels(token, repo, ranking_db, vetted_list, pinned_list)
-    commit_and_push()
+    print("✅ Инспекция завершена.")
     
 if __name__ == "__main__":
     init_checker_lib()
