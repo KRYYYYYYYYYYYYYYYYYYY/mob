@@ -394,6 +394,58 @@ def main_torturer():
 
     # --- В ЭТОЙ ВЕРСИИ БОТ ТОЛЬКО ИНСПЕКТИРУЕТ ---
     print("⏰ Перехожу к инспекции (пыткам)...")
+    # --- ШАГ 2: ВЫПОЛНЕНИЕ КОМАНД ---
+    skip_controls = os.getenv("TORTURE_SKIP_CONTROLS") == "1"
+    if skip_controls:
+        print("⏭️ Обработка Issue-команд отключена (TORTURE_SKIP_CONTROLS=1).")
+        executed = False
+    else:
+        vetted_list, pinned_list, executed = process_all_controls(
+            token, repo, vetted_list, pinned_list, ranking_db
+        )
+
+    is_scheduled = os.getenv("GITHUB_EVENT_NAME") == "schedule"
+    is_manual = os.getenv("GITHUB_EVENT_NAME") == "workflow_dispatch"
+
+    # --- ПРЕДОХРАНИТЕЛЬ ---
+    # Если это клик по Issue (событие edited), но кнопка "Подтвердить" НЕ нажата:
+    if not executed and not is_scheduled and not is_manual:
+        print("☕ Кнопка подтверждения не нажата. Бот уходит тихо, не трогая GitHub.")
+        # МЫ НЕ ВЫЗЫВАЕМ refresh_all_panels здесь!
+        # Твои галочки остаются висеть в GitHub, бот их не затирает.
+        return 
+
+    # Если мы здесь, значит либо нажата кнопка, либо это запуск по расписанию
+    if executed:
+        print("🧹 Команды выполнены, фиксирую изменения в файлы...")
+        with open(VETTED_FILE, 'w', encoding='utf-8') as vf:
+            vf.write("\n".join(vetted_list) + ("\n" if vetted_list else ""))
+        with open(RANK_FILE, 'w', encoding='utf-8') as f:
+            json.dump(ranking_db, f, ensure_ascii=False, indent=4)
+
+    # Обновляем панели ТОЛЬКО если что-то реально произошло
+    print("📝 Обновляю панели в GitHub...")
+    refresh_all_panels(token, repo, ranking_db, vetted_list, pinned_list)
+
+    # --- ВОТ СЮДА ВСТАВЛЯЕМ ПРИОРИТЕТ ВЫПОЛНЕНИЯ ISSUES ---
+
+    # 1. Если была нажата кнопка (executed), мы уже всё сделали.
+    # Выходим, чтобы не запускать пытки, которые длятся часами.
+    if executed:
+        print("✅ Команды из Issues выполнены, панели обновлены. Завершаю работу (Priority: Issues).")
+        commit_and_push()
+        return 
+
+    # 2. Если это запуск по расписанию (schedule), то идем пытать.
+    if is_scheduled:
+        print("⏰ Запуск по расписанию. Перехожу к инспекции (пыткам)...")
+    else:
+        # Если это ручной запуск (workflow_dispatch) без нажатых кнопок — тоже выходим
+        print("☕ Команд нет, расписания нет. Пытки не требуются. Выход.")
+        commit_and_push() # На всякий случай пушим, если были мелкие правки
+        return
+    # --- ШАГ 4: ДАЛЬШЕ ИДУТ ПЫТКИ ---
+    print("🚀 Начинаю инспекцию серверов...")
 
     # --- ШАГ 4: ПЕРЕХОД К ПЫТКАМ ---
     if not ranking_db:

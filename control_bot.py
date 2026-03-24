@@ -14,6 +14,15 @@ from torture_bot import (
     remove_from_all,
     add_to_blacklist,
     get_wifi_candidates,
+
+from torture_bot import (
+    RANK_FILE,
+    VETTED_FILE,
+    PINNED_FILE,
+    normalize_rank_entry,
+    process_all_controls,
+    refresh_all_panels,
+    commit_and_push,
 )
 
 
@@ -260,6 +269,9 @@ def main():
     repo = os.getenv("GITHUB_REPOSITORY")
     event_name = os.getenv("GITHUB_EVENT_NAME", "")
 
+def main():
+    token = os.getenv("GH_TOKEN")
+    repo = os.getenv("GITHUB_REPOSITORY")
     if not token or not repo:
         print("⚠️ GH_TOKEN or GITHUB_REPOSITORY is missing. Exiting.")
         return
@@ -285,6 +297,18 @@ def main():
         _commit_and_push()
     else:
         print("☕ Подтвержденных команд нет. Панели обновлены только при schedule/workflow_dispatch.")
+    if not executed:
+        print("☕ Подтвержденных команд нет. Ничего не меняю.")
+        return
+
+    with open(VETTED_FILE, 'w', encoding='utf-8') as vf:
+        vf.write("\n".join(vetted_list) + ("\n" if vetted_list else ""))
+
+    with open(RANK_FILE, 'w', encoding='utf-8') as f:
+        json.dump(ranking_db, f, ensure_ascii=False, indent=4)
+
+    refresh_all_panels(token, repo, ranking_db, vetted_list, pinned_list)
+    commit_and_push()
 
 
 if __name__ == "__main__":

@@ -21,6 +21,7 @@ jobs:
     permissions:
       actions: read
       contents: write
+      issues: write
 
     steps:
       - name: 📂 Checkout Code
@@ -103,6 +104,11 @@ jobs:
       - name: ⛓️ Run Torturer
         if: steps.gate.outputs.should_run == 'true'
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          TORTURE_SKIP_CONTROLS: '1'
           LD_LIBRARY_PATH: .
         run: python torture_bot.py
 
