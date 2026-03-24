@@ -50,6 +50,8 @@ CHECK_WORKERS = 8
 CHECK_BATCH_SIZE = 48
 TCP_PRECHECK_TIMEOUT = 1.2
 MAX_CANDIDATE_TIME = 18.0
+PROBE_TIMEOUT = 3
+STRICT_L7 = os.getenv("CHECK_STRICT_L7", "0").strip().lower() in {"1", "true", "yes"}
 
 # Подключаем новую библиотеку
 go_lib = None
@@ -426,6 +428,30 @@ def l7_multi_probe(link: str, stress_config: dict):
                 time.sleep(between_attempts_sleep)
     return False, 0
 
+def probe_link_latency(link: str) -> int:
+    """Быстрый single-pass L7 пробник по SNI-кандидатам."""
+    tried = set()
+    for cand_sni in extract_sni_candidates(link):
+        cand_sni = cand_sni.strip()
+        if not cand_sni or cand_sni in tried:
+            continue
+        tried.add(cand_sni)
+        latency = probe_vless_l7(link, cand_sni, timeout=PROBE_TIMEOUT)
+        if latency > 0:
+            return int(latency)
+    fallback_sni = extract_sni(link).strip()
+    if fallback_sni and fallback_sni not in tried:
+        return int(probe_vless_l7(link, fallback_sni, timeout=PROBE_TIMEOUT) or 0)
+    return 0
+
+def probe_tcp_latency(host: str, port: str, timeout_sec: float = 1.6) -> int:
+    try:
+        start = time.monotonic()
+        with socket.create_connection((host, int(port)), timeout=timeout_sec):
+            return int((time.monotonic() - start) * 1000)
+    except Exception:
+        return 0
+
 def tcp_precheck(host: str, port: str) -> bool:
     """Быстрый фильтр мертвых endpoint'ов перед дорогой L7-проверкой."""
     try:
@@ -447,7 +473,26 @@ def probe_candidate(base_part: str, link: str, host: str, port: str, stress_conf
             "reason": "tcp_fail",
         }
 
-    is_alive, current_latency = l7_multi_probe(link, stress_config)
+    quick_latency = probe_link_latency(link)
+    if quick_latency <= 0 and not STRICT_L7:
+        tcp_latency = probe_tcp_latency(host, port, timeout_sec=1.6)
+        if tcp_latency > 0:
+            country = get_country_code(host, countries_cache)
+            return {
+                "base": base_part,
+                "host": host,
+                "port": port,
+                "alive": True,
+                "latency": int(tcp_latency + 900),
+                "country": country,
+                "reason": "tcp_fallback",
+            }
+
+    if quick_latency <= 0:
+        is_alive, current_latency = l7_multi_probe(link, stress_config)
+    else:
+        is_alive, current_latency = True, quick_latency
+
     if not is_alive:
         return {
             "base": base_part,
@@ -600,6 +645,7 @@ def main():
     ip_counts = {}
     seen_ips = set()
     seen_parts = set()
+    checked_endpoints = set()
 
     # Настройки стресс-теста (твой блок 1-в-1)
     stress_config = {
@@ -675,6 +721,10 @@ def main():
             if is_ipv6(host):
                 blacklist.add(base_part)
                 continue
+            endpoint_key = (host, port)
+            if endpoint_key in checked_endpoints:
+                continue
+            checked_endpoints.add(endpoint_key)
 
             to_probe.append((base_part, clean_link, host, port))
 
