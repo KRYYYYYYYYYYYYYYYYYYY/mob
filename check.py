@@ -58,7 +58,6 @@ ENDPOINT_SKIP_HOURS = 8
 
 # Подключаем новую библиотеку
 go_lib = None
-go_multi_available = False
 
 def log(message: str) -> None:
     """Единый логгер с принудительным flush для GitHub Actions."""
@@ -67,7 +66,7 @@ def log(message: str) -> None:
 
 def init_checker_lib() -> None:
     """Инициализирует Go-библиотеку проверки, если она доступна."""
-    global go_lib, go_multi_available
+    global go_lib
     lib_path = os.path.abspath("libchecker.so")
     if not os.path.exists(lib_path):
         log("❌ ОШИБКА: Библиотека libchecker.so не найдена!")
@@ -85,13 +84,6 @@ def init_checker_lib() -> None:
         ctypes.c_int      # timeout
     ]
     go_lib.CheckVlessL7.restype = ctypes.c_int
-    if hasattr(go_lib, "CheckVlessL7Multi"):
-        go_lib.CheckVlessL7Multi.argtypes = [
-            ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_char_p,
-            ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int
-        ]
-        go_lib.CheckVlessL7Multi.restype = ctypes.c_int
-        go_multi_available = True
 
 def probe_vless_l7(link, target_sni, timeout=5):
     """Парсит VLESS ссылку и возвращает пинг в мс (0 если ошибка)."""
@@ -493,9 +485,9 @@ def probe_link_latency(link: str) -> int:
     if fallback_sni and fallback_sni not in tried:
         candidates.append(fallback_sni)
 
-    if go_lib is not None and go_multi_available and candidates:
+    if go_lib is not None and candidates:
         try:
-            latency = int(go_lib.CheckVlessL7Multi(
+            latency = int(go_lib.CheckVlessL7(
                 host.encode('utf-8'),
                 int(port),
                 uuid.encode('utf-8'),
