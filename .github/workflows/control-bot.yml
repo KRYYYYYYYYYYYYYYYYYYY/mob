@@ -1,0 +1,64 @@
+name: 🎛️ Control Panels Bot
+
+concurrency:
+  group: control-panels-lock
+  cancel-in-progress: true
+
+on:
+  workflow_dispatch:
+  issues:
+    types: [edited]
+
+jobs:
+  controls:
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event_name == 'issues' &&
+        github.event.action == 'edited' &&
+        github.event.sender.login != 'github-actions[bot]' &&
+        (
+          contains(github.event.issue.body, '- [x] 💀 **ПОДТВЕРДИТЬ_БАН**') ||
+          contains(github.event.issue.body, '- [X] 💀 **ПОДТВЕРДИТЬ_БАН**') ||
+          contains(github.event.issue.body, '- [x] ✅ **ПРИМЕНИТЬ_PIN_BAN**') ||
+          contains(github.event.issue.body, '- [X] ✅ **ПРИМЕНИТЬ_PIN_BAN**') ||
+          contains(github.event.issue.body, '- [x] 🏆 **ПОДТВЕРДИТЬ_ИЗБРАННОЕ**') ||
+          contains(github.event.issue.body, '- [X] 🏆 **ПОДТВЕРДИТЬ_ИЗБРАННОЕ**') ||
+          contains(github.event.issue.body, '- [x] 🔓 **ПОДТВЕРДИТЬ_РАСПИН**') ||
+          contains(github.event.issue.body, '- [X] 🔓 **ПОДТВЕРДИТЬ_РАСПИН**')
+        )
+      )
+
+    permissions:
+      contents: write
+      issues: write
+
+    steps:
+      - name: 📂 Checkout Code
+        uses: actions/checkout@v4
+
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: ⚙️ Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests cryptography psutil
+
+      - name: 🎛️ Process control issues
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: python control_bot.py
+
+      - name: 💾 Save Results
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add .
+          git commit -m "🎛️ Apply control-panel actions [skip ci]" || echo "No changes to commit"
+          git pull --rebase -X theirs origin main
+          git push origin main
