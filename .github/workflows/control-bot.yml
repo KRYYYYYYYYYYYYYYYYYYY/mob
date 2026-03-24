@@ -1,10 +1,12 @@
-name: 🎛️ Control Panels Bot
+name: "🎛️ Control Panels Bot"
 
 concurrency:
   group: control-panels-lock
   cancel-in-progress: true
 
 on:
+  schedule:
+    - cron: "*/30 * * * *"
   workflow_dispatch:
   issues:
     types: [edited]
@@ -14,6 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     if: |
       github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule' ||
       (
         github.event_name == 'issues' &&
         github.event.action == 'edited' &&
@@ -32,33 +35,27 @@ jobs:
 
     permissions:
       contents: write
+      # issue write access is required here because this workflow updates issue panels
       issues: write
 
     steps:
-      - name: 📂 Checkout Code
+      - name: "📂 Checkout Code"
         uses: actions/checkout@v4
 
-      - name: 🐍 Setup Python
+      - name: "🐍 Setup Python"
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: "3.10"
 
-      - name: ⚙️ Install dependencies
+      - name: "⚙️ Install dependencies"
         run: |
           python -m pip install --upgrade pip
           pip install requests cryptography psutil
 
-      - name: 🎛️ Process control issues
+      - name: "🎛️ Process control issues"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-        run: python control_bot.py
-
-      - name: 💾 Save Results
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
         run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-          git add .
-          git commit -m "🎛️ Apply control-panel actions [skip ci]" || echo "No changes to commit"
-          git pull --rebase -X theirs origin main
-          git push origin main
+          python control_bot.py
