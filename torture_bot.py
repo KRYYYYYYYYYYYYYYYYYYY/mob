@@ -671,9 +671,14 @@ def main_torturer():
     working_for_base = list(ranking_db.keys())
 
     # --- ШАГ 2: ВЫПОЛНЕНИЕ КОМАНД ---
-    vetted_list, pinned_list, executed = process_all_controls(
-        token, repo, vetted_list, pinned_list, ranking_db
-    )
+    skip_controls = os.getenv("TORTURE_SKIP_CONTROLS") == "1"
+    if skip_controls:
+        print("⏭️ Обработка Issue-команд отключена (TORTURE_SKIP_CONTROLS=1).")
+        executed = False
+    else:
+        vetted_list, pinned_list, executed = process_all_controls(
+            token, repo, vetted_list, pinned_list, ranking_db
+        )
 
     is_scheduled = os.getenv("GITHUB_EVENT_NAME") == "schedule"
     is_manual = os.getenv("GITHUB_EVENT_NAME") == "workflow_dispatch"
