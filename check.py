@@ -751,8 +751,9 @@ def main():
     min_workers = max(2, workers // 2)
     max_workers = max(workers, int(os.getenv("CHECK_MAX_WORKERS", str(max(16, workers)))))
     adaptive_workers = workers
-    skip_window_sec = int(max(1, os.getenv("ENDPOINT_SKIP_HOURS", str(ENDPOINT_SKIP_HOURS)))) * 3600
-    fail_threshold = int(max(1, os.getenv("ENDPOINT_FAIL_THRESHOLD", str(ENDPOINT_FAIL_THRESHOLD))))
+    skip_window_hours = max(1, int(os.getenv("ENDPOINT_SKIP_HOURS", str(ENDPOINT_SKIP_HOURS))))
+    skip_window_sec = skip_window_hours * 3600
+    fail_threshold = max(1, int(os.getenv("ENDPOINT_FAIL_THRESHOLD", str(ENDPOINT_FAIL_THRESHOLD))))
     log(f"📡 Начинаю добор до 200. В очереди: {len(check_queue)}. workers={adaptive_workers}")
 
     # --- [ШАГ 4: ЦИКЛ ПРОВЕРКИ] ---
