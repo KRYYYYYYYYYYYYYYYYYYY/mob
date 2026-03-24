@@ -710,6 +710,7 @@ def main():
     counter = len(working_for_sub) + 1
     idx = 0
     checked_today = 0
+    added_today = 0
     MAX_TO_CHECK = 300 
     ip_counts = {}
     seen_ips = set()
@@ -758,6 +759,14 @@ def main():
 
     # --- [ШАГ 4: ЦИКЛ ПРОВЕРКИ] ---
     while len(working_for_sub) < 200 and idx < len(check_queue):
+        if had_deferred_at_start and not external_loaded and checked_today >= 120 and added_today == 0:
+            log("🧩 too many dead deferred -> early external load")
+            raw_external = download_raw_data(EXTERNAL_SOURCE_URL)
+            external_loaded = True
+            check_queue = dedupe_by_base(check_queue + raw_external)
+            check_queue = dedupe_by_endpoint(check_queue)
+            log(f"🌐 early external loaded: {len(raw_external)}, queue={len(check_queue)}")
+
         if checked_today >= MAX_TO_CHECK:
             log("🛑 Лимит проверок исчерпан")
             break
@@ -899,6 +908,7 @@ def main():
                 working_for_sub.append(final_link)
                 log(f"✅ ОК {len(working_for_sub)}/200 ({country}): {host}:{port} {current_latency}ms")
                 counter += 1
+                added_today += 1
             if batch_total > 0:
                 dead_rate = batch_dead / batch_total
                 l7_fail_rate = batch_l7_fail / batch_total
