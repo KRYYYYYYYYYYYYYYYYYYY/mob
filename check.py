@@ -377,6 +377,17 @@ def ranking_sort_key(link: str, ranking_db: dict):
         rank = normalize_rank_entry(base, ranking_db[base]).get("rank", 0)
     return (-rank, base)
 
+def dedupe_by_base(links):
+    unique = []
+    seen = set()
+    for link in links:
+        base = link.split('#')[0].strip()
+        if not base or base in seen:
+            continue
+        seen.add(base)
+        unique.append(link)
+    return unique
+
 def l7_multi_probe(link: str, stress_config: dict):
     """Многократный L7-пробник: снижает ложные 'ОК', если сервер нестабилен в мобильной сети."""
     min_hits = max(1, int(stress_config.get("l7_min_success", 2)))
@@ -553,9 +564,18 @@ def main():
     log(f"🛡️ Итого бессмертных в начале списка: {len(immortals)}")
 
     # --- [ШАГ 2: ГОТОВИМ ОЧЕРЕДЬ НА ПРОВЕРКУ] ---
-    raw_external = download_raw_data(EXTERNAL_SOURCE_URL)
-    # Собираем всё в одну очередь по приоритету: Отложенные -> Новые -> Старая база
-    combined_potential = deferred_base + raw_external + current_base
+    had_deferred_at_start = len(deferred_base) > 0
+    external_loaded = False
+    if had_deferred_at_start:
+        # Пока есть отложенные — работаем только с ними + текущей базой.
+        combined_potential = deferred_base + current_base
+        log(f"📦 Режим deferred-first: deferred={len(deferred_base)}, external=postponed")
+    else:
+        raw_external = download_raw_data(EXTERNAL_SOURCE_URL)
+        external_loaded = True
+        # Если deferred пустой — сразу подключаем новые.
+        combined_potential = raw_external + current_base
+        log(f"📦 Режим normal: deferred=0, external={len(raw_external)}")
     
     check_queue = []
     seen_in_queue = set()
@@ -565,6 +585,7 @@ def main():
         if base not in seen_immortals and base not in seen_in_queue and base not in blacklist:
             check_queue.append(link)
             seen_in_queue.add(base)
+    check_queue = dedupe_by_base(check_queue)
     check_queue.sort(key=lambda l: ranking_sort_key(l, ranking_db))
 
     # --- [ШАГ 3: ПОДГОТОВКА К ЦИКЛУ] ---
@@ -624,7 +645,18 @@ def main():
         batch_limit = min(CHECK_BATCH_SIZE, remaining_checks)
         to_probe = []
 
-        while len(to_probe) < batch_limit and idx < len(check_queue):
+        while len(to_probe) < batch_limit:
+            if idx >= len(check_queue):
+                if had_deferred_at_start and not external_loaded:
+                    log("🧩 Deferred исчерпаны -> догружаю external и продолжаю")
+                    raw_external = download_raw_data(EXTERNAL_SOURCE_URL)
+                    external_loaded = True
+                    # Добавляем только то, чего еще не было.
+                    check_queue = dedupe_by_base(check_queue + raw_external)
+                    log(f"🌐 Догружено external: {len(raw_external)}, очередь={len(check_queue)}")
+                    continue
+                break
+
             link = check_queue[idx]
             idx += 1
             if is_sni_suspicious(link):
