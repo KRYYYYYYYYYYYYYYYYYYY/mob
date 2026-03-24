@@ -27,14 +27,13 @@ func pickFreeLocalPort() (int, error) {
 	return l.Addr().(*net.TCPAddr).Port, nil
 }
 
-//export CheckVlessL7
-func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C.char, cSid *C.char, cFlow *C.char, timeout int) int {
-	addr := strings.TrimSpace(C.GoString(cAddr))
-	uuid := strings.TrimSpace(C.GoString(cUuid))
-	sni := strings.TrimSpace(C.GoString(cSni))
-	pbk := strings.TrimSpace(C.GoString(cPbk))
-	sid := strings.TrimSpace(C.GoString(cSid))
-	flow := strings.TrimSpace(C.GoString(cFlow))
+func checkVlessSingle(addr string, cPort int, uuid string, sni string, pbk string, sid string, flow string, timeout int) int {
+	addr = strings.TrimSpace(addr)
+	uuid = strings.TrimSpace(uuid)
+	sni = strings.TrimSpace(sni)
+	pbk = strings.TrimSpace(pbk)
+	sid = strings.TrimSpace(sid)
+	flow = strings.TrimSpace(flow)
 	if addr == "" || uuid == "" || sni == "" || pbk == "" || cPort <= 0 {
 		return 0
 	}
@@ -172,6 +171,41 @@ func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C
 		return firstSuccessLatency
 	}
 
+	return 0
+}
+
+//export CheckVlessL7
+func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C.char, cSid *C.char, cFlow *C.char, timeout int) int {
+	addr := strings.TrimSpace(C.GoString(cAddr))
+	uuid := strings.TrimSpace(C.GoString(cUuid))
+	sni := strings.TrimSpace(C.GoString(cSni))
+	pbk := strings.TrimSpace(C.GoString(cPbk))
+	sid := strings.TrimSpace(C.GoString(cSid))
+	flow := strings.TrimSpace(C.GoString(cFlow))
+	return checkVlessSingle(addr, cPort, uuid, sni, pbk, sid, flow, timeout)
+}
+
+//export CheckVlessL7Multi
+func CheckVlessL7Multi(cAddr *C.char, cPort int, cUuid *C.char, cSniCSV *C.char, cPbk *C.char, cSid *C.char, cFlow *C.char, timeout int) int {
+	addr := strings.TrimSpace(C.GoString(cAddr))
+	uuid := strings.TrimSpace(C.GoString(cUuid))
+	sniCSV := strings.TrimSpace(C.GoString(cSniCSV))
+	pbk := strings.TrimSpace(C.GoString(cPbk))
+	sid := strings.TrimSpace(C.GoString(cSid))
+	flow := strings.TrimSpace(C.GoString(cFlow))
+	if sniCSV == "" {
+		return 0
+	}
+	for _, raw := range strings.Split(sniCSV, ",") {
+		sni := strings.TrimSpace(raw)
+		if sni == "" {
+			continue
+		}
+		latency := checkVlessSingle(addr, cPort, uuid, sni, pbk, sid, flow, timeout)
+		if latency > 0 {
+			return latency
+		}
+	}
 	return 0
 }
 
