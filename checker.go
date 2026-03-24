@@ -185,6 +185,17 @@ func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C
 	return checkVlessSingle(addr, cPort, uuid, sni, pbk, sid, flow, timeout)
 }
 
+//export CheckVlessL7
+func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C.char, cSid *C.char, cFlow *C.char, timeout int) int {
+	addr := strings.TrimSpace(C.GoString(cAddr))
+	uuid := strings.TrimSpace(C.GoString(cUuid))
+	sni := strings.TrimSpace(C.GoString(cSni))
+	pbk := strings.TrimSpace(C.GoString(cPbk))
+	sid := strings.TrimSpace(C.GoString(cSid))
+	flow := strings.TrimSpace(C.GoString(cFlow))
+	return checkVlessSingle(addr, cPort, uuid, sni, pbk, sid, flow, timeout)
+}
+
 //export CheckVlessL7Multi
 func CheckVlessL7Multi(cAddr *C.char, cPort int, cUuid *C.char, cSniCSV *C.char, cPbk *C.char, cSid *C.char, cFlow *C.char, timeout int) int {
 	addr := strings.TrimSpace(C.GoString(cAddr))
@@ -208,5 +219,6 @@ func CheckVlessL7Multi(cAddr *C.char, cPort int, cUuid *C.char, cSniCSV *C.char,
 	}
 	return 0
 }
+
 
 func main() {}
