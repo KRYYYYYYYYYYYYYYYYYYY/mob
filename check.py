@@ -52,13 +52,17 @@ CHECK_BATCH_SIZE = 48
 # Подключаем новую библиотеку
 go_lib = None
 
+def log(message: str) -> None:
+    """Единый логгер с принудительным flush для GitHub Actions."""
+    print(message, flush=True)
+
 
 def init_checker_lib() -> None:
     """Инициализирует Go-библиотеку проверки, если она доступна."""
     global go_lib
     lib_path = os.path.abspath("libchecker.so")
     if not os.path.exists(lib_path):
-        print("❌ ОШИБКА: Библиотека libchecker.so не найдена!")
+        log("❌ ОШИБКА: Библиотека libchecker.so не найдена!")
         return
 
     go_lib = ctypes.cdll.LoadLibrary(lib_path)
@@ -102,7 +106,7 @@ def probe_vless_l7(link, target_sni, timeout=5):
         )
         return latency # Вернет 0 или время в мс
     except Exception as e:
-        print(f"⚠️ Ошибка L7 чекера: {e}")
+        log(f"⚠️ Ошибка L7 чекера: {e}")
         return 0
 
 def extract_sni(link):
@@ -466,7 +470,7 @@ def main():
         with open('test1/pinned.txt', 'r', encoding='utf-8') as f:
             pinned_list = [line.strip() for line in f if "vless://" in line]
     
-    print(f"📦 Загружено закрепов: {len(pinned_list)}")
+    log(f"📦 Загружено закрепов: {len(pinned_list)}")
 
     # 2. Загружаем Фавориты (Favorites)
     fav_bases = set()
@@ -478,7 +482,7 @@ def main():
                     link = line.strip()
                     fav_full_links.append(link)
                     fav_bases.add(link.split("#")[0].strip())
-    print(f"⭐ Загружено фаворитов: {len(fav_bases)}")
+    log(f"⭐ Загружено фаворитов: {len(fav_bases)}")
 
     # 3. Загружаем Отложенные (Deferred)
     deferred_base = []
@@ -516,7 +520,7 @@ def main():
         immortals.append(p)
         seen_immortals.add(base)
 
-    print(f"🛡️ Итого бессмертных в начале списка: {len(immortals)}")
+    log(f"🛡️ Итого бессмертных в начале списка: {len(immortals)}")
 
     # --- [ШАГ 2: ГОТОВИМ ОЧЕРЕДЬ НА ПРОВЕРКУ] ---
     raw_external = download_raw_data(EXTERNAL_SOURCE_URL)
@@ -578,12 +582,12 @@ def main():
         except: pass
 
     workers = max(1, int(os.getenv("CHECK_WORKERS", str(CHECK_WORKERS))))
-    print(f"📡 Начинаю добор до 200. В очереди: {len(check_queue)}. workers={workers}")
+    log(f"📡 Начинаю добор до 200. В очереди: {len(check_queue)}. workers={workers}")
 
     # --- [ШАГ 4: ЦИКЛ ПРОВЕРКИ] ---
     while len(working_for_sub) < 200 and idx < len(check_queue):
         if checked_today >= MAX_TO_CHECK:
-            print("🛑 Лимит проверок исчерпан")
+            log("🛑 Лимит проверок исчерпан")
             break
 
         remaining_checks = MAX_TO_CHECK - checked_today
@@ -615,7 +619,7 @@ def main():
         if not to_probe:
             continue
 
-        print(f"⚙️ Батч проверки: {len(to_probe)}")
+        log(f"⚙️ Батч проверки: {len(to_probe)}")
         with ThreadPoolExecutor(max_workers=workers) as executor:
             future_map = {
                 executor.submit(probe_candidate, base_part, clean_link, host, port, stress_config, countries_cache): (base_part, clean_link, host, port)
@@ -633,7 +637,7 @@ def main():
                 try:
                     result = future.result()
                 except Exception as e:
-                    print(f"💥 Ошибка worker {host}:{port} — {e}")
+                    log(f"💥 Ошибка worker {host}:{port} — {e}")
                     result = {
                         "base": base_part,
                         "host": host,
@@ -644,7 +648,7 @@ def main():
                     }
 
                 if not result["alive"]:
-                    print(f"💀 Мертв: {host}:{port}")
+                    log(f"💀 Мертв: {host}:{port}")
                     if base_part in ranking_db:
                         del ranking_db[base_part]
                     fail_time = history.get(base_part, now)
@@ -655,12 +659,12 @@ def main():
                 resolved_ip = host
                 ip_counts[resolved_ip] = ip_counts.get(resolved_ip, 0) + 1
                 if ip_counts[resolved_ip] > 5:
-                    print(f"♻️ Скип IP {resolved_ip} (лимит)")
+                    log(f"♻️ Скип IP {resolved_ip} (лимит)")
                     continue
 
                 country = result["country"]
                 if country not in ALLOWED_COUNTRIES:
-                    print(f"🌍 Мимо ({country}): {host}:{port}")
+                    log(f"🌍 Мимо ({country}): {host}:{port}")
                     continue
 
                 current_latency = int(result["latency"])
@@ -675,7 +679,7 @@ def main():
                 ping_label = f"{current_latency}ms"
                 final_link = rebuild_link_name(sub_link, f"mob {counter} [{ping_label}]")
                 working_for_sub.append(final_link)
-                print(f"✅ ОК {len(working_for_sub)}/200 ({country}): {host}:{port} {current_latency}ms")
+                log(f"✅ ОК {len(working_for_sub)}/200 ({country}): {host}:{port} {current_latency}ms")
                 counter += 1
 
     # --- [ШАГ 5: ФИНАЛЬНОЕ СОХРАНЕНИЕ] ---
@@ -704,7 +708,7 @@ def main():
     with open(BLACKLIST_FILE, "w", encoding="utf-8") as f:
         f.write("\n".join(sorted(blacklist)))
 
-    print(f"🏁 Завершено. Подписка: {len(working_for_sub)}, Очередь: {len(new_deferred)}")
+    log(f"🏁 Завершено. Подписка: {len(working_for_sub)}, Очередь: {len(new_deferred)}")
 
 if __name__ == "__main__":
     init_checker_lib()
