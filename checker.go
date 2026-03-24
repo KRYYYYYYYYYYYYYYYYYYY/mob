@@ -182,43 +182,20 @@ func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C
 	pbk := strings.TrimSpace(C.GoString(cPbk))
 	sid := strings.TrimSpace(C.GoString(cSid))
 	flow := strings.TrimSpace(C.GoString(cFlow))
-	return checkVlessSingle(addr, cPort, uuid, sni, pbk, sid, flow, timeout)
-}
-
-//export CheckVlessL7
-func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C.char, cSid *C.char, cFlow *C.char, timeout int) int {
-	addr := strings.TrimSpace(C.GoString(cAddr))
-	uuid := strings.TrimSpace(C.GoString(cUuid))
-	sni := strings.TrimSpace(C.GoString(cSni))
-	pbk := strings.TrimSpace(C.GoString(cPbk))
-	sid := strings.TrimSpace(C.GoString(cSid))
-	flow := strings.TrimSpace(C.GoString(cFlow))
-	return checkVlessSingle(addr, cPort, uuid, sni, pbk, sid, flow, timeout)
-}
-
-//export CheckVlessL7Multi
-func CheckVlessL7Multi(cAddr *C.char, cPort int, cUuid *C.char, cSniCSV *C.char, cPbk *C.char, cSid *C.char, cFlow *C.char, timeout int) int {
-	addr := strings.TrimSpace(C.GoString(cAddr))
-	uuid := strings.TrimSpace(C.GoString(cUuid))
-	sniCSV := strings.TrimSpace(C.GoString(cSniCSV))
-	pbk := strings.TrimSpace(C.GoString(cPbk))
-	sid := strings.TrimSpace(C.GoString(cSid))
-	flow := strings.TrimSpace(C.GoString(cFlow))
-	if sniCSV == "" {
+	if sni == "" {
 		return 0
 	}
-	for _, raw := range strings.Split(sniCSV, ",") {
-		sni := strings.TrimSpace(raw)
-		if sni == "" {
+	for _, raw := range strings.Split(sni, ",") {
+		candidate := strings.TrimSpace(raw)
+		if candidate == "" {
 			continue
 		}
-		latency := checkVlessSingle(addr, cPort, uuid, sni, pbk, sid, flow, timeout)
+		latency := checkVlessSingle(addr, cPort, uuid, candidate, pbk, sid, flow, timeout)
 		if latency > 0 {
 			return latency
 		}
 	}
 	return 0
 }
-
 
 func main() {}
