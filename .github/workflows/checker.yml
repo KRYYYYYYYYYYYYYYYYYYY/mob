@@ -106,7 +106,8 @@ jobs:
         env:
           # keep checker runtime env minimal; control env belongs to control-bot.yml
           LD_LIBRARY_PATH: .
-        run: python torture_bot.py
+          PYTHONUNBUFFERED: "1"
+        run: python -u torture_bot.py
 
       - name: 💾 Save Results
         if: steps.gate.outputs.should_run == 'true'
@@ -115,5 +116,9 @@ jobs:
           git config --local user.name "github-actions[bot]"
           git add .
           git commit -m "📊 Sync: Ranking and Vetted updated [skip ci]" || echo "No changes to commit"
-          git pull --rebase -X theirs origin main
-          git push origin main
+          for i in 1 2 3; do
+            git pull --rebase -X theirs origin main && break || sleep $((i*5))
+          done
+          for i in 1 2 3; do
+            git push origin main && break || sleep $((i*10))
+          done

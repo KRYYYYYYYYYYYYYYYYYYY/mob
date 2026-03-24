@@ -9,6 +9,7 @@ import time
 import subprocess
 import ipaddress
 import ctypes
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 # Настройки путей
@@ -21,6 +22,7 @@ VETTED_FILE = 'test1/vetted.txt'
 PINNED_FILE = 'test1/pinned.txt'
 FAVORITES_FILE = 'test1/favorites.txt'
 BLACKLIST_FILE = 'test1/blacklist.txt'
+ENDPOINT_CACHE_FILE = 'test1/endpoint_cache.json'
 
 EXTERNAL_SOURCE_URL = [
     "https://raw.githubusercontent.com/KRYYYYYYYYYYYYYYYYYYY/crazy_xray_checker/refs/heads/main/result/working.txt"
@@ -45,9 +47,21 @@ DEFAULT_MOBILE_USER_AGENTS = [
     "okhttp/4.12.0 v2rayNG/1.12.28",
 ]
 DEFAULT_PROBE_PATHS = ["/", "/generate_204", "/favicon.ico"]
+CHECK_WORKERS = 12
+CHECK_BATCH_SIZE = 48
+TCP_PRECHECK_TIMEOUT = 1.2
+MAX_CANDIDATE_TIME = 18.0
+PROBE_TIMEOUT = 3
+STRICT_L7 = os.getenv("CHECK_STRICT_L7", "0").strip().lower() in {"1", "true", "yes"}
+ENDPOINT_FAIL_THRESHOLD = 3
+ENDPOINT_SKIP_HOURS = 8
 
 # Подключаем новую библиотеку
 go_lib = None
+
+def log(message: str) -> None:
+    """Единый логгер с принудительным flush для GitHub Actions."""
+    print(message, flush=True)
 
 
 def init_checker_lib() -> None:
@@ -55,7 +69,7 @@ def init_checker_lib() -> None:
     global go_lib
     lib_path = os.path.abspath("libchecker.so")
     if not os.path.exists(lib_path):
-        print("❌ ОШИБКА: Библиотека libchecker.so не найдена!")
+        log("❌ ОШИБКА: Библиотека libchecker.so не найдена!")
         return
 
     go_lib = ctypes.cdll.LoadLibrary(lib_path)
@@ -99,7 +113,7 @@ def probe_vless_l7(link, target_sni, timeout=5):
         )
         return latency # Вернет 0 или время в мс
     except Exception as e:
-        print(f"⚠️ Ошибка L7 чекера: {e}")
+        log(f"⚠️ Ошибка L7 чекера: {e}")
         return 0
 
 def extract_sni(link):
@@ -298,9 +312,6 @@ def get_country_code(host, cache):
 
     # 3. ЗАПРОС К API: Только если IP новый
     try:
-        # Паузу делаем ТОЛЬКО перед реальным сетевым запросом
-        time.sleep(0.5) 
-        
         clean_ip = ip.replace("[", "").replace("]", "")
         url = f"http://ip-api.com/json/{clean_ip}?fields=status,countryCode"
         
@@ -371,6 +382,47 @@ def ranking_sort_key(link: str, ranking_db: dict):
         rank = normalize_rank_entry(base, ranking_db[base]).get("rank", 0)
     return (-rank, base)
 
+def dedupe_by_base(links):
+    unique = []
+    seen = set()
+    for link in links:
+        base = link.split('#')[0].strip()
+        if not base or base in seen:
+            continue
+        seen.add(base)
+        unique.append(link)
+    return unique
+
+def dedupe_by_endpoint(links):
+    """Оставляет по одному конфигу на endpoint host:port (в порядке приоритета)."""
+    unique = []
+    seen = set()
+    for link in links:
+        base = link.split('#', 1)[0].strip()
+        _, host, port = extract_host_port(base)
+        if not host or not port:
+            continue
+        key = (host, port)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(link)
+    return unique
+
+def load_endpoint_cache(path: str) -> dict:
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+def save_endpoint_cache(path: str, cache: dict) -> None:
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(cache, f, ensure_ascii=False, indent=2)
+
 def l7_multi_probe(link: str, stress_config: dict):
     """Многократный L7-пробник: снижает ложные 'ОК', если сервер нестабилен в мобильной сети."""
     min_hits = max(1, int(stress_config.get("l7_min_success", 2)))
@@ -378,6 +430,11 @@ def l7_multi_probe(link: str, stress_config: dict):
     probe_attempts = max(1, int(stress_config.get("probe_attempts", 4)))
     between_attempts_sleep = max(0.0, float(stress_config.get("between_attempts_sleep", 0.35)))
     timeout_sec = int(max(1, stress_config.get("timeout", 5)))
+    max_candidate_time = max(
+        4.0,
+        float(os.getenv("CHECK_MAX_CANDIDATE_SEC", stress_config.get("max_candidate_sec", MAX_CANDIDATE_TIME))),
+    )
+    deadline = time.monotonic() + max_candidate_time
 
     candidates = extract_sni_candidates(link)
     if not candidates:
@@ -391,6 +448,8 @@ def l7_multi_probe(link: str, stress_config: dict):
     best_latency = 0
     for candidate_sni in candidates:
         for _ in range(probe_attempts):
+            if time.monotonic() >= deadline:
+                return False, 0
             latency = probe_vless_l7(link, candidate_sni, timeout=timeout_sec)
             if latency > 0:
                 hits += 1
@@ -398,9 +457,127 @@ def l7_multi_probe(link: str, stress_config: dict):
                     best_latency = latency
                 if hits >= min_hits:
                     return True, best_latency
-            if between_attempts_sleep > 0:
+            if latency > 0 and between_attempts_sleep > 0:
                 time.sleep(between_attempts_sleep)
     return False, 0
+
+def probe_link_latency(link: str) -> int:
+    """Быстрый single-pass L7 пробник по SNI-кандидатам."""
+    parsed = urllib.parse.urlparse(link)
+    params = urllib.parse.parse_qs(parsed.query)
+    _, host, port = extract_host_port(link)
+    if not host or not port:
+        return 0
+    uuid = parsed.username if parsed.username else ""
+    pbk = params.get('pbk', [''])[0]
+    sid = params.get('sid', [''])[0]
+    flow = params.get('flow', [''])[0]
+
+    tried = set()
+    candidates = []
+    for cand_sni in extract_sni_candidates(link):
+        cand_sni = cand_sni.strip()
+        if not cand_sni or cand_sni in tried:
+            continue
+        tried.add(cand_sni)
+        candidates.append(cand_sni)
+    fallback_sni = extract_sni(link).strip()
+    if fallback_sni and fallback_sni not in tried:
+        candidates.append(fallback_sni)
+
+    if go_lib is not None and candidates:
+        try:
+            latency = int(go_lib.CheckVlessL7(
+                host.encode('utf-8'),
+                int(port),
+                uuid.encode('utf-8'),
+                ",".join(candidates).encode('utf-8'),
+                pbk.encode('utf-8'),
+                sid.encode('utf-8'),
+                flow.encode('utf-8'),
+                int(PROBE_TIMEOUT),
+            ) or 0)
+            if latency > 0:
+                return latency
+        except Exception as e:
+            log(f"⚠️ Multi L7 call failed: {e}")
+
+    for cand_sni in candidates:
+        latency = probe_vless_l7(link, cand_sni, timeout=PROBE_TIMEOUT)
+        if latency > 0:
+            return int(latency)
+    return 0
+
+def probe_tcp_latency(host: str, port: str, timeout_sec: float = 1.6) -> int:
+    try:
+        start = time.monotonic()
+        with socket.create_connection((host, int(port)), timeout=timeout_sec):
+            return int((time.monotonic() - start) * 1000)
+    except Exception:
+        return 0
+
+def tcp_precheck(host: str, port: str) -> bool:
+    """Быстрый фильтр мертвых endpoint'ов перед дорогой L7-проверкой."""
+    try:
+        with socket.create_connection((host, int(port)), timeout=TCP_PRECHECK_TIMEOUT):
+            return True
+    except Exception:
+        return False
+
+def probe_candidate(base_part: str, link: str, host: str, port: str, stress_config: dict, countries_cache: dict):
+    """Проверка кандидата в worker-потоке: L7 + страна."""
+    if not tcp_precheck(host, port):
+        return {
+            "base": base_part,
+            "host": host,
+            "port": port,
+            "alive": False,
+            "latency": 0,
+            "country": "Unknown",
+            "reason": "tcp_fail",
+        }
+
+    quick_latency = probe_link_latency(link)
+    if quick_latency <= 0 and not STRICT_L7:
+        tcp_latency = probe_tcp_latency(host, port, timeout_sec=1.6)
+        if tcp_latency > 0:
+            country = get_country_code(host, countries_cache)
+            return {
+                "base": base_part,
+                "host": host,
+                "port": port,
+                "alive": True,
+                "latency": int(tcp_latency + 900),
+                "country": country,
+                "reason": "tcp_fallback",
+            }
+
+    if quick_latency <= 0:
+        is_alive, current_latency = l7_multi_probe(link, stress_config)
+    else:
+        is_alive, current_latency = True, quick_latency
+
+    if not is_alive:
+        return {
+            "base": base_part,
+            "host": host,
+            "port": port,
+            "alive": False,
+            "latency": 0,
+            "country": "Unknown",
+            "reason": "l7_fail",
+        }
+
+    country = get_country_code(host, countries_cache)
+    return {
+        "base": base_part,
+        "host": host,
+        "port": port,
+        "alive": True,
+        "latency": int(current_latency),
+        "country": country,
+        "reason": "ok",
+    }
 
 def main():
     import subprocess
@@ -443,7 +620,7 @@ def main():
         with open('test1/pinned.txt', 'r', encoding='utf-8') as f:
             pinned_list = [line.strip() for line in f if "vless://" in line]
     
-    print(f"📦 Загружено закрепов: {len(pinned_list)}")
+    log(f"📦 Загружено закрепов: {len(pinned_list)}")
 
     # 2. Загружаем Фавориты (Favorites)
     fav_bases = set()
@@ -455,7 +632,7 @@ def main():
                     link = line.strip()
                     fav_full_links.append(link)
                     fav_bases.add(link.split("#")[0].strip())
-    print(f"⭐ Загружено фаворитов: {len(fav_bases)}")
+    log(f"⭐ Загружено фаворитов: {len(fav_bases)}")
 
     # 3. Загружаем Отложенные (Deferred)
     deferred_base = []
@@ -475,6 +652,7 @@ def main():
         try:
             with open(STATUS_FILE, "r") as f: history = json.load(f)
         except: history = {}
+    endpoint_cache = load_endpoint_cache(ENDPOINT_CACHE_FILE)
 
     # --- [ШАГ 1: ФОРМИРУЕМ СПИСОК БЕССМЕРТНЫХ] ---
     immortals = [] 
@@ -490,15 +668,24 @@ def main():
     # Потом фавориты
     for f_link in fav_full_links:
         base = f_link.split("#")[0].strip()
-        immortals.append(p)
+        immortals.append(f_link)
         seen_immortals.add(base)
 
-    print(f"🛡️ Итого бессмертных в начале списка: {len(immortals)}")
+    log(f"🛡️ Итого бессмертных в начале списка: {len(immortals)}")
 
     # --- [ШАГ 2: ГОТОВИМ ОЧЕРЕДЬ НА ПРОВЕРКУ] ---
-    raw_external = download_raw_data(EXTERNAL_SOURCE_URL)
-    # Собираем всё в одну очередь по приоритету: Отложенные -> Новые -> Старая база
-    combined_potential = deferred_base + raw_external + current_base
+    had_deferred_at_start = len(deferred_base) > 0
+    external_loaded = False
+    if had_deferred_at_start:
+        # Пока есть отложенные — работаем только с ними + текущей базой.
+        combined_potential = deferred_base + current_base
+        log(f"📦 Режим deferred-first: deferred={len(deferred_base)}, external=postponed")
+    else:
+        raw_external = download_raw_data(EXTERNAL_SOURCE_URL)
+        external_loaded = True
+        # Если deferred пустой — сразу подключаем новые.
+        combined_potential = raw_external + current_base
+        log(f"📦 Режим normal: deferred=0, external={len(raw_external)}")
     
     check_queue = []
     seen_in_queue = set()
@@ -508,7 +695,12 @@ def main():
         if base not in seen_immortals and base not in seen_in_queue and base not in blacklist:
             check_queue.append(link)
             seen_in_queue.add(base)
+    check_queue = dedupe_by_base(check_queue)
     check_queue.sort(key=lambda l: ranking_sort_key(l, ranking_db))
+    before_endpoint_dedupe = len(check_queue)
+    check_queue = dedupe_by_endpoint(check_queue)
+    if len(check_queue) != before_endpoint_dedupe:
+        log(f"🧹 endpoint-dedupe: {before_endpoint_dedupe} -> {len(check_queue)}")
 
     # --- [ШАГ 3: ПОДГОТОВКА К ЦИКЛУ] ---
     working_for_sub = immortals[:200] # Сразу забиваем подписку бессмертными
@@ -518,10 +710,12 @@ def main():
     counter = len(working_for_sub) + 1
     idx = 0
     checked_today = 0
-    MAX_TO_CHECK = 300 
+    added_today = 0
+    max_to_check = int(os.getenv("MAX_TO_CHECK", "0") or 0)
     ip_counts = {}
     seen_ips = set()
     seen_parts = set()
+    checked_endpoints = set()
 
     # Настройки стресс-теста (твой блок 1-в-1)
     stress_config = {
@@ -554,83 +748,179 @@ def main():
                     stress_config["probe_paths"] = [str(x) for x in data["probe_paths"] if str(x).strip()]
         except: pass
 
-    print(f"📡 Начинаю добор до 200. В очереди: {len(check_queue)}")
+    workers = max(1, int(os.getenv("CHECK_WORKERS", str(CHECK_WORKERS))))
+    min_workers = max(2, workers // 2)
+    max_workers = max(workers, int(os.getenv("CHECK_MAX_WORKERS", str(max(16, workers)))))
+    adaptive_workers = workers
+    skip_window_hours = max(1, int(os.getenv("ENDPOINT_SKIP_HOURS", str(ENDPOINT_SKIP_HOURS))))
+    skip_window_sec = skip_window_hours * 3600
+    fail_threshold = max(1, int(os.getenv("ENDPOINT_FAIL_THRESHOLD", str(ENDPOINT_FAIL_THRESHOLD))))
+    log(f"📡 Начинаю добор до 200. В очереди: {len(check_queue)}. workers={adaptive_workers}")
 
     # --- [ШАГ 4: ЦИКЛ ПРОВЕРКИ] ---
     while len(working_for_sub) < 200 and idx < len(check_queue):
-        if checked_today >= MAX_TO_CHECK:
-            print("🛑 Лимит проверок исчерпан")
+        if had_deferred_at_start and not external_loaded and checked_today >= 120 and added_today == 0:
+            log("🧩 too many dead deferred -> early external load")
+            raw_external = download_raw_data(EXTERNAL_SOURCE_URL)
+            external_loaded = True
+            check_queue = dedupe_by_base(check_queue + raw_external)
+            check_queue = dedupe_by_endpoint(check_queue)
+            log(f"🌐 early external loaded: {len(raw_external)}, queue={len(check_queue)}")
+
+        if max_to_check > 0 and checked_today >= max_to_check:
+            log(f"🛑 Лимит проверок исчерпан: {checked_today}/{max_to_check}")
             break
 
-        link = check_queue[idx]
-        idx += 1
-        
-        if is_sni_suspicious(link):
-            continue
-            
-        clean_link = link.strip()
-        base_part = clean_link.split("#", 1)[0].strip()
-
-        if base_part in seen_parts:
-            continue
-        
-        # Основные фильтры формата
-        if not re.search(r'[a-f0-9\-]{36}@', base_part):
-            continue
-
-        endpoint, host, port = extract_host_port(base_part)
-        if not endpoint or not host or not port:
-            continue
-
-        if is_ipv6(host):
-            add_to_blacklist(base_part)
-            remove_from_input_file(base_part)
-            continue
-
-        # --- ТВОЯ ПРОВЕРКА L7 ---
-        print(f"🔍 Тестирую: {host}:{port}...", end=" ", flush=True)
-        is_alive, current_latency = l7_multi_probe(link, stress_config)
-
-        checked_today += 1
-        resolved_ip = host
-        remove_from_input_file(base_part)
-
-        # Логика лимита IP (5 конфигов на 1 IP)
-        if is_alive:
-            ip_counts[resolved_ip] = ip_counts.get(resolved_ip, 0) + 1
-            if ip_counts[resolved_ip] > 5:
-                print(f"♻️ Скип IP {resolved_ip} (лимит)")
-                continue
-            
-            # Фильтр страны
-            country = get_country_code(host, countries_cache)
-            if country not in ALLOWED_COUNTRIES:
-                print(f"🌍 Мимо ({country})")
-                continue
-
-            # Добавляем в списки
-            working_for_base.append(base_part)
-            seen_parts.add(base_part)
-            
-            sub_link = base_part
-            if "sni=" not in sub_link.lower() and not is_ipv6(host):
-                sep = "&" if "?" in sub_link else "?"
-                sub_link += f"{sep}sni={host}"
-            
-            ping_label = f"{current_latency}ms"
-            final_link = rebuild_link_name(sub_link, f"mob {counter} [{ping_label}]")
-            working_for_sub.append(final_link)
-            
-            print(f"✅ ОК {len(working_for_sub)}/200 ({country}): {current_latency}ms")
-            counter += 1
+        if max_to_check > 0:
+            remaining_checks = max_to_check - checked_today
+            batch_limit = min(CHECK_BATCH_SIZE, remaining_checks)
         else:
-            print(f"💀 Мертв")
-            if base_part in ranking_db:
-                del ranking_db[base_part]
-            fail_time = history.get(base_part, now)
-            if now - fail_time > 86400:
-                with open(BLACKLIST_FILE, 'a') as bl:
-                    bl.write(base_part + "\n")
+            batch_limit = CHECK_BATCH_SIZE
+        to_probe = []
+
+        while len(to_probe) < batch_limit:
+            if idx >= len(check_queue):
+                if had_deferred_at_start and not external_loaded:
+                    log("🧩 Deferred исчерпаны -> догружаю external и продолжаю")
+                    raw_external = download_raw_data(EXTERNAL_SOURCE_URL)
+                    external_loaded = True
+                    # Добавляем только то, чего еще не было.
+                    check_queue = dedupe_by_base(check_queue + raw_external)
+                    log(f"🌐 Догружено external: {len(raw_external)}, очередь={len(check_queue)}")
+                    continue
+                break
+
+            link = check_queue[idx]
+            idx += 1
+            if is_sni_suspicious(link):
+                continue
+
+            clean_link = link.strip()
+            base_part = clean_link.split("#", 1)[0].strip()
+            if base_part in seen_parts:
+                continue
+            if not re.search(r'[a-f0-9\-]{36}@', base_part):
+                continue
+
+            endpoint, host, port = extract_host_port(base_part)
+            if not endpoint or not host or not port:
+                continue
+            if is_ipv6(host):
+                blacklist.add(base_part)
+                continue
+            endpoint_key_str = f"{host}:{port}"
+            cached_ep = endpoint_cache.get(endpoint_key_str, {})
+            skip_until = int(cached_ep.get("skip_until", 0) or 0)
+            if skip_until > int(time.time()):
+                continue
+            endpoint_key = (host, port)
+            if endpoint_key in checked_endpoints:
+                continue
+            checked_endpoints.add(endpoint_key)
+
+            to_probe.append((base_part, clean_link, host, port))
+
+        if not to_probe:
+            continue
+
+        log(f"⚙️ Батч проверки: {len(to_probe)} workers={adaptive_workers}")
+        with ThreadPoolExecutor(max_workers=adaptive_workers) as executor:
+            future_map = {
+                executor.submit(probe_candidate, base_part, clean_link, host, port, stress_config, countries_cache): (base_part, clean_link, host, port)
+                for base_part, clean_link, host, port in to_probe
+            }
+            batch_total = 0
+            batch_dead = 0
+            batch_l7_fail = 0
+            for future in as_completed(future_map):
+                if len(working_for_sub) >= 200:
+                    break
+                if max_to_check > 0 and checked_today >= max_to_check:
+                    break
+
+                base_part, clean_link, host, port = future_map[future]
+                checked_today += 1
+                batch_total += 1
+                try:
+                    result = future.result()
+                except Exception as e:
+                    log(f"💥 Ошибка worker {host}:{port} — {e}")
+                    result = {
+                        "base": base_part,
+                        "host": host,
+                        "port": port,
+                        "alive": False,
+                        "latency": 0,
+                        "country": "Unknown",
+                    }
+
+                if not result["alive"]:
+                    reason = result.get("reason", "fail")
+                    log(f"💀 Мертв: {host}:{port} ({reason})")
+                    batch_dead += 1
+                    if reason == "l7_fail":
+                        batch_l7_fail += 1
+                    if base_part in ranking_db:
+                        del ranking_db[base_part]
+                    fail_time = history.get(base_part, now)
+                    if now - fail_time > 86400:
+                        blacklist.add(base_part)
+                    ep_key = f"{host}:{port}"
+                    ep_data = endpoint_cache.get(ep_key, {})
+                    new_fail_count = int(ep_data.get("fail_count", 0) or 0) + 1
+                    ep_data.update({
+                        "fail_count": new_fail_count,
+                        "last_status": reason,
+                        "last_seen": int(time.time()),
+                    })
+                    if new_fail_count >= fail_threshold:
+                        ep_data["skip_until"] = int(time.time()) + skip_window_sec
+                    endpoint_cache[ep_key] = ep_data
+                    continue
+
+                resolved_ip = host
+                ip_counts[resolved_ip] = ip_counts.get(resolved_ip, 0) + 1
+                if ip_counts[resolved_ip] > 5:
+                    log(f"♻️ Скип IP {resolved_ip} (лимит)")
+                    continue
+
+                country = result["country"]
+                if country not in ALLOWED_COUNTRIES:
+                    log(f"🌍 Мимо ({country}): {host}:{port}")
+                    continue
+
+                current_latency = int(result["latency"])
+                ep_key = f"{host}:{port}"
+                endpoint_cache[ep_key] = {
+                    "fail_count": 0,
+                    "skip_until": 0,
+                    "last_status": result.get("reason", "ok"),
+                    "last_seen": int(time.time()),
+                    "last_latency": current_latency,
+                }
+                working_for_base.append(base_part)
+                seen_parts.add(base_part)
+
+                sub_link = base_part
+                if "sni=" not in sub_link.lower() and not is_ipv6(host):
+                    sep = "&" if "?" in sub_link else "?"
+                    sub_link += f"{sep}sni={host}"
+
+                ping_label = f"{current_latency}ms"
+                final_link = rebuild_link_name(sub_link, f"mob {counter} [{ping_label}]")
+                working_for_sub.append(final_link)
+                log(f"✅ ОК {len(working_for_sub)}/200 ({country}): {host}:{port} {current_latency}ms")
+                counter += 1
+                added_today += 1
+            if batch_total > 0:
+                dead_rate = batch_dead / batch_total
+                l7_fail_rate = batch_l7_fail / batch_total
+                if dead_rate >= 0.8 and adaptive_workers < max_workers:
+                    adaptive_workers = min(max_workers, adaptive_workers + 2)
+                    log(f"📈 adaptive-workers up -> {adaptive_workers} (dead_rate={dead_rate:.2f})")
+                elif l7_fail_rate >= 0.45 and adaptive_workers > min_workers:
+                    adaptive_workers = max(min_workers, adaptive_workers - 1)
+                    log(f"📉 adaptive-workers down -> {adaptive_workers} (l7_fail_rate={l7_fail_rate:.2f})")
 
     # --- [ШАГ 5: ФИНАЛЬНОЕ СОХРАНЕНИЕ] ---
     
@@ -652,7 +942,14 @@ def main():
     with open(RANKING_FILE, "w", encoding="utf-8") as f:
         json.dump(ranking_db, f, ensure_ascii=False, indent=4)
 
-    print(f"🏁 Завершено. Подписка: {len(working_for_sub)}, Очередь: {len(new_deferred)}")
+    with open(CACHE_FILE, "w", encoding="utf-8") as f:
+        json.dump(countries_cache, f, ensure_ascii=False, indent=2)
+
+    with open(BLACKLIST_FILE, "w", encoding="utf-8") as f:
+        f.write("\n".join(sorted(blacklist)))
+    save_endpoint_cache(ENDPOINT_CACHE_FILE, endpoint_cache)
+
+    log(f"🏁 Завершено. Подписка: {len(working_for_sub)}, Очередь: {len(new_deferred)}")
 
 if __name__ == "__main__":
     init_checker_lib()

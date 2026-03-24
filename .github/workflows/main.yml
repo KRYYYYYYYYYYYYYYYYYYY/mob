@@ -117,7 +117,8 @@ jobs:
           GH_PROMPT_DISABLED: 1
           GITHUB_REPOSITORY: ${{ github.repository }}
           LD_LIBRARY_PATH: .
-        run: python check.py
+          PYTHONUNBUFFERED: "1"
+        run: python -u check.py
 
       - name: Commit and Push changes
         if: steps.gate.outputs.should_run == 'true'
@@ -128,5 +129,9 @@ jobs:
           echo "libchecker.h" >> .gitignore
           git add .
           git commit -m "Auto-update: DB and Subscription" || echo "No changes to commit"
-          git pull --rebase -X theirs origin main
-          git push origin main
+          for i in 1 2 3; do
+            git pull --rebase -X theirs origin main && break || sleep $((i*5))
+          done
+          for i in 1 2 3; do
+            git push origin main && break || sleep $((i*10))
+          done
