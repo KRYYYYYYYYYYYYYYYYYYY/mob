@@ -106,7 +106,8 @@ jobs:
         env:
           # keep checker runtime env minimal; control env belongs to control-bot.yml
           LD_LIBRARY_PATH: .
-        run: python torture_bot.py
+          PYTHONUNBUFFERED: "1"
+        run: python -u torture_bot.py
 
       - name: 💾 Save Results
         if: steps.gate.outputs.should_run == 'true'
