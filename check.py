@@ -46,7 +46,7 @@ DEFAULT_MOBILE_USER_AGENTS = [
     "okhttp/4.12.0 v2rayNG/1.12.28",
 ]
 DEFAULT_PROBE_PATHS = ["/", "/generate_204", "/favicon.ico"]
-CHECK_WORKERS = 8
+CHECK_WORKERS = 12
 CHECK_BATCH_SIZE = 48
 TCP_PRECHECK_TIMEOUT = 1.2
 MAX_CANDIDATE_TIME = 18.0
@@ -390,6 +390,22 @@ def dedupe_by_base(links):
         unique.append(link)
     return unique
 
+def dedupe_by_endpoint(links):
+    """Оставляет по одному конфигу на endpoint host:port (в порядке приоритета)."""
+    unique = []
+    seen = set()
+    for link in links:
+        base = link.split('#', 1)[0].strip()
+        _, host, port = extract_host_port(base)
+        if not host or not port:
+            continue
+        key = (host, port)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(link)
+    return unique
+
 def l7_multi_probe(link: str, stress_config: dict):
     """Многократный L7-пробник: снижает ложные 'ОК', если сервер нестабилен в мобильной сети."""
     min_hits = max(1, int(stress_config.get("l7_min_success", 2)))
@@ -603,7 +619,7 @@ def main():
     # Потом фавориты
     for f_link in fav_full_links:
         base = f_link.split("#")[0].strip()
-        immortals.append(p)
+        immortals.append(f_link)
         seen_immortals.add(base)
 
     log(f"🛡️ Итого бессмертных в начале списка: {len(immortals)}")
@@ -632,6 +648,10 @@ def main():
             seen_in_queue.add(base)
     check_queue = dedupe_by_base(check_queue)
     check_queue.sort(key=lambda l: ranking_sort_key(l, ranking_db))
+    before_endpoint_dedupe = len(check_queue)
+    check_queue = dedupe_by_endpoint(check_queue)
+    if len(check_queue) != before_endpoint_dedupe:
+        log(f"🧹 endpoint-dedupe: {before_endpoint_dedupe} -> {len(check_queue)}")
 
     # --- [ШАГ 3: ПОДГОТОВКА К ЦИКЛУ] ---
     working_for_sub = immortals[:200] # Сразу забиваем подписку бессмертными
