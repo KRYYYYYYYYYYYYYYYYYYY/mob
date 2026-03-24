@@ -128,5 +128,9 @@ jobs:
           echo "libchecker.h" >> .gitignore
           git add .
           git commit -m "Auto-update: DB and Subscription" || echo "No changes to commit"
-          git pull --rebase -X theirs origin main
-          git push origin main
+          for i in 1 2 3; do
+            git pull --rebase -X theirs origin main && break || sleep $((i*5))
+          done
+          for i in 1 2 3; do
+            git push origin main && break || sleep $((i*10))
+          done
