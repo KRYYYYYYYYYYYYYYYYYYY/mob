@@ -8,7 +8,9 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -36,6 +38,11 @@ func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C
 	sid := strings.TrimSpace(C.GoString(cSid))
 	flow := strings.TrimSpace(C.GoString(cFlow))
 	if addr == "" || uuid == "" || sni == "" || pbk == "" || cPort <= 0 {
+		return 0
+	}
+	// отсекаем конфиги с битым UUID до старта Xray
+	uuidRe := regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+	if !uuidRe.MatchString(uuid) {
 		return 0
 	}
 	if timeout <= 0 {
@@ -132,7 +139,6 @@ func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C
 		Timeout:   time.Duration(timeout) * time.Second,
 	}
 
-	start := time.Now()
 	probeURLs := []string{
 		"https://www.gstatic.com/generate_204",
 		"https://connectivitycheck.gstatic.com/generate_204",
@@ -144,12 +150,19 @@ func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C
 	}
 	successHits := 0
 	firstSuccessLatency := 0
+	maxAcceptedLatencyMs := 6000
 
 	for idx, probeURL := range probeURLs {
 		req, err := http.NewRequest(http.MethodGet, probeURL, nil)
 		if err != nil {
 			continue
 		}
+		reqStart := time.Now()
+		var gotFirstByte bool
+		trace := &httptrace.ClientTrace{
+			GotFirstResponseByte: func() { gotFirstByte = true },
+		}
+		req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
 		req.Header.Set("Accept", "*/*")
 		req.Header.Set("Connection", "close")
 		req.Header.Set("User-Agent", probeUAs[idx%len(probeUAs)])
@@ -162,9 +175,13 @@ func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C
 		resp.Body.Close()
 
 		if resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusOK {
+			latencyMs := int(time.Since(reqStart).Milliseconds())
+			if !gotFirstByte || latencyMs <= 0 || latencyMs > maxAcceptedLatencyMs {
+				continue
+			}
 			successHits++
 			if firstSuccessLatency == 0 {
-				firstSuccessLatency = int(time.Since(start).Milliseconds())
+				firstSuccessLatency = latencyMs
 			}
 		}
 	}
