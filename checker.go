@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"strings"
 	"time"
@@ -132,7 +133,6 @@ func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C
 		Timeout:   time.Duration(timeout) * time.Second,
 	}
 
-	start := time.Now()
 	probeURLs := []string{
 		"https://www.gstatic.com/generate_204",
 		"https://connectivitycheck.gstatic.com/generate_204",
@@ -144,12 +144,19 @@ func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C
 	}
 	successHits := 0
 	firstSuccessLatency := 0
+	maxAcceptedLatencyMs := 6000
 
 	for idx, probeURL := range probeURLs {
 		req, err := http.NewRequest(http.MethodGet, probeURL, nil)
 		if err != nil {
 			continue
 		}
+		reqStart := time.Now()
+		var gotFirstByte bool
+		trace := &httptrace.ClientTrace{
+			GotFirstResponseByte: func() { gotFirstByte = true },
+		}
+		req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
 		req.Header.Set("Accept", "*/*")
 		req.Header.Set("Connection", "close")
 		req.Header.Set("User-Agent", probeUAs[idx%len(probeUAs)])
@@ -162,9 +169,13 @@ func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C
 		resp.Body.Close()
 
 		if resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusOK {
+			latencyMs := int(time.Since(reqStart).Milliseconds())
+			if !gotFirstByte || latencyMs <= 0 || latencyMs > maxAcceptedLatencyMs {
+				continue
+			}
 			successHits++
 			if firstSuccessLatency == 0 {
-				firstSuccessLatency = int(time.Since(start).Milliseconds())
+				firstSuccessLatency = latencyMs
 			}
 		}
 	}
@@ -172,7 +183,8 @@ func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C
 		return firstSuccessLatency
 	}
 
-	return 0
+	// TCP поднялся, но реального L7-доступа нет (частый кейс: UUID выключен у провайдера)
+	return -1
 }
 
 func main() {}
