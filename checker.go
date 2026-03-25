@@ -27,13 +27,14 @@ func pickFreeLocalPort() (int, error) {
 	return l.Addr().(*net.TCPAddr).Port, nil
 }
 
-func checkVlessSingle(addr string, cPort int, uuid string, sni string, pbk string, sid string, flow string, timeout int) int {
-	addr = strings.TrimSpace(addr)
-	uuid = strings.TrimSpace(uuid)
-	sni = strings.TrimSpace(sni)
-	pbk = strings.TrimSpace(pbk)
-	sid = strings.TrimSpace(sid)
-	flow = strings.TrimSpace(flow)
+//export CheckVlessL7
+func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C.char, cSid *C.char, cFlow *C.char, timeout int) int {
+	addr := strings.TrimSpace(C.GoString(cAddr))
+	uuid := strings.TrimSpace(C.GoString(cUuid))
+	sni := strings.TrimSpace(C.GoString(cSni))
+	pbk := strings.TrimSpace(C.GoString(cPbk))
+	sid := strings.TrimSpace(C.GoString(cSid))
+	flow := strings.TrimSpace(C.GoString(cFlow))
 	if addr == "" || uuid == "" || sni == "" || pbk == "" || cPort <= 0 {
 		return 0
 	}
@@ -171,30 +172,6 @@ func checkVlessSingle(addr string, cPort int, uuid string, sni string, pbk strin
 		return firstSuccessLatency
 	}
 
-	return 0
-}
-
-//export CheckVlessL7
-func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C.char, cSid *C.char, cFlow *C.char, timeout int) int {
-	addr := strings.TrimSpace(C.GoString(cAddr))
-	uuid := strings.TrimSpace(C.GoString(cUuid))
-	sni := strings.TrimSpace(C.GoString(cSni))
-	pbk := strings.TrimSpace(C.GoString(cPbk))
-	sid := strings.TrimSpace(C.GoString(cSid))
-	flow := strings.TrimSpace(C.GoString(cFlow))
-	if sni == "" {
-		return 0
-	}
-	for _, raw := range strings.Split(sni, ",") {
-		candidate := strings.TrimSpace(raw)
-		if candidate == "" {
-			continue
-		}
-		latency := checkVlessSingle(addr, cPort, uuid, candidate, pbk, sid, flow, timeout)
-		if latency > 0 {
-			return latency
-		}
-	}
 	return 0
 }
 
