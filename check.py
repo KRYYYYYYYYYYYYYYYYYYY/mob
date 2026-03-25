@@ -518,7 +518,7 @@ def main():
     counter = len(working_for_sub) + 1
     idx = 0
     checked_today = 0
-    MAX_TO_CHECK = 300 
+    MAX_TO_CHECK = 500 
     ip_counts = {}
     seen_ips = set()
     seen_parts = set()
