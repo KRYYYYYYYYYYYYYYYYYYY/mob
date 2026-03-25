@@ -9,6 +9,7 @@ import time
 import subprocess
 import ipaddress
 import ctypes
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 # Настройки путей
@@ -378,6 +379,7 @@ def l7_multi_probe(link: str, stress_config: dict):
     probe_attempts = max(1, int(stress_config.get("probe_attempts", 4)))
     between_attempts_sleep = max(0.0, float(stress_config.get("between_attempts_sleep", 0.35)))
     timeout_sec = int(max(1, stress_config.get("timeout", 5)))
+    max_latency_ms = max(1, int(stress_config.get("max_latency_ms", 6000)))
 
     candidates = extract_sni_candidates(link)
     if not candidates:
@@ -392,7 +394,7 @@ def l7_multi_probe(link: str, stress_config: dict):
     for candidate_sni in candidates:
         for _ in range(probe_attempts):
             latency = probe_vless_l7(link, candidate_sni, timeout=timeout_sec)
-            if latency > 0:
+            if latency > 0 and latency <= max_latency_ms:
                 hits += 1
                 if best_latency == 0 or latency < best_latency:
                     best_latency = latency
@@ -490,8 +492,9 @@ def main():
     # Потом фавориты
     for f_link in fav_full_links:
         base = f_link.split("#")[0].strip()
-        immortals.append(p)
-        seen_immortals.add(base)
+        if base not in seen_immortals:
+            immortals.append(f_link)
+            seen_immortals.add(base)
 
     print(f"🛡️ Итого бессмертных в начале списка: {len(immortals)}")
 
@@ -530,6 +533,8 @@ def main():
         "between_attempts_sleep": 0.35,
         "l7_min_success": 2,
         "l7_max_candidates": 3,
+        "workers": 32,
+        "max_latency_ms": 6000,
         "user_agents": list(DEFAULT_MOBILE_USER_AGENTS),
         "probe_paths": list(DEFAULT_PROBE_PATHS),
     }
@@ -544,6 +549,8 @@ def main():
                 stress_config["min_success"] = int(data.get("min_success", stress_config["min_success"]))
                 stress_config["l7_min_success"] = int(data.get("l7_min_success", stress_config["l7_min_success"]))
                 stress_config["l7_max_candidates"] = int(data.get("l7_max_candidates", stress_config["l7_max_candidates"]))
+                stress_config["workers"] = int(data.get("workers", stress_config["workers"]))
+                stress_config["max_latency_ms"] = int(data.get("max_latency_ms", stress_config["max_latency_ms"]))
                 stress_config["recv_timeout"] = float(data.get("recv_timeout", stress_config["recv_timeout"]))
                 stress_config["between_attempts_sleep"] = float(data.get("between_attempts_sleep", stress_config["between_attempts_sleep"]))
                 if isinstance(data.get("mobile_user_agents"), list) and data.get("mobile_user_agents"):
@@ -557,80 +564,93 @@ def main():
     print(f"📡 Начинаю добор до 200. В очереди: {len(check_queue)}")
 
     # --- [ШАГ 4: ЦИКЛ ПРОВЕРКИ] ---
-    while len(working_for_sub) < 200 and idx < len(check_queue):
-        if checked_today >= MAX_TO_CHECK:
-            print("🛑 Лимит проверок исчерпан")
-            break
+    workers = max(1, int(stress_config.get("workers", 32)))
+    batch_size = max(20, workers * 2)
+    print(f"⚙️ Параллельная проверка: workers={workers}, batch={batch_size}")
 
-        link = check_queue[idx]
-        idx += 1
-        
-        if is_sni_suspicious(link):
-            continue
-            
-        clean_link = link.strip()
-        base_part = clean_link.split("#", 1)[0].strip()
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        while len(working_for_sub) < 200 and idx < len(check_queue):
+            if checked_today >= MAX_TO_CHECK:
+                print("🛑 Лимит проверок исчерпан")
+                break
 
-        if base_part in seen_parts:
-            continue
-        
-        # Основные фильтры формата
-        if not re.search(r'[a-f0-9\-]{36}@', base_part):
-            continue
+            batch = []
+            while idx < len(check_queue) and len(batch) < batch_size and (checked_today + len(batch)) < MAX_TO_CHECK:
+                link = check_queue[idx]
+                idx += 1
 
-        endpoint, host, port = extract_host_port(base_part)
-        if not endpoint or not host or not port:
-            continue
+                if is_sni_suspicious(link):
+                    continue
 
-        if is_ipv6(host):
-            add_to_blacklist(base_part)
-            remove_from_input_file(base_part)
-            continue
+                clean_link = link.strip()
+                base_part = clean_link.split("#", 1)[0].strip()
+                if base_part in seen_parts:
+                    continue
 
-        # --- ТВОЯ ПРОВЕРКА L7 ---
-        print(f"🔍 Тестирую: {host}:{port}...", end=" ", flush=True)
-        is_alive, current_latency = l7_multi_probe(link, stress_config)
+                # Основные фильтры формата (uuid + endpoint)
+                if not re.search(r'[a-f0-9\-]{36}@', base_part):
+                    continue
+                endpoint, host, port = extract_host_port(base_part)
+                if not endpoint or not host or not port:
+                    continue
+                if is_ipv6(host):
+                    add_to_blacklist(base_part)
+                    remove_from_input_file(base_part)
+                    continue
 
-        checked_today += 1
-        resolved_ip = host
-        remove_from_input_file(base_part)
+                batch.append((link, base_part, host))
 
-        # Логика лимита IP (5 конфигов на 1 IP)
-        if is_alive:
-            ip_counts[resolved_ip] = ip_counts.get(resolved_ip, 0) + 1
-            if ip_counts[resolved_ip] > 5:
-                print(f"♻️ Скип IP {resolved_ip} (лимит)")
-                continue
-            
-            # Фильтр страны
-            country = get_country_code(host, countries_cache)
-            if country not in ALLOWED_COUNTRIES:
-                print(f"🌍 Мимо ({country})")
+            if not batch:
                 continue
 
-            # Добавляем в списки
-            working_for_base.append(base_part)
-            seen_parts.add(base_part)
-            
-            sub_link = base_part
-            if "sni=" not in sub_link.lower() and not is_ipv6(host):
-                sep = "&" if "?" in sub_link else "?"
-                sub_link += f"{sep}sni={host}"
-            
-            ping_label = f"{current_latency}ms"
-            final_link = rebuild_link_name(sub_link, f"mob {counter} [{ping_label}]")
-            working_for_sub.append(final_link)
-            
-            print(f"✅ ОК {len(working_for_sub)}/200 ({country}): {current_latency}ms")
-            counter += 1
-        else:
-            print(f"💀 Мертв")
-            if base_part in ranking_db:
-                del ranking_db[base_part]
-            fail_time = history.get(base_part, now)
-            if now - fail_time > 86400:
-                with open(BLACKLIST_FILE, 'a') as bl:
-                    bl.write(base_part + "\n")
+            futures = {
+                pool.submit(l7_multi_probe, link, stress_config): (base_part, host)
+                for link, base_part, host in batch
+            }
+            for fut in as_completed(futures):
+                if len(working_for_sub) >= 200 or checked_today >= MAX_TO_CHECK:
+                    break
+                base_part, host = futures[fut]
+                checked_today += 1
+                remove_from_input_file(base_part)
+                print(f"🔍 Тестирую: {host}...", end=" ", flush=True)
+                try:
+                    is_alive, current_latency = fut.result()
+                except Exception:
+                    is_alive, current_latency = False, 0
+
+                if is_alive:
+                    ip_counts[host] = ip_counts.get(host, 0) + 1
+                    if ip_counts[host] > 5:
+                        print(f"♻️ Скип IP {host} (лимит)")
+                        continue
+
+                    country = get_country_code(host, countries_cache)
+                    if country not in ALLOWED_COUNTRIES:
+                        print(f"🌍 Мимо ({country})")
+                        continue
+
+                    working_for_base.append(base_part)
+                    seen_parts.add(base_part)
+
+                    sub_link = base_part
+                    if "sni=" not in sub_link.lower() and not is_ipv6(host):
+                        sep = "&" if "?" in sub_link else "?"
+                        sub_link += f"{sep}sni={host}"
+
+                    ping_label = f"{current_latency}ms"
+                    final_link = rebuild_link_name(sub_link, f"mob {counter} [{ping_label}]")
+                    working_for_sub.append(final_link)
+                    print(f"✅ ОК {len(working_for_sub)}/200 ({country}): {current_latency}ms")
+                    counter += 1
+                else:
+                    print("💀 Мертв")
+                    if base_part in ranking_db:
+                        del ranking_db[base_part]
+                    fail_time = history.get(base_part, now)
+                    if now - fail_time > 86400:
+                        with open(BLACKLIST_FILE, 'a') as bl:
+                            bl.write(base_part + "\n")
 
     # --- [ШАГ 5: ФИНАЛЬНОЕ СОХРАНЕНИЕ] ---
     
