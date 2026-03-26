@@ -394,6 +394,9 @@ def l7_multi_probe(link: str, stress_config: dict):
     for candidate_sni in candidates:
         for _ in range(probe_attempts):
             latency = probe_vless_l7(link, candidate_sni, timeout=timeout_sec)
+            if latency < 0:
+                # Жесткий отказ L7 при доступном TCP (например, отключенный UUID) — нет смысла долбить дальше.
+                return False, -1
             if latency > 0 and latency <= max_latency_ms:
                 hits += 1
                 if best_latency == 0 or latency < best_latency:
@@ -644,7 +647,10 @@ def main():
                     print(f"✅ ОК {len(working_for_sub)}/200 ({country}): {current_latency}ms")
                     counter += 1
                 else:
-                    print("💀 Мертв")
+                    if current_latency < 0:
+                        print("⛔ UUID/доступ отклонен провайдером")
+                    else:
+                        print("💀 Мертв")
                     if base_part in ranking_db:
                         del ranking_db[base_part]
                     fail_time = history.get(base_part, now)

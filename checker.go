@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/http/httptrace"
 	"net/url"
-	"regexp"
 	"strings"
 	"time"
 
@@ -38,11 +37,6 @@ func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C
 	sid := strings.TrimSpace(C.GoString(cSid))
 	flow := strings.TrimSpace(C.GoString(cFlow))
 	if addr == "" || uuid == "" || sni == "" || pbk == "" || cPort <= 0 {
-		return 0
-	}
-	// отсекаем конфиги с битым UUID до старта Xray
-	uuidRe := regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
-	if !uuidRe.MatchString(uuid) {
 		return 0
 	}
 	if timeout <= 0 {
@@ -188,8 +182,9 @@ func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C
 	if successHits >= 2 {
 		return firstSuccessLatency
 	}
+	// TCP поднялся, но реального L7-доступа нет (частый кейс: UUID выключен у провайдера)
+	return -1
 
-	return 0
 }
 
 func main() {}
