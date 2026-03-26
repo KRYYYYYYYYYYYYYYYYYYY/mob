@@ -3,18 +3,19 @@ package main
 import "C"
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptrace"
-	"net/url"
 	"strings"
 	"time"
 
 	"github.com/xtls/xray-core/core"
 	"github.com/xtls/xray-core/infra/conf/serial"
+	"golang.org/x/net/proxy"
 
 	_ "github.com/xtls/xray-core/main/distro/all"
 )
@@ -118,14 +119,24 @@ func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C
 	time.Sleep(150 * time.Millisecond)
 
 	// 3. ПРОВЕРКА С ЗАМЕРОМ ВРЕМЕНИ
-	proxyURL, err := url.Parse(fmt.Sprintf("socks5://127.0.0.1:%d", socksPort))
+	socksDialer, err := proxy.SOCKS5("tcp", fmt.Sprintf("127.0.0.1:%d", socksPort), nil, &net.Dialer{
+		Timeout:   time.Duration(timeout) * time.Second,
+		KeepAlive: 0,
+	})
 	if err != nil {
 		return 0
 	}
+	ctxDialer, ok := socksDialer.(proxy.ContextDialer)
+	if !ok {
+		return 0
+	}
 	transport := &http.Transport{
-		Proxy:             http.ProxyURL(proxyURL),
+		Proxy:             nil,
 		DisableKeepAlives: true,
 		IdleConnTimeout:   1 * time.Second,
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return ctxDialer.DialContext(ctx, network, addr)
+		},
 	}
 	defer transport.CloseIdleConnections()
 	client := &http.Client{
@@ -147,35 +158,44 @@ func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C
 	maxAcceptedLatencyMs := 6000
 
 	for idx, probeURL := range probeURLs {
-		req, err := http.NewRequest(http.MethodGet, probeURL, nil)
-		if err != nil {
-			continue
-		}
-		reqStart := time.Now()
-		var gotFirstByte bool
-		trace := &httptrace.ClientTrace{
-			GotFirstResponseByte: func() { gotFirstByte = true },
-		}
-		req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
-		req.Header.Set("Accept", "*/*")
-		req.Header.Set("Connection", "close")
-		req.Header.Set("User-Agent", probeUAs[idx%len(probeUAs)])
-
-		resp, err := client.Do(req)
-		if err != nil {
-			continue
-		}
-		_, _ = io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
-
-		if resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusOK {
-			latencyMs := int(time.Since(reqStart).Milliseconds())
-			if !gotFirstByte || latencyMs <= 0 || latencyMs > maxAcceptedLatencyMs {
+		for attempt := 0; attempt < 2; attempt++ {
+			req, err := http.NewRequest(http.MethodGet, probeURL, nil)
+			if err != nil {
 				continue
 			}
-			successHits++
-			if firstSuccessLatency == 0 {
-				firstSuccessLatency = latencyMs
+			reqStart := time.Now()
+			var gotFirstByte bool
+			trace := &httptrace.ClientTrace{
+				GotFirstResponseByte: func() { gotFirstByte = true },
+			}
+			req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
+			req.Header.Set("Accept", "*/*")
+			req.Header.Set("Connection", "close")
+			req.Header.Set("User-Agent", probeUAs[idx%len(probeUAs)])
+
+			resp, err := client.Do(req)
+			if err != nil {
+				if attempt == 0 {
+					time.Sleep(200 * time.Millisecond)
+				}
+				continue
+			}
+			_, _ = io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+
+			if resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusOK {
+				latencyMs := int(time.Since(reqStart).Milliseconds())
+				if !gotFirstByte || latencyMs <= 0 || latencyMs > maxAcceptedLatencyMs {
+					continue
+				}
+				successHits++
+				if firstSuccessLatency == 0 {
+					firstSuccessLatency = latencyMs
+				}
+				break
+			}
+			if attempt == 0 {
+				time.Sleep(200 * time.Millisecond)
 			}
 		}
 	}
