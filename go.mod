@@ -2,7 +2,10 @@ module proxy_checker
 
 go 1.21.13
 
-require github.com/xtls/xray-core v1.8.24
+require (
+	github.com/xtls/xray-core v1.8.24
+	golang.org/x/net v0.28.0
+)
 
 require (
 	github.com/OmarTariq612/goech v0.0.0-20240405204721-8e2e1dafd3a0 // indirect
@@ -36,7 +39,6 @@ require (
 	golang.org/x/crypto v0.26.0 // indirect
 	golang.org/x/exp v0.0.0-20240531132922-fd00a4e0eefc // indirect
 	golang.org/x/mod v0.18.0 // indirect
-	golang.org/x/net v0.28.0 // indirect
 	golang.org/x/sys v0.24.0 // indirect
 	golang.org/x/text v0.17.0 // indirect
 	golang.org/x/time v0.5.0 // indirect
