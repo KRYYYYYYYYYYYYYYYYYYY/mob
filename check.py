@@ -3,6 +3,7 @@ import re
 import os
 import ssl
 import json
+import uuid
 import urllib.parse
 import urllib.request
 import time
@@ -377,6 +378,64 @@ def extract_sni_candidates(link):
     return candidates
 # ------------------------------------------
 
+def is_uuid_like(value: str) -> bool:
+    """Проверяет, что строка похожа на UUID."""
+    if not value:
+        return False
+    try:
+        uuid.UUID(value)
+        return True
+    except Exception:
+        return False
+
+def validate_protocol_auth(link: str, link_scheme: str):
+    """
+    Лёгкая валидация учетки до L7-чека, чтобы не тратить пробы на заведомый мусор.
+    Возвращает: (ok, reason)
+    """
+    pc = parse_any_link(link)
+    if not pc:
+        return False, "skip_bad_parsed_link"
+
+    if link_scheme == "vless":
+        if not is_uuid_like(pc.get("id", "")):
+            return False, "skip_bad_uuid_vless"
+    elif link_scheme == "vmess":
+        if not is_uuid_like(pc.get("id", "")):
+            return False, "skip_bad_uuid_vmess"
+    elif link_scheme == "trojan":
+        pwd = pc.get("id", "")
+        if not isinstance(pwd, str) or len(pwd.strip()) < 6:
+            return False, "skip_bad_trojan_password"
+    elif link_scheme == "shadowsocks":
+        method = str(pc.get("method", "")).strip()
+        password = str(pc.get("password", "")).strip()
+        if not method or not password or len(password) < 4:
+            return False, "skip_bad_ss_auth"
+    return True, ""
+
+def validate_transport_requirements(link: str):
+    """
+    Валидация transport/TLS/REALITY параметров перед запуском Go-чекера.
+    Возвращает: (ok, reason)
+    """
+    pc = parse_any_link(link)
+    if not pc:
+        return False, "skip_bad_transport_parsed_link"
+
+    security = str(pc.get("security", "none")).lower()
+    net_type = str(pc.get("net_type", "tcp")).lower()
+    sni = str(pc.get("sni", "")).strip()
+    pbk = str(pc.get("pbk", "")).strip()
+
+    if security in {"tls", "reality"} and not sni:
+        return False, "skip_missing_sni_for_tls"
+    if security == "reality" and not pbk:
+        return False, "skip_missing_pbk_for_reality"
+    if net_type == "ws" and not str(pc.get("path", "")).strip():
+        return False, "skip_missing_ws_path"
+    return True, ""
+
 
 def download_raw_data(urls):
     """
@@ -735,7 +794,6 @@ def main():
     import subprocess
     token = os.getenv("GH_TOKEN")
     repo = os.getenv("GITHUB_REPOSITORY")
-    full_replace_mode = os.getenv("FULL_REPLACE_SERVERS", "0") == "1"
     reason_stats = {}
     # сбрасываем лог текущего прогона
     with open(CHECK_LOG_FILE, "w", encoding="utf-8") as f:
@@ -834,18 +892,6 @@ def main():
     print(f"🛡️ Итого бессмертных в начале списка: {len(immortals)}")
     note_reason(reason_stats, "immortals_loaded", extra=str(len(immortals)))
 
-    # Режим полной замены:
-    # удаляем все не-бессмертные и заполняем очередь только новыми источниками.
-    if full_replace_mode:
-        print("♻️ FULL_REPLACE_SERVERS=1: очищаю текущую базу (кроме pinned/favorites)")
-        current_base = []
-        deferred_base = []
-        with open(INPUT_FILE, "w", encoding="utf-8") as f:
-            f.write("\n".join(sorted(seen_immortals)))
-        with open('test1/deferred.txt', "w", encoding="utf-8") as f:
-            f.write("")
-        note_reason(reason_stats, "full_replace_mode", extra="enabled")
-
     # --- [ШАГ 2: ГОТОВИМ ОЧЕРЕДЬ НА ПРОВЕРКУ] ---
     check_queue = []
     seen_in_queue = set()
@@ -878,6 +924,7 @@ def main():
     seen_ips = set()
     seen_parts = set()
     runtime_blocked_hosts = {}
+    host_precheck_counts = {}
 
     # Настройки стресс-теста (твой блок 1-в-1)
     stress_config = {
@@ -998,10 +1045,27 @@ def main():
                     note_reason(reason_stats, "skip_runtime_blocked_host", base_part, runtime_blocked_hosts[host])
                     continue
 
+                host_precheck_counts[host] = host_precheck_counts.get(host, 0) + 1
+                if host_precheck_counts[host] > 5:
+                    note_reason(reason_stats, "skip_host_precheck_limit", base_part, host)
+                    continue
+
                 if is_ipv6(host):
                     note_reason(reason_stats, "skip_ipv6", base_part)
                     add_to_blacklist(base_part)
                     remove_from_input_file(base_part)
+                    continue
+
+                auth_ok, auth_reason = validate_protocol_auth(base_part, link_scheme)
+                if not auth_ok:
+                    note_reason(reason_stats, auth_reason, base_part)
+                    add_to_blacklist(base_part)
+                    continue
+
+                transport_ok, transport_reason = validate_transport_requirements(base_part)
+                if not transport_ok:
+                    note_reason(reason_stats, transport_reason, base_part)
+                    add_to_blacklist(base_part)
                     continue
 
                 batch.append((link, base_part, host))
