@@ -207,7 +207,6 @@ def refresh_all_panels(token, repo, ranking_db, vetted_list, pinned_list):
     fav_bases = {l.split('#')[0].strip() for l in fav_list}
 
     body_ctrl = f"### 🎮 Меню\n🕒 `{update_time}`\n\n"
-    body_ctrl += "- [ ] 💀 **ПОДТВЕРДИТЬ_БАН**\n\n---\n\n"
     body_ctrl += f"- [ ] {FULL_REPLACE_MARKER}\n"
     body_ctrl += f"- [ ] {FULL_REPLACE_CONFIRM_MARKER}\n\n---\n\n"
     wifi_to_ban = get_wifi_candidates(pinned_list, fav_list)
@@ -277,16 +276,6 @@ def process_all_controls(token, repo, vetted_list, pinned_list, ranking_db):
                 _cancel_running_workflow_runs(repo, CHECK_WORKFLOW_FILE, env_gh)
                 _dispatch_workflow(repo, CHECK_WORKFLOW_FILE, env_gh)
                 executed_any = True
-
-            if "ПОДТВЕРДИТЬ_БАН" in body and "[x]" in body:
-                links = find_checked_vless(body)
-                for base_full in links:
-                    base = base_full.split('#')[0].strip()
-                    add_to_blacklist(base)
-                    remove_from_all(base)
-                    if base in ranking_db:
-                        del ranking_db[base]
-                    executed_any = True
 
         out = subprocess.check_output(['gh', 'issue', 'list', '--repo', repo, '--label', 'pin_control', '--json', 'body'], env=env_gh)
         data = json.loads(out)
