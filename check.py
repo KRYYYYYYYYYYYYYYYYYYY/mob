@@ -632,6 +632,24 @@ def l7_multi_probe(link: str, stress_config: dict):
     between_attempts_sleep = max(0.0, float(stress_config.get("between_attempts_sleep", 0.35)))
     timeout_sec = int(max(1, stress_config.get("timeout", 5)))
     max_latency_ms = max(1, int(stress_config.get("max_latency_ms", 6000)))
+    stability_max_spread_ms = max(1, int(stress_config.get("stability_max_spread_ms", 1200)))
+    stability_max_ratio = max(1.0, float(stress_config.get("stability_max_ratio", 4.0)))
+    stability_max_na = max(0, int(stress_config.get("stability_max_na", 0)))
+
+    def is_unstable(latencies: list[int], na_count: int) -> bool:
+        if len(latencies) < 2:
+            return False
+        min_latency = min(latencies)
+        max_latency = max(latencies)
+        spread = max_latency - min_latency
+        ratio = (max_latency / min_latency) if min_latency > 0 else float("inf")
+        if spread >= stability_max_spread_ms:
+            return True
+        if ratio >= stability_max_ratio:
+            return True
+        if na_count > stability_max_na:
+            return True
+        return False
 
     scheme = get_link_scheme(link)
 
@@ -639,16 +657,33 @@ def l7_multi_probe(link: str, stress_config: dict):
     if scheme in ("vmess", "trojan", "shadowsocks"):
         hits = 0
         best_latency = 0
-        for _ in range(probe_attempts):
+        latencies = []
+        na_count = 0
+        for attempt_idx in range(probe_attempts):
             latency = probe_any_l7(link, timeout=timeout_sec)
             if latency < 0:
                 return False, -1
             if 0 < latency <= max_latency_ms:
                 hits += 1
+                latencies.append(latency)
                 if best_latency == 0 or latency < best_latency:
                     best_latency = latency
-                if hits >= min_hits:
+                if is_unstable(latencies, na_count):
+                    return False, -2
+                if hits >= min_hits and attempt_idx == probe_attempts - 1:
                     return True, best_latency
+            else:
+                na_count += 1
+                if hits > 0 and na_count > stability_max_na:
+                    return False, -2
+
+            remaining_attempts = probe_attempts - attempt_idx - 1
+            if hits + remaining_attempts < min_hits:
+                return False, 0
+
+            # Даем шанс собрать min_hits, но на последней попытке требуем стабильность.
+            if hits >= min_hits and remaining_attempts == 0:
+                return True, best_latency
             if between_attempts_sleep > 0:
                 time.sleep(between_attempts_sleep)
         return False, 0
@@ -664,20 +699,36 @@ def l7_multi_probe(link: str, stress_config: dict):
 
     hits = 0
     best_latency = 0
+    latencies = []
+    na_count = 0
     for candidate_sni in candidates:
-        for _ in range(probe_attempts):
+        for attempt_idx in range(probe_attempts):
             latency = probe_vless_l7(link, candidate_sni, timeout=timeout_sec)
             if latency < 0:
                 # Жесткий отказ L7 при доступном TCP (например, отключенный UUID)
                 return False, -1
             if latency > 0 and latency <= max_latency_ms:
                 hits += 1
+                latencies.append(latency)
                 if best_latency == 0 or latency < best_latency:
                     best_latency = latency
-                if hits >= min_hits:
-                    return True, best_latency
+                if is_unstable(latencies, na_count):
+                    return False, -2
+            else:
+                na_count += 1
+                if hits > 0 and na_count > stability_max_na:
+                    return False, -2
+
+            remaining_attempts = probe_attempts - attempt_idx - 1
+            if hits + remaining_attempts < min_hits:
+                break
+
+            if hits >= min_hits and remaining_attempts == 0:
+                return True, best_latency
             if between_attempts_sleep > 0:
                 time.sleep(between_attempts_sleep)
+        if hits >= min_hits and not is_unstable(latencies, na_count):
+            return True, best_latency
     return False, 0
 
 def main():
@@ -802,6 +853,7 @@ def main():
     working_for_base = []            # Сюда пойдут те, кто реально ответил
     
     now = time.time()
+    start_time = now
     counter = len(working_for_sub) + 1
     idx = 0
     checked_today = 0
@@ -819,6 +871,10 @@ def main():
         "l7_max_candidates": 3,
         "workers": 32,
         "max_latency_ms": 6000,
+        "max_check_duration_sec": 6 * 60 * 60,
+        "stability_max_spread_ms": 1200,
+        "stability_max_ratio": 4.0,
+        "stability_max_na": 0,
         "user_agents": list(DEFAULT_MOBILE_USER_AGENTS),
         "probe_paths": list(DEFAULT_PROBE_PATHS),
     }
@@ -835,6 +891,10 @@ def main():
                 stress_config["l7_max_candidates"] = int(data.get("l7_max_candidates", stress_config["l7_max_candidates"]))
                 stress_config["workers"] = int(data.get("workers", stress_config["workers"]))
                 stress_config["max_latency_ms"] = int(data.get("max_latency_ms", stress_config["max_latency_ms"]))
+                stress_config["max_check_duration_sec"] = int(data.get("max_check_duration_sec", stress_config["max_check_duration_sec"]))
+                stress_config["stability_max_spread_ms"] = int(data.get("stability_max_spread_ms", stress_config["stability_max_spread_ms"]))
+                stress_config["stability_max_ratio"] = float(data.get("stability_max_ratio", stress_config["stability_max_ratio"]))
+                stress_config["stability_max_na"] = int(data.get("stability_max_na", stress_config["stability_max_na"]))
                 stress_config["recv_timeout"] = float(data.get("recv_timeout", stress_config["recv_timeout"]))
                 stress_config["between_attempts_sleep"] = float(data.get("between_attempts_sleep", stress_config["between_attempts_sleep"]))
                 if isinstance(data.get("mobile_user_agents"), list) and data.get("mobile_user_agents"):
@@ -850,10 +910,15 @@ def main():
     # --- [ШАГ 4: ЦИКЛ ПРОВЕРКИ] ---
     workers = max(1, int(stress_config.get("workers", 32)))
     batch_size = max(20, workers * 2)
+    max_check_duration_sec = max(60, int(stress_config.get("max_check_duration_sec", 6 * 60 * 60)))
     print(f"⚙️ Параллельная проверка: workers={workers}, batch={batch_size}")
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
         while len(working_for_sub) < 200 and idx < len(check_queue):
+            if time.time() - start_time >= max_check_duration_sec:
+                print(f"⏱️ Достигнут лимит времени проверки ({max_check_duration_sec} сек)")
+                note_reason(reason_stats, "limit_reached_time", extra=str(max_check_duration_sec))
+                break
             if checked_today >= MAX_TO_CHECK:
                 print("🛑 Лимит проверок исчерпан")
                 note_reason(reason_stats, "limit_reached", extra=str(MAX_TO_CHECK))
@@ -956,6 +1021,9 @@ def main():
                     if current_latency < 0:
                         print("⛔ UUID/доступ отклонен провайдером")
                         note_reason(reason_stats, "fail_l7_reject", base_part)
+                    elif current_latency == -2:
+                        print("📉 Нестабильный сервер (сильный разброс/недоступность)")
+                        note_reason(reason_stats, "fail_unstable_latency", base_part)
                     else:
                         print("💀 Мертв")
                         note_reason(reason_stats, "fail_dead", base_part)
