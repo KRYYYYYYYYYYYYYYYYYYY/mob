@@ -3,6 +3,7 @@ import os
 import re
 import subprocess
 import time
+import urllib.parse
 
 from torture_bot import (
     RANK_FILE,
@@ -32,6 +33,33 @@ def _load_ranking():
     if not isinstance(loaded, dict):
         return {}
     return {base: normalize_rank_entry(base, data) for base, data in loaded.items()}
+
+
+def _load_wifi_entries():
+    entries = []
+    if not os.path.exists(WIFI_FILE):
+        return entries
+
+    with open(WIFI_FILE, 'r', encoding='utf-8') as f:
+        for raw_line in f:
+            line = raw_line.strip()
+            if 'vless://' not in line:
+                continue
+            base = line.split('#')[0].strip()
+            fragment = line.split('#', 1)[1] if '#' in line else ""
+            decoded_name = urllib.parse.unquote(fragment).strip()
+            clean_name = decoded_name.replace('⭐', '').strip()
+            mob_match = re.search(r'\bmob\s*\d+\b', clean_name, re.IGNORECASE)
+            short_name = mob_match.group(0).lower() if mob_match else (clean_name or "server")
+            is_starred = '⭐' in decoded_name
+            entries.append({
+                "line": line,
+                "base": base,
+                "short_name": short_name,
+                "clean_name": clean_name,
+                "is_starred": is_starred,
+            })
+    return entries
 
 
 def update_issue(repo, label, body, env):
@@ -74,11 +102,14 @@ def refresh_all_panels(token, repo, ranking_db, vetted_list, pinned_list):
     update_time = time.strftime("%d.%m.%Y %H:%M:%S")
     env_gh = {**os.environ, "GH_TOKEN": token}
 
+    wifi_entries = _load_wifi_entries()
     fav_list = []
     if os.path.exists(FAVORITES_FILE):
         with open(FAVORITES_FILE, 'r', encoding='utf-8') as f:
             fav_list = [l.strip() for l in f if 'vless' in l]
     fav_bases = {l.split('#')[0].strip() for l in fav_list}
+    wifi_starred_bases = {e["base"] for e in wifi_entries if e["is_starred"]}
+    fav_bases |= wifi_starred_bases
 
     body_ctrl = f"### 🎮 Панель Blacklist (Весь wifi.txt)\n🕒 `{update_time}`\n\n"
     body_ctrl += "- [ ] 💀 **ПОДТВЕРДИТЬ_БАН**\n\n---\n\n"
@@ -109,14 +140,12 @@ def refresh_all_panels(token, repo, ranking_db, vetted_list, pinned_list):
 
     body_fav = f"### ⭐ Избранные серверы\n🕒 `{update_time}`\n\n"
     body_fav += "- [ ] 🏆 **ПОДТВЕРДИТЬ_ИЗБРАННОЕ**\n\n---\n\n"
-    all_candidates = get_wifi_candidates(pinned_list, [])
-    if all_candidates:
-        for full_link in all_candidates:
-            base = full_link.split('#')[0].strip()
-            is_fav = base in fav_bases
+    if wifi_entries:
+        for entry in wifi_entries:
+            is_fav = entry["base"] in fav_bases
             checkbox = "[x]" if is_fav else "[ ]"
-            display_name = full_link.split('#', 1)[1] if '#' in full_link else "Server"
-            body_fav += f"- {checkbox} {base}#{display_name}\n"
+            star_prefix = "⭐ " if is_fav else ""
+            body_fav += f"- {checkbox} {star_prefix}{entry['short_name']} <!-- base:{entry['base']} -->\n"
     else:
         body_fav += "_Кандидатов нет_\n"
 
@@ -190,25 +219,26 @@ def process_all_controls(token, repo, vetted_list, pinned_list, ranking_db):
         if data:
             body = data[0]['body']
             if "ПОДТВЕРДИТЬ_ИЗБРАННОЕ" in body and "[x]" in body.lower():
-                new_fav_list = []
-                checked_bases = {}
+                wifi_entries = _load_wifi_entries()
+                wifi_by_base = {e["base"]: e for e in wifi_entries}
+                checked_bases = set()
 
                 for line in body.splitlines():
-                    match = re.search(r'- \[[xX ]\]\s+(vless://[^\n\r#]+)(?:#([^\n\r]+))?', line)
-                    if match:
-                        base_part = match.group(1).strip()
-                        raw_name = match.group(2).strip() if match.group(2) else "Server"
-                        is_checked = '- [x]' in line.lower()
-                        clean_name = raw_name.replace('⭐', '').strip()
+                    match = re.search(r'- \[([xX ])\].*?<!--\s*base:(vless://[^\s]+)\s*-->', line)
+                    if not match:
+                        continue
+                    is_checked = match.group(1).lower() == 'x'
+                    base_part = match.group(2).strip()
+                    if is_checked:
+                        checked_bases.add(base_part)
 
-                        if is_checked:
-                            new_name = f"⭐ {clean_name}"
-                            new_link = f"{base_part}#{new_name}"
-                            new_fav_list.append(new_link)
-                            checked_bases[base_part] = new_name
+                new_fav_list = []
+                for base in checked_bases:
+                    if base in wifi_by_base:
+                        new_fav_list.append(wifi_by_base[base]["line"])
 
                 with open(FAVORITES_FILE, 'w', encoding='utf-8') as f:
-                    f.write("\n".join(new_fav_list) + ("\n" if new_fav_list else ""))
+                    f.write("\n".join(sorted(new_fav_list)) + ("\n" if new_fav_list else ""))
 
                 if os.path.exists(WIFI_FILE):
                     with open(WIFI_FILE, 'r', encoding='utf-8') as f:
@@ -218,11 +248,14 @@ def process_all_controls(token, repo, vetted_list, pinned_list, ranking_db):
                     for l in lines:
                         if 'vless://' in l:
                             b = l.split('#')[0].strip()
+                            name_part = l.split('#', 1)[1] if '#' in l else ""
+                            decoded_name = urllib.parse.unquote(name_part)
+                            clean_name = decoded_name.replace('⭐', '').strip()
+                            encoded_name = urllib.parse.quote(clean_name, safe=" []()_-")
                             if b in checked_bases:
-                                new_wifi_lines.append(f"{b}#{checked_bases[b]}\n")
+                                new_wifi_lines.append(f"{b}#⭐ {encoded_name}\n")
                             else:
-                                clean_l = l.replace('⭐', '').strip()
-                                new_wifi_lines.append(clean_l + "\n")
+                                new_wifi_lines.append(f"{b}#{encoded_name}\n")
                         else:
                             new_wifi_lines.append(l)
 
