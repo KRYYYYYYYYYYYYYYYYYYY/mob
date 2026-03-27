@@ -21,6 +21,8 @@ from torture_bot import (
 CONTROL_PRIMARY_LABEL = os.getenv("CONTROL_PANEL_LABEL", "menu1")
 CONTROL_LABEL_CANDIDATES = [CONTROL_PRIMARY_LABEL, "control"]
 CONTROL_LABEL_CANDIDATES = list(dict.fromkeys([x for x in CONTROL_LABEL_CANDIDATES if x]))
+CONTROL_BODY_FILE = "test1/menu1.txt"
+CHECK_WORKFLOW_FILE = os.getenv("CHECK_WORKFLOW_FILE", "main.yml")
 
 
 def _load_lines(path: str):
@@ -153,6 +155,45 @@ def _full_replace_non_immortals(pinned_list, fav_list):
             f.write("\n".join(deferred_filtered))
 
 
+def _cancel_running_workflow_runs(repo: str, workflow_file: str, env: dict):
+    """Отменяет queued/in_progress ранны указанного workflow."""
+    try:
+        out = subprocess.check_output(
+            [
+                "gh", "run", "list",
+                "--repo", repo,
+                "--workflow", workflow_file,
+                "--json", "databaseId,status",
+                "--limit", "30",
+            ],
+            env=env
+        )
+        runs = json.loads(out)
+        for run in runs:
+            rid = run.get("databaseId")
+            status = (run.get("status") or "").lower()
+            if rid and status in {"queued", "in_progress", "waiting", "requested"}:
+                subprocess.run(
+                    ["gh", "run", "cancel", str(rid), "--repo", repo],
+                    env=env,
+                    check=False
+                )
+    except Exception as e:
+        print(f"⚠️ Не удалось отменить старые ранны {workflow_file}: {e}")
+
+
+def _dispatch_workflow(repo: str, workflow_file: str, env: dict):
+    """Запускает workflow вручную после сигнала панели."""
+    try:
+        subprocess.run(
+            ["gh", "workflow", "run", workflow_file, "--repo", repo],
+            env=env,
+            check=True
+        )
+    except Exception as e:
+        print(f"⚠️ Не удалось запустить workflow {workflow_file}: {e}")
+
+
 def refresh_all_panels(token, repo, ranking_db, vetted_list, pinned_list):
     update_time = time.strftime("%d.%m.%Y %H:%M:%S")
     env_gh = {**os.environ, "GH_TOKEN": token}
@@ -172,9 +213,9 @@ def refresh_all_panels(token, repo, ranking_db, vetted_list, pinned_list):
             body_ctrl += f"- [ ] {full_link.strip()}\n"
     else:
         body_ctrl += "_Список пуст_\n"
-    with open('test1/issue_body.txt', 'w', encoding='utf-8') as f:
+    with open(CONTROL_BODY_FILE, 'w', encoding='utf-8') as f:
         f.write(body_ctrl)
-    update_issue_from_file(repo, CONTROL_PRIMARY_LABEL, 'test1/issue_body.txt', env_gh)
+    update_issue_from_file(repo, CONTROL_PRIMARY_LABEL, CONTROL_BODY_FILE, env_gh)
 
     body_pin = f"### 💎 Кандидаты в Элиту\n🕒 `{update_time}`\n\n"
     body_pin += "- [ ] ✅ **ПРИМЕНИТЬ_PIN_BAN**\n\n---\n\n"
@@ -227,6 +268,9 @@ def process_all_controls(token, repo, vetted_list, pinned_list, ranking_db):
                             if any(p in l.lower() for p in ("vless://", "vmess://", "trojan://", "ss://"))
                         ]
                 _full_replace_non_immortals(pinned_list, fav_list)
+                # Приоритетный сигнал: гасим текущий run чекера и запускаем новый.
+                _cancel_running_workflow_runs(repo, CHECK_WORKFLOW_FILE, env_gh)
+                _dispatch_workflow(repo, CHECK_WORKFLOW_FILE, env_gh)
                 executed_any = True
 
             if "ПОДТВЕРДИТЬ_БАН" in body and "[x]" in body:
