@@ -18,6 +18,10 @@ from torture_bot import (
     get_wifi_candidates,
 )
 
+CONTROL_PRIMARY_LABEL = os.getenv("CONTROL_PANEL_LABEL", "menu1")
+CONTROL_LABEL_CANDIDATES = [CONTROL_PRIMARY_LABEL, "control"]
+CONTROL_LABEL_CANDIDATES = list(dict.fromkeys([x for x in CONTROL_LABEL_CANDIDATES if x]))
+
 
 def _load_lines(path: str):
     if not os.path.exists(path):
@@ -70,6 +74,22 @@ def update_issue_from_file(repo, label, file_path, env):
             ], env=env, check=True)
     except Exception as e:
         print(f"⚠️ Ошибка загрузки {file_path} в GitHub: {e}")
+
+
+def _get_issue_body_by_labels(repo, labels, env):
+    """Возвращает (body, label) для первой найденной issue из списка labels."""
+    for label in labels:
+        try:
+            out = subprocess.check_output(
+                ['gh', 'issue', 'list', '--repo', repo, '--label', label, '--json', 'body'],
+                env=env
+            )
+            data = json.loads(out)
+            if data:
+                return data[0]['body'], label
+        except Exception:
+            continue
+    return "", None
 
 
 def _is_checkbox_command_checked(body: str, marker: str) -> bool:
@@ -132,7 +152,7 @@ def refresh_all_panels(token, repo, ranking_db, vetted_list, pinned_list):
         body_ctrl += "_Список пуст_\n"
     with open('test1/issue_body.txt', 'w', encoding='utf-8') as f:
         f.write(body_ctrl)
-    update_issue_from_file(repo, 'control', 'test1/issue_body.txt', env_gh)
+    update_issue_from_file(repo, CONTROL_PRIMARY_LABEL, 'test1/issue_body.txt', env_gh)
 
     body_pin = f"### 💎 Кандидаты в Элиту\n🕒 `{update_time}`\n\n"
     body_pin += "- [ ] ✅ **ПРИМЕНИТЬ_PIN_BAN**\n\n---\n\n"
@@ -174,10 +194,8 @@ def process_all_controls(token, repo, vetted_list, pinned_list, ranking_db):
         return [l.strip().rstrip(':') for l in found]
 
     try:
-        out = subprocess.check_output(['gh', 'issue', 'list', '--repo', repo, '--label', 'control', '--json', 'body'], env=env_gh)
-        data = json.loads(out)
-        if data:
-            body = data[0]['body']
+        body, _ = _get_issue_body_by_labels(repo, CONTROL_LABEL_CANDIDATES, env_gh)
+        if body:
             if _is_checkbox_command_checked(body, "ПОДТВЕРДИТЬ_ПОЛНУЮ_ЗАМЕНУ"):
                 fav_list = []
                 if os.path.exists(FAVORITES_FILE):
