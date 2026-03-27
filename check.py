@@ -861,6 +861,7 @@ def main():
     ip_counts = {}
     seen_ips = set()
     seen_parts = set()
+    runtime_blocked_hosts = {}
 
     # Настройки стресс-теста (твой блок 1-в-1)
     stress_config = {
@@ -963,6 +964,10 @@ def main():
                         note_reason(reason_stats, "skip_bad_endpoint", base_part)
                         continue
 
+                if host in runtime_blocked_hosts:
+                    note_reason(reason_stats, "skip_runtime_blocked_host", base_part, runtime_blocked_hosts[host])
+                    continue
+
                 if is_ipv6(host):
                     note_reason(reason_stats, "skip_ipv6", base_part)
                     add_to_blacklist(base_part)
@@ -1021,19 +1026,20 @@ def main():
                     if current_latency < 0:
                         print("⛔ UUID/доступ отклонен провайдером")
                         note_reason(reason_stats, "fail_l7_reject", base_part)
+                        runtime_blocked_hosts[host] = "l7_reject"
                     elif current_latency == -2:
                         print("📉 Нестабильный сервер (сильный разброс/недоступность)")
                         note_reason(reason_stats, "fail_unstable_latency", base_part)
+                        runtime_blocked_hosts[host] = "unstable"
                     else:
                         print("💀 Мертв")
                         note_reason(reason_stats, "fail_dead", base_part)
+                        runtime_blocked_hosts[host] = "dead"
+
+                    add_to_blacklist(base_part)
+                    note_reason(reason_stats, "blacklisted_immediate", base_part, runtime_blocked_hosts.get(host, "failed"))
                     if base_part in ranking_db:
                         del ranking_db[base_part]
-                    fail_time = history.get(base_part, now)
-                    if now - fail_time > 86400:
-                        with open(BLACKLIST_FILE, 'a') as bl:
-                            bl.write(base_part + "\n")
-                        note_reason(reason_stats, "blacklisted_after_fail", base_part)
 
     # --- [ШАГ 5: ФИНАЛЬНОЕ СОХРАНЕНИЕ] ---
     
