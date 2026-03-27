@@ -114,11 +114,7 @@ def _full_replace_non_immortals(pinned_list, fav_list):
                 if any(p in line.lower() for p in ("vless://", "vmess://", "trojan://", "ss://"))
             )
 
-    # 1) deferred очищаем (vetted НЕ трогаем)
-    with open(DEFERRED_FILE, "w", encoding="utf-8") as f:
-        f.write("")
-
-    # 2) wifi.txt: оставляем только служебные строки и pinned/favorites/vetted
+    # 1) wifi.txt: оставляем только служебные строки и pinned/favorites/vetted
     removed_from_wifi = set()
     if os.path.exists(WIFI_FILE):
         with open(WIFI_FILE, "r", encoding="utf-8") as f:
@@ -137,13 +133,24 @@ def _full_replace_non_immortals(pinned_list, fav_list):
         with open(WIFI_FILE, "w", encoding="utf-8") as f:
             f.writelines(new_lines)
 
-    # 3) 1.txt: удаляем только те базы, которые были удалены из wifi
+    # 2) 1.txt: удаляем только те базы, которые были удалены из wifi
     if os.path.exists(INPUT_FILE):
         with open(INPUT_FILE, "r", encoding="utf-8") as f:
             bases = [line.strip() for line in f if line.strip()]
         filtered = [b for b in bases if b.split("#")[0].strip() not in removed_from_wifi]
         with open(INPUT_FILE, "w", encoding="utf-8") as f:
             f.write("\n".join(filtered))
+
+    # 3) deferred.txt: та же логика, что и 1.txt — удаляем только то, что вычищено из wifi
+    if os.path.exists(DEFERRED_FILE):
+        with open(DEFERRED_FILE, "r", encoding="utf-8") as f:
+            deferred_lines = [line.strip() for line in f if line.strip()]
+        deferred_filtered = [
+            line for line in deferred_lines
+            if line.split("#")[0].strip() not in removed_from_wifi
+        ]
+        with open(DEFERRED_FILE, "w", encoding="utf-8") as f:
+            f.write("\n".join(deferred_filtered))
 
 
 def refresh_all_panels(token, repo, ranking_db, vetted_list, pinned_list):
