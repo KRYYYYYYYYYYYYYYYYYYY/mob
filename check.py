@@ -3,6 +3,8 @@ import re
 import os
 import ssl
 import json
+import uuid
+import math
 import urllib.parse
 import urllib.request
 import time
@@ -377,6 +379,64 @@ def extract_sni_candidates(link):
     return candidates
 # ------------------------------------------
 
+def is_uuid_like(value: str) -> bool:
+    """Проверяет, что строка похожа на UUID."""
+    if not value:
+        return False
+    try:
+        uuid.UUID(value)
+        return True
+    except Exception:
+        return False
+
+def validate_protocol_auth(link: str, link_scheme: str):
+    """
+    Лёгкая валидация учетки до L7-чека, чтобы не тратить пробы на заведомый мусор.
+    Возвращает: (ok, reason)
+    """
+    pc = parse_any_link(link)
+    if not pc:
+        return False, "skip_bad_parsed_link"
+
+    if link_scheme == "vless":
+        if not is_uuid_like(pc.get("id", "")):
+            return False, "skip_bad_uuid_vless"
+    elif link_scheme == "vmess":
+        if not is_uuid_like(pc.get("id", "")):
+            return False, "skip_bad_uuid_vmess"
+    elif link_scheme == "trojan":
+        pwd = pc.get("id", "")
+        if not isinstance(pwd, str) or len(pwd.strip()) < 6:
+            return False, "skip_bad_trojan_password"
+    elif link_scheme == "shadowsocks":
+        method = str(pc.get("method", "")).strip()
+        password = str(pc.get("password", "")).strip()
+        if not method or not password or len(password) < 4:
+            return False, "skip_bad_ss_auth"
+    return True, ""
+
+def validate_transport_requirements(link: str):
+    """
+    Валидация transport/TLS/REALITY параметров перед запуском Go-чекера.
+    Возвращает: (ok, reason)
+    """
+    pc = parse_any_link(link)
+    if not pc:
+        return False, "skip_bad_transport_parsed_link"
+
+    security = str(pc.get("security", "none")).lower()
+    net_type = str(pc.get("net_type", "tcp")).lower()
+    sni = str(pc.get("sni", "")).strip()
+    pbk = str(pc.get("pbk", "")).strip()
+
+    if security in {"tls", "reality"} and not sni:
+        return False, "skip_missing_sni_for_tls"
+    if security == "reality" and not pbk:
+        return False, "skip_missing_pbk_for_reality"
+    if net_type == "ws" and not str(pc.get("path", "")).strip():
+        return False, "skip_missing_ws_path"
+    return True, ""
+
 
 def download_raw_data(urls):
     """
@@ -632,6 +692,55 @@ def l7_multi_probe(link: str, stress_config: dict):
     between_attempts_sleep = max(0.0, float(stress_config.get("between_attempts_sleep", 0.35)))
     timeout_sec = int(max(1, stress_config.get("timeout", 5)))
     max_latency_ms = max(1, int(stress_config.get("max_latency_ms", 6000)))
+    stability_max_spread_ms = max(1, int(stress_config.get("stability_max_spread_ms", 1200)))
+    stability_max_ratio = max(1.0, float(stress_config.get("stability_max_ratio", 4.0)))
+    stability_max_na = max(0, int(stress_config.get("stability_max_na", 0)))
+    stability_max_jitter_ms = max(0, int(stress_config.get("stability_max_jitter_ms", 800)))
+    stability_min_success_rate = min(1.0, max(0.0, float(stress_config.get("stability_min_success_rate", 0.5))))
+    stability_max_loss_rate = min(1.0, max(0.0, float(stress_config.get("stability_max_loss_rate", 0.5))))
+    stability_min_samples = max(1, int(stress_config.get("stability_min_samples", 3)))
+    stability_p95_max_ms = max(1, int(stress_config.get("stability_p95_max_ms", max_latency_ms)))
+
+    def is_unstable(latencies: list[int], na_count: int) -> bool:
+        if len(latencies) < 2:
+            return False
+        min_latency = min(latencies)
+        max_latency = max(latencies)
+        spread = max_latency - min_latency
+        ratio = (max_latency / min_latency) if min_latency > 0 else float("inf")
+        if spread >= stability_max_spread_ms:
+            return True
+        if ratio >= stability_max_ratio:
+            return True
+        if na_count > stability_max_na:
+            return True
+        return False
+
+    def is_unstable_extended(latencies: list[int], hits: int, total_attempts: int, na_count: int) -> bool:
+        # Базовые проверки оставляем как есть
+        if is_unstable(latencies, na_count):
+            return True
+        if total_attempts <= 0 or total_attempts < stability_min_samples:
+            return False
+
+        success_rate = hits / total_attempts
+        loss_rate = na_count / total_attempts
+        if success_rate < stability_min_success_rate:
+            return True
+        if loss_rate > stability_max_loss_rate:
+            return True
+
+        if latencies:
+            sorted_lats = sorted(latencies)
+            p95_idx = max(0, min(len(sorted_lats) - 1, math.ceil(len(sorted_lats) * 0.95) - 1))
+            p95 = sorted_lats[p95_idx]
+            if p95 > stability_p95_max_ms:
+                return True
+            if len(latencies) >= 2:
+                jitter = max(abs(latencies[i] - latencies[i - 1]) for i in range(1, len(latencies)))
+                if jitter > stability_max_jitter_ms:
+                    return True
+        return False
 
     scheme = get_link_scheme(link)
 
@@ -639,16 +748,39 @@ def l7_multi_probe(link: str, stress_config: dict):
     if scheme in ("vmess", "trojan", "shadowsocks"):
         hits = 0
         best_latency = 0
-        for _ in range(probe_attempts):
+        latencies = []
+        na_count = 0
+        total_attempts = 0
+        for attempt_idx in range(probe_attempts):
+            total_attempts += 1
             latency = probe_any_l7(link, timeout=timeout_sec)
             if latency < 0:
                 return False, -1
             if 0 < latency <= max_latency_ms:
                 hits += 1
+                latencies.append(latency)
                 if best_latency == 0 or latency < best_latency:
                     best_latency = latency
-                if hits >= min_hits:
+                if is_unstable_extended(latencies, hits, total_attempts, na_count):
+                    return False, -2
+                if hits >= min_hits and attempt_idx == probe_attempts - 1:
+                    if is_unstable_extended(latencies, hits, total_attempts, na_count):
+                        return False, -2
                     return True, best_latency
+            else:
+                na_count += 1
+                if hits > 0 and na_count > stability_max_na:
+                    return False, -2
+
+            remaining_attempts = probe_attempts - attempt_idx - 1
+            if hits + remaining_attempts < min_hits:
+                return False, 0
+
+            # Даем шанс собрать min_hits, но на последней попытке требуем стабильность.
+            if hits >= min_hits and remaining_attempts == 0:
+                if is_unstable_extended(latencies, hits, total_attempts, na_count):
+                    return False, -2
+                return True, best_latency
             if between_attempts_sleep > 0:
                 time.sleep(between_attempts_sleep)
         return False, 0
@@ -664,20 +796,40 @@ def l7_multi_probe(link: str, stress_config: dict):
 
     hits = 0
     best_latency = 0
+    latencies = []
+    na_count = 0
+    total_attempts = 0
     for candidate_sni in candidates:
-        for _ in range(probe_attempts):
+        for attempt_idx in range(probe_attempts):
+            total_attempts += 1
             latency = probe_vless_l7(link, candidate_sni, timeout=timeout_sec)
             if latency < 0:
                 # Жесткий отказ L7 при доступном TCP (например, отключенный UUID)
                 return False, -1
             if latency > 0 and latency <= max_latency_ms:
                 hits += 1
+                latencies.append(latency)
                 if best_latency == 0 or latency < best_latency:
                     best_latency = latency
-                if hits >= min_hits:
-                    return True, best_latency
+                if is_unstable_extended(latencies, hits, total_attempts, na_count):
+                    return False, -2
+            else:
+                na_count += 1
+                if hits > 0 and na_count > stability_max_na:
+                    return False, -2
+
+            remaining_attempts = probe_attempts - attempt_idx - 1
+            if hits + remaining_attempts < min_hits:
+                break
+
+            if hits >= min_hits and remaining_attempts == 0:
+                if is_unstable_extended(latencies, hits, total_attempts, na_count):
+                    return False, -2
+                return True, best_latency
             if between_attempts_sleep > 0:
                 time.sleep(between_attempts_sleep)
+        if hits >= min_hits and not is_unstable_extended(latencies, hits, total_attempts, na_count):
+            return True, best_latency
     return False, 0
 
 def main():
@@ -783,25 +935,29 @@ def main():
     note_reason(reason_stats, "immortals_loaded", extra=str(len(immortals)))
 
     # --- [ШАГ 2: ГОТОВИМ ОЧЕРЕДЬ НА ПРОВЕРКУ] ---
-    raw_external = download_raw_data(EXTERNAL_SOURCE_URL)
-    # Собираем всё в одну очередь по приоритету: Отложенные -> Новые -> Старая база
-    combined_potential = deferred_base + raw_external + current_base
-    
     check_queue = []
     seen_in_queue = set()
-    for link in combined_potential:
-        base = link.split('#')[0].strip()
-        # Проверяем, что ссылки нет в бессмертных, она не дубликат в очереди и не в блэклисте
-        if base not in seen_immortals and base not in seen_in_queue and base not in blacklist:
-            check_queue.append(link)
-            seen_in_queue.add(base)
-    check_queue.sort(key=lambda l: ranking_sort_key(l, ranking_db))
+    def extend_check_queue(links):
+        for link in links:
+            base = link.split('#')[0].strip()
+            # Проверяем, что ссылки нет в бессмертных, она не дубликат в очереди и не в блэклисте
+            if base not in seen_immortals and base not in seen_in_queue and base not in blacklist:
+                check_queue.append(link)
+                seen_in_queue.add(base)
+
+    # Порядок строго по требованиям:
+    # 1) сначала текущая база (уже используемые в подписке/прошлых прогонах),
+    # 2) потом отложенные,
+    # 3) новые подтягиваем только если первых двух не хватило.
+    extend_check_queue(sorted(current_base, key=lambda l: ranking_sort_key(l, ranking_db)))
+    extend_check_queue(sorted(deferred_base, key=lambda l: ranking_sort_key(l, ranking_db)))
 
     # --- [ШАГ 3: ПОДГОТОВКА К ЦИКЛУ] ---
     working_for_sub = immortals[:200] # Сразу забиваем подписку бессмертными
     working_for_base = []            # Сюда пойдут те, кто реально ответил
     
     now = time.time()
+    start_time = now
     counter = len(working_for_sub) + 1
     idx = 0
     checked_today = 0
@@ -809,6 +965,8 @@ def main():
     ip_counts = {}
     seen_ips = set()
     seen_parts = set()
+    runtime_blocked_hosts = {}
+    host_precheck_counts = {}
 
     # Настройки стресс-теста (твой блок 1-в-1)
     stress_config = {
@@ -819,6 +977,15 @@ def main():
         "l7_max_candidates": 3,
         "workers": 32,
         "max_latency_ms": 6000,
+        "max_check_duration_sec": 5 * 60 * 60,
+        "stability_max_spread_ms": 1200,
+        "stability_max_ratio": 4.0,
+        "stability_max_na": 0,
+        "stability_max_jitter_ms": 800,
+        "stability_min_success_rate": 0.5,
+        "stability_max_loss_rate": 0.5,
+        "stability_min_samples": 3,
+        "stability_p95_max_ms": 6000,
         "user_agents": list(DEFAULT_MOBILE_USER_AGENTS),
         "probe_paths": list(DEFAULT_PROBE_PATHS),
     }
@@ -835,6 +1002,15 @@ def main():
                 stress_config["l7_max_candidates"] = int(data.get("l7_max_candidates", stress_config["l7_max_candidates"]))
                 stress_config["workers"] = int(data.get("workers", stress_config["workers"]))
                 stress_config["max_latency_ms"] = int(data.get("max_latency_ms", stress_config["max_latency_ms"]))
+                stress_config["max_check_duration_sec"] = int(data.get("max_check_duration_sec", stress_config["max_check_duration_sec"]))
+                stress_config["stability_max_spread_ms"] = int(data.get("stability_max_spread_ms", stress_config["stability_max_spread_ms"]))
+                stress_config["stability_max_ratio"] = float(data.get("stability_max_ratio", stress_config["stability_max_ratio"]))
+                stress_config["stability_max_na"] = int(data.get("stability_max_na", stress_config["stability_max_na"]))
+                stress_config["stability_max_jitter_ms"] = int(data.get("stability_max_jitter_ms", stress_config["stability_max_jitter_ms"]))
+                stress_config["stability_min_success_rate"] = float(data.get("stability_min_success_rate", stress_config["stability_min_success_rate"]))
+                stress_config["stability_max_loss_rate"] = float(data.get("stability_max_loss_rate", stress_config["stability_max_loss_rate"]))
+                stress_config["stability_min_samples"] = int(data.get("stability_min_samples", stress_config["stability_min_samples"]))
+                stress_config["stability_p95_max_ms"] = int(data.get("stability_p95_max_ms", stress_config["stability_p95_max_ms"]))
                 stress_config["recv_timeout"] = float(data.get("recv_timeout", stress_config["recv_timeout"]))
                 stress_config["between_attempts_sleep"] = float(data.get("between_attempts_sleep", stress_config["between_attempts_sleep"]))
                 if isinstance(data.get("mobile_user_agents"), list) and data.get("mobile_user_agents"):
@@ -845,18 +1021,37 @@ def main():
                     stress_config["probe_paths"] = [str(x) for x in data["probe_paths"] if str(x).strip()]
         except: pass
 
-    print(f"📡 Начинаю добор до 200. В очереди: {len(check_queue)}")
+    raw_external_loaded = False
+    print(f"📡 Начинаю добор до 200. В очереди (текущие+отложенные): {len(check_queue)}")
 
     # --- [ШАГ 4: ЦИКЛ ПРОВЕРКИ] ---
     workers = max(1, int(stress_config.get("workers", 32)))
     batch_size = max(20, workers * 2)
+    max_check_duration_sec = max(60, int(stress_config.get("max_check_duration_sec", 5 * 60 * 60)))
     print(f"⚙️ Параллельная проверка: workers={workers}, batch={batch_size}")
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        while len(working_for_sub) < 200 and idx < len(check_queue):
+        while len(working_for_sub) < 200:
+            if time.time() - start_time >= max_check_duration_sec:
+                print(f"⏱️ Достигнут лимит времени проверки ({max_check_duration_sec} сек)")
+                note_reason(reason_stats, "limit_reached_time", extra=str(max_check_duration_sec))
+                break
             if checked_today >= MAX_TO_CHECK:
                 print("🛑 Лимит проверок исчерпан")
                 note_reason(reason_stats, "limit_reached", extra=str(MAX_TO_CHECK))
+                break
+
+            # Если текущая и отложенная очереди закончились — один раз догружаем новые.
+            if idx >= len(check_queue) and not raw_external_loaded:
+                raw_external = download_raw_data(EXTERNAL_SOURCE_URL)
+                extend_check_queue(sorted(raw_external, key=lambda l: ranking_sort_key(l, ranking_db)))
+                raw_external_loaded = True
+                print(f"🆕 Догружены новые кандидаты: +{len(raw_external)} (в очереди теперь {len(check_queue) - idx})")
+                if idx >= len(check_queue):
+                    note_reason(reason_stats, "no_candidates_after_external_load")
+                    break
+            elif idx >= len(check_queue):
+                note_reason(reason_stats, "queue_exhausted")
                 break
 
             batch = []
@@ -898,10 +1093,31 @@ def main():
                         note_reason(reason_stats, "skip_bad_endpoint", base_part)
                         continue
 
+                if host in runtime_blocked_hosts:
+                    note_reason(reason_stats, "skip_runtime_blocked_host", base_part, runtime_blocked_hosts[host])
+                    continue
+
+                host_precheck_counts[host] = host_precheck_counts.get(host, 0) + 1
+                if host_precheck_counts[host] > 5:
+                    note_reason(reason_stats, "skip_host_precheck_limit", base_part, host)
+                    continue
+
                 if is_ipv6(host):
                     note_reason(reason_stats, "skip_ipv6", base_part)
                     add_to_blacklist(base_part)
                     remove_from_input_file(base_part)
+                    continue
+
+                auth_ok, auth_reason = validate_protocol_auth(base_part, link_scheme)
+                if not auth_ok:
+                    note_reason(reason_stats, auth_reason, base_part)
+                    add_to_blacklist(base_part)
+                    continue
+
+                transport_ok, transport_reason = validate_transport_requirements(base_part)
+                if not transport_ok:
+                    note_reason(reason_stats, transport_reason, base_part)
+                    add_to_blacklist(base_part)
                     continue
 
                 batch.append((link, base_part, host))
@@ -956,16 +1172,20 @@ def main():
                     if current_latency < 0:
                         print("⛔ UUID/доступ отклонен провайдером")
                         note_reason(reason_stats, "fail_l7_reject", base_part)
+                        runtime_blocked_hosts[host] = "l7_reject"
+                    elif current_latency == -2:
+                        print("📉 Нестабильный сервер (сильный разброс/недоступность)")
+                        note_reason(reason_stats, "fail_unstable_latency", base_part)
+                        runtime_blocked_hosts[host] = "unstable"
                     else:
                         print("💀 Мертв")
                         note_reason(reason_stats, "fail_dead", base_part)
+                        runtime_blocked_hosts[host] = "dead"
+
+                    add_to_blacklist(base_part)
+                    note_reason(reason_stats, "blacklisted_immediate", base_part, runtime_blocked_hosts.get(host, "failed"))
                     if base_part in ranking_db:
                         del ranking_db[base_part]
-                    fail_time = history.get(base_part, now)
-                    if now - fail_time > 86400:
-                        with open(BLACKLIST_FILE, 'a') as bl:
-                            bl.write(base_part + "\n")
-                        note_reason(reason_stats, "blacklisted_after_fail", base_part)
 
     # --- [ШАГ 5: ФИНАЛЬНОЕ СОХРАНЕНИЕ] ---
     
@@ -991,7 +1211,26 @@ def main():
 
     print(f"🏁 Завершено. Подписка: {len(working_for_sub)}, Очередь: {len(new_deferred)}")
     print(f"🧾 Reasons: {json.dumps(reason_stats, ensure_ascii=False)}")
+    return {
+        "subscription_size": len(working_for_sub),
+        "checked_today": checked_today,
+        "alive_today": len(working_for_base),
+    }
 
 if __name__ == "__main__":
     init_checker_lib()
-    main()
+    max_rounds = max(1, int(os.getenv("CHECK_AUTO_ROUNDS", "2")))
+    retry_sleep_sec = max(0, int(os.getenv("CHECK_AUTO_RETRY_SLEEP_SEC", "90")))
+    round_idx = 1
+    while True:
+        result = main()
+        if result.get("alive_today", 0) > 0:
+            break
+        if result.get("checked_today", 0) <= 0:
+            break
+        if round_idx >= max_rounds:
+            break
+        print(f"🔁 Нулевой успешный результат в круге {round_idx}, перезапуск через {retry_sleep_sec} сек...")
+        if retry_sleep_sec > 0:
+            time.sleep(retry_sleep_sec)
+        round_idx += 1
