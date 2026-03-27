@@ -28,6 +28,7 @@ FAVORITES_FILE = 'test1/favorites.txt'
 BLACKLIST_FILE = 'test1/blacklist.txt'
 REASONS_FILE = 'test1/reasons.json'
 CHECK_LOG_FILE = 'test1/check_log.txt'
+RUN_RESULT_FILE = 'test1/run_result.json'
 
 EXTERNAL_SOURCE_URL = [
     "https://raw.githubusercontent.com/KRYYYYYYYYYYYYYYYYYYY/crazy_xray_checker/refs/heads/main/result/working.txt"
@@ -1219,18 +1220,15 @@ def main():
 
 if __name__ == "__main__":
     init_checker_lib()
-    max_rounds = max(1, int(os.getenv("CHECK_AUTO_ROUNDS", "2")))
-    retry_sleep_sec = max(0, int(os.getenv("CHECK_AUTO_RETRY_SLEEP_SEC", "90")))
-    round_idx = 1
-    while True:
-        result = main()
-        if result.get("alive_today", 0) > 0:
-            break
-        if result.get("checked_today", 0) <= 0:
-            break
-        if round_idx >= max_rounds:
-            break
-        print(f"🔁 Нулевой успешный результат в круге {round_idx}, перезапуск через {retry_sleep_sec} сек...")
-        if retry_sleep_sec > 0:
-            time.sleep(retry_sleep_sec)
-        round_idx += 1
+    result = main()
+    try:
+        with open(RUN_RESULT_FILE, "w", encoding="utf-8") as f:
+            json.dump(result, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"⚠️ Не удалось сохранить {RUN_RESULT_FILE}: {e}")
+
+    # Для оркестрации из CI/YML:
+    # при CHECK_FAIL_ON_ZERO_ALIVE=1 завершаем кодом 2, если не добавилось ни одного нового живого.
+    if os.getenv("CHECK_FAIL_ON_ZERO_ALIVE", "0") == "1":
+        if result.get("checked_today", 0) > 0 and result.get("alive_today", 0) == 0:
+            raise SystemExit(2)
