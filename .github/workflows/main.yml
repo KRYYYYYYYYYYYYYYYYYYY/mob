@@ -52,13 +52,46 @@ jobs:
           sudo tc qdisc replace dev eth0 root netem delay 150ms 20ms loss 5%
           sudo ifconfig eth0 mtu 1280
       
-      - name: Run checker
+      - name: Run checker (round 1)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }} 
           GH_PROMPT_DISABLED: 1
           GITHUB_REPOSITORY: ${{ github.repository }}
           # Указываем системе искать .so файл в текущей директории
           LD_LIBRARY_PATH: .
+          CHECK_FAIL_ON_ZERO_ALIVE: 0
+        run: python check.py
+
+      - name: Decide rerun from run_result.json
+        id: decide_rerun
+        run: |
+          python - <<'PY'
+          import json, os
+          path = "test1/run_result.json"
+          should = "false"
+          if os.path.exists(path):
+              with open(path, "r", encoding="utf-8") as f:
+                  data = json.load(f)
+              checked = int(data.get("checked_today", 0) or 0)
+              alive = int(data.get("alive_today", 0) or 0)
+              # Перезапускаем только если проверки были, но ни одного нового живого не нашли.
+              if checked > 0 and alive == 0:
+                  should = "true"
+              print(f"run_result: checked_today={checked}, alive_today={alive}, should_rerun={should}")
+          else:
+              print("run_result.json not found, skip rerun")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              out.write(f"should_rerun={should}\n")
+          PY
+
+      - name: Run checker (round 2 if needed)
+        if: steps.decide_rerun.outputs.should_rerun == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_PROMPT_DISABLED: 1
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          LD_LIBRARY_PATH: .
+          CHECK_FAIL_ON_ZERO_ALIVE: 0
         run: python check.py
 
       - name: Commit and Push changes

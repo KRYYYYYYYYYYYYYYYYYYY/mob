@@ -10,11 +10,21 @@ from torture_bot import (
     VETTED_FILE,
     WIFI_FILE,
     FAVORITES_FILE,
+    DEFERRED_FILE,
+    INPUT_FILE,
     normalize_rank_entry,
     remove_from_all,
     add_to_blacklist,
     get_wifi_candidates,
 )
+
+CONTROL_PRIMARY_LABEL = os.getenv("CONTROL_PANEL_LABEL", "menu1")
+CONTROL_LABEL_CANDIDATES = [CONTROL_PRIMARY_LABEL, "control"]
+CONTROL_LABEL_CANDIDATES = list(dict.fromkeys([x for x in CONTROL_LABEL_CANDIDATES if x]))
+CONTROL_BODY_FILE = "test1/menu1.txt"
+CHECK_WORKFLOW_FILE = os.getenv("CHECK_WORKFLOW_FILE", "main.yml")
+FULL_REPLACE_MARKER = "♻️ **ПОЛНАЯ_ЗАМЕНА**"
+FULL_REPLACE_CONFIRM_MARKER = "✅ **ПОДТВЕРДИТЬ**"
 
 
 def _load_lines(path: str):
@@ -70,6 +80,122 @@ def update_issue_from_file(repo, label, file_path, env):
         print(f"⚠️ Ошибка загрузки {file_path} в GitHub: {e}")
 
 
+def _get_issue_body_by_labels(repo, labels, env):
+    """Возвращает (body, label) для первой найденной issue из списка labels."""
+    for label in labels:
+        try:
+            out = subprocess.check_output(
+                ['gh', 'issue', 'list', '--repo', repo, '--label', label, '--json', 'body'],
+                env=env
+            )
+            data = json.loads(out)
+            if data:
+                return data[0]['body'], label
+        except Exception:
+            continue
+    return "", None
+
+
+def _is_checkbox_command_checked(body: str, marker: str) -> bool:
+    for line in body.splitlines():
+        if marker in line and "[x]" in line.lower():
+            return True
+    return False
+
+
+def _full_replace_non_immortals(pinned_list, fav_list):
+    """
+    Удаляет не-pinned/non-favorite/non-vetted из wifi и синхронно вырезает из 1.txt
+    только те базы, которые были удалены именно из wifi (vetted не трогаем).
+    """
+    keep_bases = {x.split("#")[0].strip() for x in pinned_list}
+    keep_bases.update({x.split("#")[0].strip() for x in fav_list})
+    if os.path.exists(VETTED_FILE):
+        with open(VETTED_FILE, "r", encoding="utf-8") as f:
+            keep_bases.update(
+                line.strip().split("#")[0].strip()
+                for line in f
+                if any(p in line.lower() for p in ("vless://", "vmess://", "trojan://", "ss://"))
+            )
+
+    # 1) wifi.txt: оставляем только служебные строки и pinned/favorites/vetted
+    removed_from_wifi = set()
+    if os.path.exists(WIFI_FILE):
+        with open(WIFI_FILE, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+        new_lines = []
+        for line in lines:
+            stripped = line.strip()
+            if "vless://" not in stripped and "vmess://" not in stripped and "trojan://" not in stripped and "ss://" not in stripped:
+                new_lines.append(line)
+                continue
+            base = stripped.split("#")[0].strip()
+            if base in keep_bases:
+                new_lines.append(line)
+            else:
+                removed_from_wifi.add(base)
+        with open(WIFI_FILE, "w", encoding="utf-8") as f:
+            f.writelines(new_lines)
+
+    # 2) 1.txt: удаляем только те базы, которые были удалены из wifi
+    if os.path.exists(INPUT_FILE):
+        with open(INPUT_FILE, "r", encoding="utf-8") as f:
+            bases = [line.strip() for line in f if line.strip()]
+        filtered = [b for b in bases if b.split("#")[0].strip() not in removed_from_wifi]
+        with open(INPUT_FILE, "w", encoding="utf-8") as f:
+            f.write("\n".join(filtered))
+
+    # 3) deferred.txt: та же логика, что и 1.txt — удаляем только то, что вычищено из wifi
+    if os.path.exists(DEFERRED_FILE):
+        with open(DEFERRED_FILE, "r", encoding="utf-8") as f:
+            deferred_lines = [line.strip() for line in f if line.strip()]
+        deferred_filtered = [
+            line for line in deferred_lines
+            if line.split("#")[0].strip() not in removed_from_wifi
+        ]
+        with open(DEFERRED_FILE, "w", encoding="utf-8") as f:
+            f.write("\n".join(deferred_filtered))
+
+
+def _cancel_running_workflow_runs(repo: str, workflow_file: str, env: dict):
+    """Отменяет queued/in_progress ранны указанного workflow."""
+    try:
+        out = subprocess.check_output(
+            [
+                "gh", "run", "list",
+                "--repo", repo,
+                "--workflow", workflow_file,
+                "--json", "databaseId,status",
+                "--limit", "30",
+            ],
+            env=env
+        )
+        runs = json.loads(out)
+        for run in runs:
+            rid = run.get("databaseId")
+            status = (run.get("status") or "").lower()
+            if rid and status in {"queued", "in_progress", "waiting", "requested"}:
+                subprocess.run(
+                    ["gh", "run", "cancel", str(rid), "--repo", repo],
+                    env=env,
+                    check=False
+                )
+    except Exception as e:
+        print(f"⚠️ Не удалось отменить старые ранны {workflow_file}: {e}")
+
+
+def _dispatch_workflow(repo: str, workflow_file: str, env: dict):
+    """Запускает workflow вручную после сигнала панели."""
+    try:
+        subprocess.run(
+            ["gh", "workflow", "run", workflow_file, "--repo", repo],
+            env=env,
+            check=True
+        )
+    except Exception as e:
+        print(f"⚠️ Не удалось запустить workflow {workflow_file}: {e}")
+
+
 def refresh_all_panels(token, repo, ranking_db, vetted_list, pinned_list):
     update_time = time.strftime("%d.%m.%Y %H:%M:%S")
     env_gh = {**os.environ, "GH_TOKEN": token}
@@ -80,17 +206,18 @@ def refresh_all_panels(token, repo, ranking_db, vetted_list, pinned_list):
             fav_list = [l.strip() for l in f if 'vless' in l]
     fav_bases = {l.split('#')[0].strip() for l in fav_list}
 
-    body_ctrl = f"### 🎮 Панель Blacklist (Весь wifi.txt)\n🕒 `{update_time}`\n\n"
-    body_ctrl += "- [ ] 💀 **ПОДТВЕРДИТЬ_БАН**\n\n---\n\n"
+    body_ctrl = f"### 🎮 Меню\n🕒 `{update_time}`\n\n"
+    body_ctrl += f"- [ ] {FULL_REPLACE_MARKER}\n"
+    body_ctrl += f"- [ ] {FULL_REPLACE_CONFIRM_MARKER}\n\n---\n\n"
     wifi_to_ban = get_wifi_candidates(pinned_list, fav_list)
     if wifi_to_ban:
         for full_link in wifi_to_ban:
             body_ctrl += f"- [ ] {full_link.strip()}\n"
     else:
         body_ctrl += "_Список пуст_\n"
-    with open('test1/issue_body.txt', 'w', encoding='utf-8') as f:
+    with open(CONTROL_BODY_FILE, 'w', encoding='utf-8') as f:
         f.write(body_ctrl)
-    update_issue_from_file(repo, 'control', 'test1/issue_body.txt', env_gh)
+    update_issue_from_file(repo, CONTROL_PRIMARY_LABEL, CONTROL_BODY_FILE, env_gh)
 
     body_pin = f"### 💎 Кандидаты в Элиту\n🕒 `{update_time}`\n\n"
     body_pin += "- [ ] ✅ **ПРИМЕНИТЬ_PIN_BAN**\n\n---\n\n"
@@ -132,19 +259,23 @@ def process_all_controls(token, repo, vetted_list, pinned_list, ranking_db):
         return [l.strip().rstrip(':') for l in found]
 
     try:
-        out = subprocess.check_output(['gh', 'issue', 'list', '--repo', repo, '--label', 'control', '--json', 'body'], env=env_gh)
-        data = json.loads(out)
-        if data:
-            body = data[0]['body']
-            if "ПОДТВЕРДИТЬ_БАН" in body and "[x]" in body:
-                links = find_checked_vless(body)
-                for base_full in links:
-                    base = base_full.split('#')[0].strip()
-                    add_to_blacklist(base)
-                    remove_from_all(base)
-                    if base in ranking_db:
-                        del ranking_db[base]
-                    executed_any = True
+        body, _ = _get_issue_body_by_labels(repo, CONTROL_LABEL_CANDIDATES, env_gh)
+        if body:
+            full_replace_requested = _is_checkbox_command_checked(body, FULL_REPLACE_MARKER)
+            full_replace_confirmed = _is_checkbox_command_checked(body, FULL_REPLACE_CONFIRM_MARKER)
+            if full_replace_requested and full_replace_confirmed:
+                fav_list = []
+                if os.path.exists(FAVORITES_FILE):
+                    with open(FAVORITES_FILE, 'r', encoding='utf-8') as f:
+                        fav_list = [
+                            l.strip() for l in f
+                            if any(p in l.lower() for p in ("vless://", "vmess://", "trojan://", "ss://"))
+                        ]
+                _full_replace_non_immortals(pinned_list, fav_list)
+                # Приоритетный сигнал: гасим текущий run чекера и запускаем новый.
+                _cancel_running_workflow_runs(repo, CHECK_WORKFLOW_FILE, env_gh)
+                _dispatch_workflow(repo, CHECK_WORKFLOW_FILE, env_gh)
+                executed_any = True
 
         out = subprocess.check_output(['gh', 'issue', 'list', '--repo', repo, '--label', 'pin_control', '--json', 'body'], env=env_gh)
         data = json.loads(out)
@@ -242,7 +373,14 @@ def _commit_and_push():
     try:
         subprocess.run(['git', 'config', '--local', 'user.name', 'github-actions[bot]'], check=True)
         subprocess.run(['git', 'config', '--local', 'user.email', 'github-actions[bot]@users.noreply.github.com'], check=True)
-        subprocess.run(['git', 'add', WIFI_FILE, VETTED_FILE, PINNED_FILE, RANK_FILE, FAVORITES_FILE, 'test1/blacklist.txt'], check=True)
+        subprocess.run(
+            [
+                'git', 'add',
+                WIFI_FILE, VETTED_FILE, PINNED_FILE, RANK_FILE, FAVORITES_FILE,
+                'test1/blacklist.txt', CONTROL_BODY_FILE
+            ],
+            check=True
+        )
         status = subprocess.run(['git', 'diff', '--cached', '--quiet'])
         if status.returncode != 0:
             subprocess.run(['git', 'commit', '-m', '🎛️ Apply control-panel actions [skip ci]'], check=True)
