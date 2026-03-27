@@ -100,7 +100,10 @@ def _is_checkbox_command_checked(body: str, marker: str) -> bool:
 
 
 def _full_replace_non_immortals(pinned_list, fav_list):
-    """Удаляет все не-pinned/non-favorite/non-vetted из wifi/deferred/1.txt (vetted не трогаем)."""
+    """
+    Удаляет не-pinned/non-favorite/non-vetted из wifi и синхронно вырезает из 1.txt
+    только те базы, которые были удалены именно из wifi (vetted не трогаем).
+    """
     keep_bases = {x.split("#")[0].strip() for x in pinned_list}
     keep_bases.update({x.split("#")[0].strip() for x in fav_list})
     if os.path.exists(VETTED_FILE):
@@ -115,11 +118,8 @@ def _full_replace_non_immortals(pinned_list, fav_list):
     with open(DEFERRED_FILE, "w", encoding="utf-8") as f:
         f.write("")
 
-    # 2) 1.txt оставляем только базы pinned/favorites/vetted
-    with open(INPUT_FILE, "w", encoding="utf-8") as f:
-        f.write("\n".join(sorted(keep_bases)))
-
-    # 3) wifi.txt: оставляем только служебные строки и pinned/favorites/vetted
+    # 2) wifi.txt: оставляем только служебные строки и pinned/favorites/vetted
+    removed_from_wifi = set()
     if os.path.exists(WIFI_FILE):
         with open(WIFI_FILE, "r", encoding="utf-8") as f:
             lines = f.readlines()
@@ -132,8 +132,18 @@ def _full_replace_non_immortals(pinned_list, fav_list):
             base = stripped.split("#")[0].strip()
             if base in keep_bases:
                 new_lines.append(line)
+            else:
+                removed_from_wifi.add(base)
         with open(WIFI_FILE, "w", encoding="utf-8") as f:
             f.writelines(new_lines)
+
+    # 3) 1.txt: удаляем только те базы, которые были удалены из wifi
+    if os.path.exists(INPUT_FILE):
+        with open(INPUT_FILE, "r", encoding="utf-8") as f:
+            bases = [line.strip() for line in f if line.strip()]
+        filtered = [b for b in bases if b.split("#")[0].strip() not in removed_from_wifi]
+        with open(INPUT_FILE, "w", encoding="utf-8") as f:
+            f.write("\n".join(filtered))
 
 
 def refresh_all_panels(token, repo, ranking_db, vetted_list, pinned_list):
