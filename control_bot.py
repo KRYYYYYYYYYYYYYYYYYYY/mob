@@ -23,6 +23,8 @@ CONTROL_LABEL_CANDIDATES = [CONTROL_PRIMARY_LABEL, "control"]
 CONTROL_LABEL_CANDIDATES = list(dict.fromkeys([x for x in CONTROL_LABEL_CANDIDATES if x]))
 CONTROL_BODY_FILE = "test1/menu1.txt"
 CHECK_WORKFLOW_FILE = os.getenv("CHECK_WORKFLOW_FILE", "main.yml")
+FULL_REPLACE_MARKER = "♻️ **ПОЛНАЯ_ЗАМЕНА**"
+FULL_REPLACE_CONFIRM_MARKER = "✅ **ПОДТВЕРДИТЬ**"
 
 
 def _load_lines(path: str):
@@ -204,9 +206,10 @@ def refresh_all_panels(token, repo, ranking_db, vetted_list, pinned_list):
             fav_list = [l.strip() for l in f if 'vless' in l]
     fav_bases = {l.split('#')[0].strip() for l in fav_list}
 
-    body_ctrl = f"### 🎮 Панель Blacklist (Весь wifi.txt)\n🕒 `{update_time}`\n\n"
+    body_ctrl = f"### 🎮 Меню\n🕒 `{update_time}`\n\n"
     body_ctrl += "- [ ] 💀 **ПОДТВЕРДИТЬ_БАН**\n\n---\n\n"
-    body_ctrl += "- [ ] ♻️ **ПОДТВЕРДИТЬ_ПОЛНУЮ_ЗАМЕНУ**\n\n---\n\n"
+    body_ctrl += f"- [ ] {FULL_REPLACE_MARKER}\n"
+    body_ctrl += f"- [ ] {FULL_REPLACE_CONFIRM_MARKER}\n\n---\n\n"
     wifi_to_ban = get_wifi_candidates(pinned_list, fav_list)
     if wifi_to_ban:
         for full_link in wifi_to_ban:
@@ -259,7 +262,9 @@ def process_all_controls(token, repo, vetted_list, pinned_list, ranking_db):
     try:
         body, _ = _get_issue_body_by_labels(repo, CONTROL_LABEL_CANDIDATES, env_gh)
         if body:
-            if _is_checkbox_command_checked(body, "ПОДТВЕРДИТЬ_ПОЛНУЮ_ЗАМЕНУ"):
+            full_replace_requested = _is_checkbox_command_checked(body, FULL_REPLACE_MARKER)
+            full_replace_confirmed = _is_checkbox_command_checked(body, FULL_REPLACE_CONFIRM_MARKER)
+            if full_replace_requested and full_replace_confirmed:
                 fav_list = []
                 if os.path.exists(FAVORITES_FILE):
                     with open(FAVORITES_FILE, 'r', encoding='utf-8') as f:
