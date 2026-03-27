@@ -64,6 +64,7 @@ def init_checker_lib() -> None:
         return
 
     go_lib = ctypes.cdll.LoadLibrary(lib_path)
+
     go_lib.CheckVlessL7.argtypes = [
         ctypes.c_char_p,  # addr (host)
         ctypes.c_int,     # port
@@ -75,6 +76,28 @@ def init_checker_lib() -> None:
         ctypes.c_int      # timeout
     ]
     go_lib.CheckVlessL7.restype = ctypes.c_int
+
+    # CheckAnyL7 — универсальный чекер из crazy_xray_checker:
+    # vmess, vless (reality/tls), trojan, shadowsocks.
+    # Включает перебор SNI-кандидатов внутри Go.
+    go_lib.CheckAnyL7.argtypes = [
+        ctypes.c_char_p,  # scheme   ("vless"/"vmess"/"trojan"/"shadowsocks")
+        ctypes.c_char_p,  # addr
+        ctypes.c_int,     # port
+        ctypes.c_char_p,  # id       (uuid для vless/vmess, пароль для trojan)
+        ctypes.c_char_p,  # security ("reality"/"tls"/"none")
+        ctypes.c_char_p,  # sni
+        ctypes.c_char_p,  # pbk      (только reality)
+        ctypes.c_char_p,  # sid      (только reality)
+        ctypes.c_char_p,  # flow     (только vless+reality)
+        ctypes.c_char_p,  # netType  ("tcp"/"ws")
+        ctypes.c_char_p,  # path     (для ws)
+        ctypes.c_char_p,  # hostHdr  (Host-заголовок для ws)
+        ctypes.c_char_p,  # method   (только shadowsocks)
+        ctypes.c_char_p,  # password (только shadowsocks)
+        ctypes.c_int,     # timeout
+    ]
+    go_lib.CheckAnyL7.restype = ctypes.c_int
 
 def probe_vless_l7(link, target_sni, timeout=5):
     """Парсит VLESS ссылку и возвращает пинг в мс (0 если ошибка)."""
@@ -111,6 +134,211 @@ def extract_sni(link):
     parsed = urllib.parse.urlparse(link)
     params = urllib.parse.parse_qs(parsed.query)
     return params.get("sni", [""])[0]
+
+# ---------------------------------------------------------------------------
+# ПАРСЕРЫ ПРОТОКОЛОВ (из crazy_xray_checker — поддержка vmess/trojan/ss)
+# ---------------------------------------------------------------------------
+
+SUPPORTED_SCHEMES = ("vless://", "vmess://", "trojan://", "ss://")
+
+def get_link_scheme(link: str) -> str:
+    """Возвращает scheme строчными буквами: 'vless', 'vmess', 'trojan', 'shadowsocks' или ''."""
+    lw = link.lower()
+    if lw.startswith("vless://"):      return "vless"
+    if lw.startswith("vmess://"):      return "vmess"
+    if lw.startswith("trojan://"):     return "trojan"
+    if lw.startswith("ss://"):         return "shadowsocks"
+    return ""
+
+def parse_vmess_link(link: str) -> dict | None:
+    """
+    Декодирует vmess://base64(json) и возвращает унифицированный словарь.
+    Вдохновлено parse.go из crazy_xray_checker.
+    """
+    import base64
+    try:
+        b64 = link[len("vmess://"):]
+        # Пробуем разные варианты декодирования
+        for b64v in [b64, b64 + "=" * (-len(b64) % 4)]:
+            try:
+                raw = base64.b64decode(b64v)
+                break
+            except Exception:
+                continue
+        else:
+            return None
+        m = json.loads(raw.decode("utf-8"))
+        host = str(m.get("add", ""))
+        port_raw = m.get("port", "443")
+        port = int(port_raw) if str(port_raw).isdigit() else 443
+        net_type = str(m.get("net", "tcp")).lower()
+        if net_type == "httpupgrade":
+            net_type = "ws"
+        tls_val = str(m.get("tls", "")).lower()
+        security = "tls" if tls_val == "tls" else "none"
+        sni = str(m.get("sni", m.get("host", "")))
+        return {
+            "scheme":   "vmess",
+            "addr":     host,
+            "port":     port,
+            "id":       str(m.get("id", "")),
+            "security": security,
+            "sni":      sni,
+            "pbk":      "",
+            "sid":      "",
+            "flow":     "",
+            "net_type": net_type,
+            "path":     str(m.get("path", "")),
+            "host_hdr": str(m.get("host", "")),
+            "method":   "",
+            "password": "",
+        }
+    except Exception:
+        return None
+
+def parse_trojan_link(link: str) -> dict | None:
+    """Парсит trojan://password@host:port?sni=...&security=tls"""
+    try:
+        parsed = urllib.parse.urlparse(link)
+        params = urllib.parse.parse_qs(parsed.query)
+        host = parsed.hostname or ""
+        port = parsed.port or 443
+        password = parsed.username or ""
+        sni = params.get("sni", [host])[0]
+        security = params.get("security", ["tls"])[0].lower()
+        net_type = params.get("type", ["tcp"])[0].lower()
+        if net_type == "httpupgrade":
+            net_type = "ws"
+        return {
+            "scheme":   "trojan",
+            "addr":     host,
+            "port":     int(port),
+            "id":       password,
+            "security": security,
+            "sni":      sni,
+            "pbk":      "",
+            "sid":      "",
+            "flow":     "",
+            "net_type": net_type,
+            "path":     params.get("path", [""])[0],
+            "host_hdr": params.get("host", [""])[0],
+            "method":   "",
+            "password": "",
+        }
+    except Exception:
+        return None
+
+def parse_ss_link(link: str) -> dict | None:
+    """
+    Парсит ss://base64(method:password)@host:port
+    Вдохновлено parseSS из crazy_xray_checker.
+    """
+    import base64
+    try:
+        parsed = urllib.parse.urlparse(link)
+        cred_b64 = parsed.username or ""
+        try:
+            dec = base64.b64decode(cred_b64 + "=" * (-len(cred_b64) % 4)).decode("utf-8")
+        except Exception:
+            dec = ""
+        if ":" in dec:
+            method, password = dec.split(":", 1)
+        else:
+            method, password = "aes-256-gcm", cred_b64
+        host = parsed.hostname or ""
+        port = parsed.port or 443
+        return {
+            "scheme":   "shadowsocks",
+            "addr":     host,
+            "port":     int(port),
+            "id":       "",
+            "security": "none",
+            "sni":      "",
+            "pbk":      "",
+            "sid":      "",
+            "flow":     "",
+            "net_type": "tcp",
+            "path":     "",
+            "host_hdr": "",
+            "method":   method,
+            "password": password,
+        }
+    except Exception:
+        return None
+
+def parse_vless_link(link: str) -> dict | None:
+    """Парсит vless://uuid@host:port?security=...&sni=...&pbk=...&sid=..."""
+    try:
+        parsed = urllib.parse.urlparse(link)
+        params = urllib.parse.parse_qs(parsed.query)
+        _, host, port = extract_host_port(link)
+        if not host or not port:
+            return None
+        security = params.get("security", ["none"])[0].lower()
+        net_type = params.get("type", ["tcp"])[0].lower()
+        if net_type == "httpupgrade":
+            net_type = "ws"
+        return {
+            "scheme":   "vless",
+            "addr":     host,
+            "port":     int(port),
+            "id":       parsed.username or "",
+            "security": security,
+            "sni":      params.get("sni", [""])[0],
+            "pbk":      params.get("pbk", [""])[0],
+            "sid":      params.get("sid", [""])[0],
+            "flow":     params.get("flow", [""])[0],
+            "net_type": net_type,
+            "path":     params.get("path", [""])[0],
+            "host_hdr": params.get("host", [""])[0],
+            "method":   "",
+            "password": "",
+        }
+    except Exception:
+        return None
+
+def parse_any_link(link: str) -> dict | None:
+    """Универсальный парсер ссылок всех поддерживаемых протоколов."""
+    scheme = get_link_scheme(link)
+    if scheme == "vless":        return parse_vless_link(link)
+    if scheme == "vmess":        return parse_vmess_link(link)
+    if scheme == "trojan":       return parse_trojan_link(link)
+    if scheme == "shadowsocks":  return parse_ss_link(link)
+    return None
+
+def probe_any_l7(link: str, timeout: int = 5) -> int:
+    """
+    Универсальный L7-пробник для любого протокола через CheckAnyL7.
+    Возвращает задержку в мс (>0) при успехе, -1 при L7-отказе, 0 при ошибке.
+    Перебор SNI-кандидатов выполняется внутри Go (как в crazy_xray_checker).
+    """
+    if go_lib is None:
+        return 0
+    try:
+        pc = parse_any_link(link)
+        if not pc or not pc["addr"] or pc["port"] <= 0:
+            return 0
+        latency = go_lib.CheckAnyL7(
+            pc["scheme"].encode(),
+            pc["addr"].encode(),
+            int(pc["port"]),
+            pc["id"].encode(),
+            pc["security"].encode(),
+            pc["sni"].encode(),
+            pc["pbk"].encode(),
+            pc["sid"].encode(),
+            pc["flow"].encode(),
+            pc["net_type"].encode(),
+            pc["path"].encode(),
+            pc["host_hdr"].encode(),
+            pc["method"].encode(),
+            pc["password"].encode(),
+            int(timeout),
+        )
+        return int(latency)
+    except Exception as e:
+        print(f"⚠️ Ошибка probe_any_l7: {e}")
+        return 0
 
 # --- НОВЫЙ БЛОК: ФИЛЬТРАЦИЯ И КАНДИДАТЫ ---
 BAD_SNI_KEYWORDS = ['google', 'apple', 'microsoft', 'facebook', 'netflix', 'youtube']
@@ -182,7 +410,10 @@ def download_raw_data(urls):
                 # 2. Загружаем данные
                 with urllib.request.urlopen(req, timeout=30) as response:
                     content = response.read().decode("utf-8")
-                    found = [line.strip() for line in content.splitlines() if "vless://" in line]
+                    found = [
+                        line.strip() for line in content.splitlines()
+                        if any(p in line.lower() for p in ("vless://", "vmess://", "trojan://", "ss://"))
+                    ]
                     all_links.extend(found)
                     print(f"✅ Найдено {len(found)} шт.")
                     success = True
@@ -390,7 +621,11 @@ def ranking_sort_key(link: str, ranking_db: dict):
     return (-rank, base)
 
 def l7_multi_probe(link: str, stress_config: dict):
-    """Многократный L7-пробник: снижает ложные 'ОК', если сервер нестабилен в мобильной сети."""
+    """
+    Многократный L7-пробник. Поддерживает все протоколы.
+    - vless: перебор SNI-кандидатов в Python + CheckVlessL7
+    - vmess/trojan/shadowsocks: CheckAnyL7 (SNI-перебор внутри Go)
+    """
     min_hits = max(1, int(stress_config.get("l7_min_success", 2)))
     max_candidates = max(1, int(stress_config.get("l7_max_candidates", 3)))
     probe_attempts = max(1, int(stress_config.get("probe_attempts", 4)))
@@ -398,6 +633,27 @@ def l7_multi_probe(link: str, stress_config: dict):
     timeout_sec = int(max(1, stress_config.get("timeout", 5)))
     max_latency_ms = max(1, int(stress_config.get("max_latency_ms", 6000)))
 
+    scheme = get_link_scheme(link)
+
+    # --- vmess / trojan / shadowsocks: CheckAnyL7 (SNI-перебор внутри Go) ---
+    if scheme in ("vmess", "trojan", "shadowsocks"):
+        hits = 0
+        best_latency = 0
+        for _ in range(probe_attempts):
+            latency = probe_any_l7(link, timeout=timeout_sec)
+            if latency < 0:
+                return False, -1
+            if 0 < latency <= max_latency_ms:
+                hits += 1
+                if best_latency == 0 or latency < best_latency:
+                    best_latency = latency
+                if hits >= min_hits:
+                    return True, best_latency
+            if between_attempts_sleep > 0:
+                time.sleep(between_attempts_sleep)
+        return False, 0
+
+    # --- vless: оригинальный путь с перебором SNI-кандидатов в Python ---
     candidates = extract_sni_candidates(link)
     if not candidates:
         native_sni = extract_sni(link)
@@ -412,7 +668,7 @@ def l7_multi_probe(link: str, stress_config: dict):
         for _ in range(probe_attempts):
             latency = probe_vless_l7(link, candidate_sni, timeout=timeout_sec)
             if latency < 0:
-                # Жесткий отказ L7 при доступном TCP (например, отключенный UUID) — нет смысла долбить дальше.
+                # Жесткий отказ L7 при доступном TCP (например, отключенный UUID)
                 return False, -1
             if latency > 0 and latency <= max_latency_ms:
                 hits += 1
@@ -467,8 +723,11 @@ def main():
     pinned_list = []
     if os.path.exists('test1/pinned.txt'):
         with open('test1/pinned.txt', 'r', encoding='utf-8') as f:
-            pinned_list = [line.strip() for line in f if "vless://" in line]
-    
+            pinned_list = [
+                line.strip() for line in f
+                if any(p in line.lower() for p in ("vless://", "vmess://", "trojan://", "ss://"))
+            ]
+
     print(f"📦 Загружено закрепов: {len(pinned_list)}")
 
     # 2. Загружаем Фавориты (Favorites)
@@ -477,7 +736,7 @@ def main():
     if os.path.exists(FAVORITES_FILE):
         with open(FAVORITES_FILE, 'r', encoding='utf-8') as f:
             for line in f:
-                if "vless://" in line:
+                if any(p in line.lower() for p in ("vless://", "vmess://", "trojan://", "ss://")):
                     link = line.strip()
                     fav_full_links.append(link)
                     fav_bases.add(link.split("#")[0].strip())
@@ -605,24 +864,40 @@ def main():
                 link = check_queue[idx]
                 idx += 1
 
-                if is_sni_suspicious(link):
-                    note_reason(reason_stats, "skip_sni_suspicious", link.split("#", 1)[0].strip())
-                    continue
-
                 clean_link = link.strip()
                 base_part = clean_link.split("#", 1)[0].strip()
                 if base_part in seen_parts:
                     note_reason(reason_stats, "skip_duplicate_base", base_part)
                     continue
 
-                # Основные фильтры формата (uuid + endpoint)
-                if not re.search(r'[a-f0-9\-]{36}@', base_part):
+                link_scheme = get_link_scheme(base_part)
+                if not link_scheme:
+                    note_reason(reason_stats, "skip_unknown_scheme", base_part)
+                    continue
+
+                # SNI-фильтр — только для vless (у vmess/trojan/ss нет sni= в URL)
+                if link_scheme == "vless" and is_sni_suspicious(link):
+                    note_reason(reason_stats, "skip_sni_suspicious", base_part)
+                    continue
+
+                # UUID-паттерн — только для vless/vmess
+                if link_scheme in ("vless",) and not re.search(r'[a-f0-9\-]{36}@', base_part):
                     note_reason(reason_stats, "skip_bad_uuid_pattern", base_part)
                     continue
-                endpoint, host, port = extract_host_port(base_part)
-                if not endpoint or not host or not port:
-                    note_reason(reason_stats, "skip_bad_endpoint", base_part)
-                    continue
+
+                # Извлекаем хост/порт: для vmess из base64, иначе из URL
+                if link_scheme == "vmess":
+                    pc = parse_vmess_link(base_part)
+                    if not pc or not pc["addr"] or not pc["port"]:
+                        note_reason(reason_stats, "skip_bad_endpoint", base_part)
+                        continue
+                    host, port = pc["addr"], str(pc["port"])
+                else:
+                    endpoint, host, port = extract_host_port(base_part)
+                    if not endpoint or not host or not port:
+                        note_reason(reason_stats, "skip_bad_endpoint", base_part)
+                        continue
+
                 if is_ipv6(host):
                     note_reason(reason_stats, "skip_ipv6", base_part)
                     add_to_blacklist(base_part)

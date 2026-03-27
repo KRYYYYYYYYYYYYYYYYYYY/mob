@@ -28,6 +28,24 @@ To rebuild the Go shared library after modifying `checker.go`:
 go build -o libchecker.so -buildmode=c-shared checker.go
 ```
 
+## Улучшения из crazy_xray_checker
+
+Перенесено из https://github.com/KRYYYYYYYYYYYYYYYYYYY/crazy_xray_checker:
+
+### checker.go
+- **`CheckAnyL7`** — новая универсальная функция: vless (reality/tls), vmess, trojan, shadowsocks
+- **`buildProxyConfig`** — унифицированный сборщик xray-конфига для всех протоколов
+- **`extractSNICandidates`** — извлечение SNI-кандидатов из запутанных полей
+- **SNI-retry loop** — перебор кандидатов внутри Go с ограничением в 3 попытки
+- **`CheckVlessL7`** — сохранена для обратной совместимости
+
+### check.py
+- **Парсеры протоколов**: `parse_vmess_link`, `parse_trojan_link`, `parse_ss_link`, `parse_any_link`
+- **`probe_any_l7`** — универсальный Python-пробник через `CheckAnyL7`
+- **`l7_multi_probe`** — диспетчеризация: vless→старый путь, остальные→`CheckAnyL7`
+- **`download_raw_data`** — теперь забирает vmess/trojan/ss ссылки, не только vless
+- **Главный цикл** — фильтры адаптированы под все протоколы
+
 ## Data Flow
 
 1. `check.py` pulls VLESS links from external URLs
