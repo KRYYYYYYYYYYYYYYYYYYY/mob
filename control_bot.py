@@ -100,21 +100,26 @@ def _is_checkbox_command_checked(body: str, marker: str) -> bool:
 
 
 def _full_replace_non_immortals(pinned_list, fav_list):
-    """Удаляет все не-pinned и не-favorite из wifi/deferred/1.txt/vetted."""
+    """Удаляет все не-pinned/non-favorite/non-vetted из wifi/deferred/1.txt (vetted не трогаем)."""
     keep_bases = {x.split("#")[0].strip() for x in pinned_list}
     keep_bases.update({x.split("#")[0].strip() for x in fav_list})
+    if os.path.exists(VETTED_FILE):
+        with open(VETTED_FILE, "r", encoding="utf-8") as f:
+            keep_bases.update(
+                line.strip().split("#")[0].strip()
+                for line in f
+                if any(p in line.lower() for p in ("vless://", "vmess://", "trojan://", "ss://"))
+            )
 
-    # 1) deferred и vetted очищаем целиком
+    # 1) deferred очищаем (vetted НЕ трогаем)
     with open(DEFERRED_FILE, "w", encoding="utf-8") as f:
         f.write("")
-    with open(VETTED_FILE, "w", encoding="utf-8") as f:
-        f.write("")
 
-    # 2) 1.txt оставляем только базы pinned/favorites
+    # 2) 1.txt оставляем только базы pinned/favorites/vetted
     with open(INPUT_FILE, "w", encoding="utf-8") as f:
         f.write("\n".join(sorted(keep_bases)))
 
-    # 3) wifi.txt: оставляем только служебные строки и pinned/favorites
+    # 3) wifi.txt: оставляем только служебные строки и pinned/favorites/vetted
     if os.path.exists(WIFI_FILE):
         with open(WIFI_FILE, "r", encoding="utf-8") as f:
             lines = f.readlines()
