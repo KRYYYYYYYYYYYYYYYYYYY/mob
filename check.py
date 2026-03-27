@@ -872,7 +872,7 @@ def main():
         "l7_max_candidates": 3,
         "workers": 32,
         "max_latency_ms": 6000,
-        "max_check_duration_sec": 6 * 60 * 60,
+        "max_check_duration_sec": 5 * 60 * 60,
         "stability_max_spread_ms": 1200,
         "stability_max_ratio": 4.0,
         "stability_max_na": 0,
@@ -911,7 +911,7 @@ def main():
     # --- [ШАГ 4: ЦИКЛ ПРОВЕРКИ] ---
     workers = max(1, int(stress_config.get("workers", 32)))
     batch_size = max(20, workers * 2)
-    max_check_duration_sec = max(60, int(stress_config.get("max_check_duration_sec", 6 * 60 * 60)))
+    max_check_duration_sec = max(60, int(stress_config.get("max_check_duration_sec", 5 * 60 * 60)))
     print(f"⚙️ Параллельная проверка: workers={workers}, batch={batch_size}")
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
