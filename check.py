@@ -735,6 +735,7 @@ def main():
     import subprocess
     token = os.getenv("GH_TOKEN")
     repo = os.getenv("GITHUB_REPOSITORY")
+    full_replace_mode = os.getenv("FULL_REPLACE_SERVERS", "0") == "1"
     reason_stats = {}
     # сбрасываем лог текущего прогона
     with open(CHECK_LOG_FILE, "w", encoding="utf-8") as f:
@@ -833,20 +834,35 @@ def main():
     print(f"🛡️ Итого бессмертных в начале списка: {len(immortals)}")
     note_reason(reason_stats, "immortals_loaded", extra=str(len(immortals)))
 
+    # Режим полной замены:
+    # удаляем все не-бессмертные и заполняем очередь только новыми источниками.
+    if full_replace_mode:
+        print("♻️ FULL_REPLACE_SERVERS=1: очищаю текущую базу (кроме pinned/favorites)")
+        current_base = []
+        deferred_base = []
+        with open(INPUT_FILE, "w", encoding="utf-8") as f:
+            f.write("\n".join(sorted(seen_immortals)))
+        with open('test1/deferred.txt', "w", encoding="utf-8") as f:
+            f.write("")
+        note_reason(reason_stats, "full_replace_mode", extra="enabled")
+
     # --- [ШАГ 2: ГОТОВИМ ОЧЕРЕДЬ НА ПРОВЕРКУ] ---
-    raw_external = download_raw_data(EXTERNAL_SOURCE_URL)
-    # Собираем всё в одну очередь по приоритету: Отложенные -> Новые -> Старая база
-    combined_potential = deferred_base + raw_external + current_base
-    
     check_queue = []
     seen_in_queue = set()
-    for link in combined_potential:
-        base = link.split('#')[0].strip()
-        # Проверяем, что ссылки нет в бессмертных, она не дубликат в очереди и не в блэклисте
-        if base not in seen_immortals and base not in seen_in_queue and base not in blacklist:
-            check_queue.append(link)
-            seen_in_queue.add(base)
-    check_queue.sort(key=lambda l: ranking_sort_key(l, ranking_db))
+    def extend_check_queue(links):
+        for link in links:
+            base = link.split('#')[0].strip()
+            # Проверяем, что ссылки нет в бессмертных, она не дубликат в очереди и не в блэклисте
+            if base not in seen_immortals and base not in seen_in_queue and base not in blacklist:
+                check_queue.append(link)
+                seen_in_queue.add(base)
+
+    # Порядок строго по требованиям:
+    # 1) сначала текущая база (уже используемые в подписке/прошлых прогонах),
+    # 2) потом отложенные,
+    # 3) новые подтягиваем только если первых двух не хватило.
+    extend_check_queue(sorted(current_base, key=lambda l: ranking_sort_key(l, ranking_db)))
+    extend_check_queue(sorted(deferred_base, key=lambda l: ranking_sort_key(l, ranking_db)))
 
     # --- [ШАГ 3: ПОДГОТОВКА К ЦИКЛУ] ---
     working_for_sub = immortals[:200] # Сразу забиваем подписку бессмертными
@@ -906,7 +922,8 @@ def main():
                     stress_config["probe_paths"] = [str(x) for x in data["probe_paths"] if str(x).strip()]
         except: pass
 
-    print(f"📡 Начинаю добор до 200. В очереди: {len(check_queue)}")
+    raw_external_loaded = False
+    print(f"📡 Начинаю добор до 200. В очереди (текущие+отложенные): {len(check_queue)}")
 
     # --- [ШАГ 4: ЦИКЛ ПРОВЕРКИ] ---
     workers = max(1, int(stress_config.get("workers", 32)))
@@ -915,7 +932,7 @@ def main():
     print(f"⚙️ Параллельная проверка: workers={workers}, batch={batch_size}")
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        while len(working_for_sub) < 200 and idx < len(check_queue):
+        while len(working_for_sub) < 200:
             if time.time() - start_time >= max_check_duration_sec:
                 print(f"⏱️ Достигнут лимит времени проверки ({max_check_duration_sec} сек)")
                 note_reason(reason_stats, "limit_reached_time", extra=str(max_check_duration_sec))
@@ -923,6 +940,19 @@ def main():
             if checked_today >= MAX_TO_CHECK:
                 print("🛑 Лимит проверок исчерпан")
                 note_reason(reason_stats, "limit_reached", extra=str(MAX_TO_CHECK))
+                break
+
+            # Если текущая и отложенная очереди закончились — один раз догружаем новые.
+            if idx >= len(check_queue) and not raw_external_loaded:
+                raw_external = download_raw_data(EXTERNAL_SOURCE_URL)
+                extend_check_queue(sorted(raw_external, key=lambda l: ranking_sort_key(l, ranking_db)))
+                raw_external_loaded = True
+                print(f"🆕 Догружены новые кандидаты: +{len(raw_external)} (в очереди теперь {len(check_queue) - idx})")
+                if idx >= len(check_queue):
+                    note_reason(reason_stats, "no_candidates_after_external_load")
+                    break
+            elif idx >= len(check_queue):
+                note_reason(reason_stats, "queue_exhausted")
                 break
 
             batch = []
@@ -1065,7 +1095,26 @@ def main():
 
     print(f"🏁 Завершено. Подписка: {len(working_for_sub)}, Очередь: {len(new_deferred)}")
     print(f"🧾 Reasons: {json.dumps(reason_stats, ensure_ascii=False)}")
+    return {
+        "subscription_size": len(working_for_sub),
+        "checked_today": checked_today,
+        "alive_today": len(working_for_base),
+    }
 
 if __name__ == "__main__":
     init_checker_lib()
-    main()
+    max_rounds = max(1, int(os.getenv("CHECK_AUTO_ROUNDS", "2")))
+    retry_sleep_sec = max(0, int(os.getenv("CHECK_AUTO_RETRY_SLEEP_SEC", "90")))
+    round_idx = 1
+    while True:
+        result = main()
+        if result.get("alive_today", 0) > 0:
+            break
+        if result.get("checked_today", 0) <= 0:
+            break
+        if round_idx >= max_rounds:
+            break
+        print(f"🔁 Нулевой успешный результат в круге {round_idx}, перезапуск через {retry_sleep_sec} сек...")
+        if retry_sleep_sec > 0:
+            time.sleep(retry_sleep_sec)
+        round_idx += 1
