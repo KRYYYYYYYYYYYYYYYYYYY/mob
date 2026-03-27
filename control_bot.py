@@ -379,7 +379,14 @@ def _commit_and_push():
     try:
         subprocess.run(['git', 'config', '--local', 'user.name', 'github-actions[bot]'], check=True)
         subprocess.run(['git', 'config', '--local', 'user.email', 'github-actions[bot]@users.noreply.github.com'], check=True)
-        subprocess.run(['git', 'add', WIFI_FILE, VETTED_FILE, PINNED_FILE, RANK_FILE, FAVORITES_FILE, 'test1/blacklist.txt'], check=True)
+        subprocess.run(
+            [
+                'git', 'add',
+                WIFI_FILE, VETTED_FILE, PINNED_FILE, RANK_FILE, FAVORITES_FILE,
+                'test1/blacklist.txt', CONTROL_BODY_FILE
+            ],
+            check=True
+        )
         status = subprocess.run(['git', 'diff', '--cached', '--quiet'])
         if status.returncode != 0:
             subprocess.run(['git', 'commit', '-m', '🎛️ Apply control-panel actions [skip ci]'], check=True)
