@@ -10,6 +10,8 @@ from torture_bot import (
     VETTED_FILE,
     WIFI_FILE,
     FAVORITES_FILE,
+    DEFERRED_FILE,
+    INPUT_FILE,
     normalize_rank_entry,
     remove_from_all,
     add_to_blacklist,
@@ -70,6 +72,45 @@ def update_issue_from_file(repo, label, file_path, env):
         print(f"⚠️ Ошибка загрузки {file_path} в GitHub: {e}")
 
 
+def _is_checkbox_command_checked(body: str, marker: str) -> bool:
+    for line in body.splitlines():
+        if marker in line and "[x]" in line.lower():
+            return True
+    return False
+
+
+def _full_replace_non_immortals(pinned_list, fav_list):
+    """Удаляет все не-pinned и не-favorite из wifi/deferred/1.txt/vetted."""
+    keep_bases = {x.split("#")[0].strip() for x in pinned_list}
+    keep_bases.update({x.split("#")[0].strip() for x in fav_list})
+
+    # 1) deferred и vetted очищаем целиком
+    with open(DEFERRED_FILE, "w", encoding="utf-8") as f:
+        f.write("")
+    with open(VETTED_FILE, "w", encoding="utf-8") as f:
+        f.write("")
+
+    # 2) 1.txt оставляем только базы pinned/favorites
+    with open(INPUT_FILE, "w", encoding="utf-8") as f:
+        f.write("\n".join(sorted(keep_bases)))
+
+    # 3) wifi.txt: оставляем только служебные строки и pinned/favorites
+    if os.path.exists(WIFI_FILE):
+        with open(WIFI_FILE, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+        new_lines = []
+        for line in lines:
+            stripped = line.strip()
+            if "vless://" not in stripped and "vmess://" not in stripped and "trojan://" not in stripped and "ss://" not in stripped:
+                new_lines.append(line)
+                continue
+            base = stripped.split("#")[0].strip()
+            if base in keep_bases:
+                new_lines.append(line)
+        with open(WIFI_FILE, "w", encoding="utf-8") as f:
+            f.writelines(new_lines)
+
+
 def refresh_all_panels(token, repo, ranking_db, vetted_list, pinned_list):
     update_time = time.strftime("%d.%m.%Y %H:%M:%S")
     env_gh = {**os.environ, "GH_TOKEN": token}
@@ -82,6 +123,7 @@ def refresh_all_panels(token, repo, ranking_db, vetted_list, pinned_list):
 
     body_ctrl = f"### 🎮 Панель Blacklist (Весь wifi.txt)\n🕒 `{update_time}`\n\n"
     body_ctrl += "- [ ] 💀 **ПОДТВЕРДИТЬ_БАН**\n\n---\n\n"
+    body_ctrl += "- [ ] ♻️ **ПОДТВЕРДИТЬ_ПОЛНУЮ_ЗАМЕНУ**\n\n---\n\n"
     wifi_to_ban = get_wifi_candidates(pinned_list, fav_list)
     if wifi_to_ban:
         for full_link in wifi_to_ban:
@@ -136,6 +178,17 @@ def process_all_controls(token, repo, vetted_list, pinned_list, ranking_db):
         data = json.loads(out)
         if data:
             body = data[0]['body']
+            if _is_checkbox_command_checked(body, "ПОДТВЕРДИТЬ_ПОЛНУЮ_ЗАМЕНУ"):
+                fav_list = []
+                if os.path.exists(FAVORITES_FILE):
+                    with open(FAVORITES_FILE, 'r', encoding='utf-8') as f:
+                        fav_list = [
+                            l.strip() for l in f
+                            if any(p in l.lower() for p in ("vless://", "vmess://", "trojan://", "ss://"))
+                        ]
+                _full_replace_non_immortals(pinned_list, fav_list)
+                executed_any = True
+
             if "ПОДТВЕРДИТЬ_БАН" in body and "[x]" in body:
                 links = find_checked_vless(body)
                 for base_full in links:
