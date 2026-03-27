@@ -28,15 +28,7 @@ REASONS_FILE = 'test1/reasons.json'
 CHECK_LOG_FILE = 'test1/check_log.txt'
 
 EXTERNAL_SOURCE_URL = [
-    "https://raw.githubusercontent.com/zieng2/wl/main/vless_lite.txt",
-    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-CIDR-RU-checked.txt",
-    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-CIDR-RU-all.txt",
-    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile.txt",
-    "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile-2.txt",
-    "https://raw.githubusercontent.com/makitaltdriddim-web/vpn-configs-for-russia-/refs/heads/main/WHITE-CIDR-RU-checked.txt",
-    "https://raw.githubusercontent.com/makitaltdriddim-web/vpn-configs-for-russia-/refs/heads/main/WHITE-CIDR-RU-all.txt",
-    "https://raw.githubusercontent.com/makitaltdriddim-web/vpn-configs-for-russia-/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile.txt",
-    "https://raw.githubusercontent.com/makitaltdriddim-web/vpn-configs-for-russia-/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile-2.txt",
+    "https://raw.githubusercontent.com/KRYYYYYYYYYYYYYYYYYYY/crazy_xray_checker/refs/heads/main/result/working.txt"
 ]
 
 GRACE_PERIOD = 2 * 24 * 60 * 60 # 48 часов
@@ -880,7 +872,7 @@ def main():
         "l7_max_candidates": 3,
         "workers": 32,
         "max_latency_ms": 6000,
-        "max_check_duration_sec": 6 * 60 * 60,
+        "max_check_duration_sec": 5 * 60 * 60,
         "stability_max_spread_ms": 1200,
         "stability_max_ratio": 4.0,
         "stability_max_na": 0,
@@ -919,7 +911,7 @@ def main():
     # --- [ШАГ 4: ЦИКЛ ПРОВЕРКИ] ---
     workers = max(1, int(stress_config.get("workers", 32)))
     batch_size = max(20, workers * 2)
-    max_check_duration_sec = max(60, int(stress_config.get("max_check_duration_sec", 6 * 60 * 60)))
+    max_check_duration_sec = max(60, int(stress_config.get("max_check_duration_sec", 5 * 60 * 60)))
     print(f"⚙️ Параллельная проверка: workers={workers}, batch={batch_size}")
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
