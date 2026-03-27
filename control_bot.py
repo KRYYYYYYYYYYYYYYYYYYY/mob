@@ -103,6 +103,7 @@ def refresh_all_panels(token, repo, ranking_db, vetted_list, pinned_list):
     env_gh = {**os.environ, "GH_TOKEN": token}
 
     wifi_entries = _load_wifi_entries()
+    pinned_bases = {p.split('#')[0].strip() for p in pinned_list}
     fav_list = []
     if os.path.exists(FAVORITES_FILE):
         with open(FAVORITES_FILE, 'r', encoding='utf-8') as f:
@@ -140,8 +141,9 @@ def refresh_all_panels(token, repo, ranking_db, vetted_list, pinned_list):
 
     body_fav = f"### ⭐ Избранные серверы\n🕒 `{update_time}`\n\n"
     body_fav += "- [ ] 🏆 **ПОДТВЕРДИТЬ_ИЗБРАННОЕ**\n\n---\n\n"
-    if wifi_entries:
-        for entry in wifi_entries:
+    fav_entries = [entry for entry in wifi_entries if entry["base"] not in pinned_bases]
+    if fav_entries:
+        for entry in fav_entries:
             is_fav = entry["base"] in fav_bases
             checkbox = "[x]" if is_fav else "[ ]"
             star_prefix = "⭐ " if is_fav else ""
@@ -221,6 +223,7 @@ def process_all_controls(token, repo, vetted_list, pinned_list, ranking_db):
             if "ПОДТВЕРДИТЬ_ИЗБРАННОЕ" in body and "[x]" in body.lower():
                 wifi_entries = _load_wifi_entries()
                 wifi_by_base = {e["base"]: e for e in wifi_entries}
+                pinned_bases = {p.split('#')[0].strip() for p in pinned_list}
                 checked_bases = set()
 
                 for line in body.splitlines():
@@ -231,6 +234,7 @@ def process_all_controls(token, repo, vetted_list, pinned_list, ranking_db):
                     base_part = match.group(2).strip()
                     if is_checked:
                         checked_bases.add(base_part)
+                checked_bases -= pinned_bases
 
                 new_fav_list = []
                 for base in checked_bases:
