@@ -1270,7 +1270,7 @@ def main():
         "mobile_whitelist_domains_url": DEFAULT_MOBILE_WHITELIST["domains_url"],
         "mobile_whitelist_ips_url": DEFAULT_MOBILE_WHITELIST["ips_url"],
         "mobile_whitelist_cidrs_url": DEFAULT_MOBILE_WHITELIST["cidrs_url"],
-        "blacklist_retry_candidates": 10,
+        "external_respect_blacklist": False,
     }
     if os.path.exists('test1/stress_profile.json'):
         try:
@@ -1318,7 +1318,7 @@ def main():
                 stress_config["mobile_whitelist_domains_url"] = str(data.get("mobile_whitelist_domains_url", stress_config["mobile_whitelist_domains_url"])).strip() or stress_config["mobile_whitelist_domains_url"]
                 stress_config["mobile_whitelist_ips_url"] = str(data.get("mobile_whitelist_ips_url", stress_config["mobile_whitelist_ips_url"])).strip() or stress_config["mobile_whitelist_ips_url"]
                 stress_config["mobile_whitelist_cidrs_url"] = str(data.get("mobile_whitelist_cidrs_url", stress_config["mobile_whitelist_cidrs_url"])).strip() or stress_config["mobile_whitelist_cidrs_url"]
-                stress_config["blacklist_retry_candidates"] = int(data.get("blacklist_retry_candidates", stress_config["blacklist_retry_candidates"]))
+                stress_config["external_respect_blacklist"] = bool(data.get("external_respect_blacklist", stress_config["external_respect_blacklist"]))
         except: pass
     # Принудительно работаем в mobile-only режиме для отбора под мобильную сеть.
     stress_config["profile_preset"] = "mobile_strict"
@@ -1354,19 +1354,16 @@ def main():
             if idx >= len(check_queue) and not raw_external_loaded:
                 raw_external = download_raw_data(EXTERNAL_SOURCE_URL)
                 ranked_external = sorted(raw_external, key=lambda l: ranking_sort_key(l, ranking_db))
-                added = extend_check_queue(ranked_external)
+                respect_blacklist = bool(stress_config.get("external_respect_blacklist", False))
+                added = extend_check_queue(ranked_external, ignore_blacklist=not respect_blacklist)
                 raw_external_loaded = True
-                print(f"🆕 Догружены новые кандидаты: +{added}/{len(raw_external)} (в очереди теперь {len(check_queue) - idx})")
+                if respect_blacklist:
+                    print(f"🆕 Догружены новые кандидаты (с blacklist): +{added}/{len(raw_external)} (в очереди теперь {len(check_queue) - idx})")
+                else:
+                    print(f"🆕 Догружены новые кандидаты (без blacklist): +{added}/{len(raw_external)} (в очереди теперь {len(check_queue) - idx})")
                 if idx >= len(check_queue):
-                    retry_cap = max(0, int(stress_config.get("blacklist_retry_candidates", 10)))
-                    if retry_cap > 0:
-                        retry_added = extend_check_queue(ranked_external[:retry_cap], ignore_blacklist=True)
-                        if retry_added:
-                            note_reason(reason_stats, "external_blacklist_retry_loaded", extra=str(retry_added))
-                            print(f"♻️ Повторно добавлены blacklist-кандидаты: +{retry_added} (лимит {retry_cap})")
-                    if idx >= len(check_queue):
-                        note_reason(reason_stats, "no_candidates_after_external_load")
-                        break
+                    note_reason(reason_stats, "no_candidates_after_external_load")
+                    break
             elif idx >= len(check_queue):
                 note_reason(reason_stats, "queue_exhausted")
                 break
