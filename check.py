@@ -468,18 +468,43 @@ def load_mobile_whitelist(config: dict) -> dict:
         "errors": errors,
     }
 
-def get_mobile_whitelist(config: dict) -> dict:
+def get_mobile_whitelist(config: dict, force_reload: bool = False) -> dict:
     global _MOBILE_WHITELIST_CACHE
     with _MOBILE_WHITELIST_LOCK:
-        if _MOBILE_WHITELIST_CACHE is not None:
+        retry_interval_sec = float(config.get("mobile_whitelist_retry_interval_sec", 60.0))
+        if _MOBILE_WHITELIST_CACHE is not None and not force_reload:
+            if _MOBILE_WHITELIST_CACHE.get("ok"):
+                return _MOBILE_WHITELIST_CACHE
+            failed_at = float(_MOBILE_WHITELIST_CACHE.get("failed_at", 0.0))
+            if (time.time() - failed_at) < max(1.0, retry_interval_sec):
+                return _MOBILE_WHITELIST_CACHE
+
+        if _MOBILE_WHITELIST_CACHE is not None and force_reload is False and _MOBILE_WHITELIST_CACHE.get("ok"):
             return _MOBILE_WHITELIST_CACHE
-        try:
-            wl = load_mobile_whitelist(config)
-            _MOBILE_WHITELIST_CACHE = wl
-            print(f"✅ Загружен mobile whitelist: domains={len(wl['domains'])}, ips={len(wl['ips'])}, cidrs={len(wl['cidrs'])}")
-        except Exception as e:
-            _MOBILE_WHITELIST_CACHE = {"ok": False, "domains": set(), "ips": set(), "cidrs": [], "error": str(e)}
-            print(f"⚠️ Не удалось загрузить mobile whitelist: {e}")
+
+        retries = max(1, int(config.get("mobile_whitelist_retries", 3)))
+        retry_sleep_sec = float(config.get("mobile_whitelist_retry_sleep_sec", 2.0))
+        last_error = None
+        for attempt in range(1, retries + 1):
+            try:
+                wl = load_mobile_whitelist(config)
+                _MOBILE_WHITELIST_CACHE = wl
+                print(f"✅ Загружен mobile whitelist: domains={len(wl['domains'])}, ips={len(wl['ips'])}, cidrs={len(wl['cidrs'])}")
+                return _MOBILE_WHITELIST_CACHE
+            except Exception as e:
+                last_error = e
+                if attempt < retries:
+                    time.sleep(max(0.0, retry_sleep_sec))
+
+        _MOBILE_WHITELIST_CACHE = {
+            "ok": False,
+            "domains": set(),
+            "ips": set(),
+            "cidrs": [],
+            "error": str(last_error),
+            "failed_at": time.time(),
+        }
+        print(f"⚠️ Не удалось загрузить mobile whitelist: {last_error}")
         return _MOBILE_WHITELIST_CACHE
 
 def is_sni_suspicious(link):
@@ -1227,6 +1252,9 @@ def main():
         "mobile_whitelist_enabled": True,
         "mobile_whitelist_fail_open": True,
         "mobile_whitelist_timeout_sec": 20.0,
+        "mobile_whitelist_retries": 3,
+        "mobile_whitelist_retry_sleep_sec": 2.0,
+        "mobile_whitelist_retry_interval_sec": 60.0,
         "mobile_whitelist_domains_url": DEFAULT_MOBILE_WHITELIST["domains_url"],
         "mobile_whitelist_ips_url": DEFAULT_MOBILE_WHITELIST["ips_url"],
         "mobile_whitelist_cidrs_url": DEFAULT_MOBILE_WHITELIST["cidrs_url"],
@@ -1269,6 +1297,9 @@ def main():
                 stress_config["mobile_whitelist_enabled"] = bool(data.get("mobile_whitelist_enabled", stress_config["mobile_whitelist_enabled"]))
                 stress_config["mobile_whitelist_fail_open"] = bool(data.get("mobile_whitelist_fail_open", stress_config["mobile_whitelist_fail_open"]))
                 stress_config["mobile_whitelist_timeout_sec"] = float(data.get("mobile_whitelist_timeout_sec", stress_config["mobile_whitelist_timeout_sec"]))
+                stress_config["mobile_whitelist_retries"] = int(data.get("mobile_whitelist_retries", stress_config["mobile_whitelist_retries"]))
+                stress_config["mobile_whitelist_retry_sleep_sec"] = float(data.get("mobile_whitelist_retry_sleep_sec", stress_config["mobile_whitelist_retry_sleep_sec"]))
+                stress_config["mobile_whitelist_retry_interval_sec"] = float(data.get("mobile_whitelist_retry_interval_sec", stress_config["mobile_whitelist_retry_interval_sec"]))
                 stress_config["mobile_whitelist_domains_url"] = str(data.get("mobile_whitelist_domains_url", stress_config["mobile_whitelist_domains_url"])).strip() or stress_config["mobile_whitelist_domains_url"]
                 stress_config["mobile_whitelist_ips_url"] = str(data.get("mobile_whitelist_ips_url", stress_config["mobile_whitelist_ips_url"])).strip() or stress_config["mobile_whitelist_ips_url"]
                 stress_config["mobile_whitelist_cidrs_url"] = str(data.get("mobile_whitelist_cidrs_url", stress_config["mobile_whitelist_cidrs_url"])).strip() or stress_config["mobile_whitelist_cidrs_url"]
@@ -1291,6 +1322,8 @@ def main():
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
         while len(working_for_sub) < 200:
+            if stress_config.get("mobile_whitelist_enabled", True):
+                mobile_whitelist = get_mobile_whitelist(stress_config)
             if time.time() - start_time >= max_check_duration_sec:
                 print(f"⏱️ Достигнут лимит времени проверки ({max_check_duration_sec} сек)")
                 note_reason(reason_stats, "limit_reached_time", extra=str(max_check_duration_sec))
