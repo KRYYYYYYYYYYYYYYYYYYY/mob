@@ -457,7 +457,6 @@ def probe_any_l7(link: str, timeout: int = 5) -> int:
         return 0
 
 # --- НОВЫЙ БЛОК: ФИЛЬТРАЦИЯ И КАНДИДАТЫ ---
-BAD_SNI_KEYWORDS = ['google', 'apple', 'microsoft', 'facebook', 'netflix', 'youtube']
 DEFAULT_MOBILE_WHITELIST = {
     "domains_url": "https://raw.githubusercontent.com/hxehex/russia-mobile-internet-whitelist/refs/heads/main/whitelist.txt",
     "ips_url": "https://raw.githubusercontent.com/hxehex/russia-mobile-internet-whitelist/refs/heads/main/ipwhitelist.txt",
@@ -588,16 +587,6 @@ def get_mobile_whitelist(config: dict, force_reload: bool = False) -> dict:
         }
         print(f"⚠️ Не удалось загрузить mobile whitelist: {last_error}")
         return _MOBILE_WHITELIST_CACHE
-
-def is_sni_suspicious(link):
-    """Проверяет, нет ли в SNI мусорных доменов (для мобильных сетей это важно)."""
-    sni = extract_sni(link).lower()
-    if not sni: 
-        return False
-    for word in BAD_SNI_KEYWORDS:
-        if word in sni:
-            return True
-    return False
 
 def is_link_in_mobile_whitelist(link: str, whitelist: dict, pc: dict | None = None) -> tuple[bool, str]:
     pc = pc or parse_any_link_cached(link)
