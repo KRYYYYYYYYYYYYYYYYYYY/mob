@@ -1204,13 +1204,16 @@ def main():
     # --- [ШАГ 2: ГОТОВИМ ОЧЕРЕДЬ НА ПРОВЕРКУ] ---
     check_queue = []
     seen_in_queue = set()
-    def extend_check_queue(links):
+    def extend_check_queue(links, *, ignore_blacklist=False):
+        added = 0
         for link in links:
             base = link.split('#')[0].strip()
             # Проверяем, что ссылки нет в бессмертных, она не дубликат в очереди и не в блэклисте
-            if base not in seen_immortals and base not in seen_in_queue and base not in blacklist:
+            if base not in seen_immortals and base not in seen_in_queue and (ignore_blacklist or base not in blacklist):
                 check_queue.append(link)
                 seen_in_queue.add(base)
+                added += 1
+        return added
 
     # Порядок строго по требованиям:
     # 1) сначала текущая база (уже используемые в подписке/прошлых прогонах),
@@ -1267,6 +1270,7 @@ def main():
         "mobile_whitelist_domains_url": DEFAULT_MOBILE_WHITELIST["domains_url"],
         "mobile_whitelist_ips_url": DEFAULT_MOBILE_WHITELIST["ips_url"],
         "mobile_whitelist_cidrs_url": DEFAULT_MOBILE_WHITELIST["cidrs_url"],
+        "blacklist_retry_candidates": 10,
     }
     if os.path.exists('test1/stress_profile.json'):
         try:
@@ -1314,6 +1318,7 @@ def main():
                 stress_config["mobile_whitelist_domains_url"] = str(data.get("mobile_whitelist_domains_url", stress_config["mobile_whitelist_domains_url"])).strip() or stress_config["mobile_whitelist_domains_url"]
                 stress_config["mobile_whitelist_ips_url"] = str(data.get("mobile_whitelist_ips_url", stress_config["mobile_whitelist_ips_url"])).strip() or stress_config["mobile_whitelist_ips_url"]
                 stress_config["mobile_whitelist_cidrs_url"] = str(data.get("mobile_whitelist_cidrs_url", stress_config["mobile_whitelist_cidrs_url"])).strip() or stress_config["mobile_whitelist_cidrs_url"]
+                stress_config["blacklist_retry_candidates"] = int(data.get("blacklist_retry_candidates", stress_config["blacklist_retry_candidates"]))
         except: pass
     # Принудительно работаем в mobile-only режиме для отбора под мобильную сеть.
     stress_config["profile_preset"] = "mobile_strict"
@@ -1348,12 +1353,20 @@ def main():
             # Если текущая и отложенная очереди закончились — один раз догружаем новые.
             if idx >= len(check_queue) and not raw_external_loaded:
                 raw_external = download_raw_data(EXTERNAL_SOURCE_URL)
-                extend_check_queue(sorted(raw_external, key=lambda l: ranking_sort_key(l, ranking_db)))
+                ranked_external = sorted(raw_external, key=lambda l: ranking_sort_key(l, ranking_db))
+                added = extend_check_queue(ranked_external)
                 raw_external_loaded = True
-                print(f"🆕 Догружены новые кандидаты: +{len(raw_external)} (в очереди теперь {len(check_queue) - idx})")
+                print(f"🆕 Догружены новые кандидаты: +{added}/{len(raw_external)} (в очереди теперь {len(check_queue) - idx})")
                 if idx >= len(check_queue):
-                    note_reason(reason_stats, "no_candidates_after_external_load")
-                    break
+                    retry_cap = max(0, int(stress_config.get("blacklist_retry_candidates", 10)))
+                    if retry_cap > 0:
+                        retry_added = extend_check_queue(ranked_external[:retry_cap], ignore_blacklist=True)
+                        if retry_added:
+                            note_reason(reason_stats, "external_blacklist_retry_loaded", extra=str(retry_added))
+                            print(f"♻️ Повторно добавлены blacklist-кандидаты: +{retry_added} (лимит {retry_cap})")
+                    if idx >= len(check_queue):
+                        note_reason(reason_stats, "no_candidates_after_external_load")
+                        break
             elif idx >= len(check_queue):
                 note_reason(reason_stats, "queue_exhausted")
                 break
