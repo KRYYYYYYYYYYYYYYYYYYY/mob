@@ -55,82 +55,39 @@ DEFAULT_MOBILE_USER_AGENTS = [
     "okhttp/4.12.0 v2rayNG/1.12.28",
 ]
 DEFAULT_PROBE_PATHS = ["/", "/generate_204", "/favicon.ico"]
+DEFAULT_MOBILE_HEADER_PROFILES = [
+    {
+        "user_agent": "Happ/3.15.1 (com.happproxy; Android 16; Samsung SM-A336B)",
+        "headers": {
+            "Accept": "*/*",
+            "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8",
+            "X-Requested-With": "com.happproxy",
+        },
+    },
+    {
+        "user_agent": "okhttp/4.12.0 v2rayNG/1.12.28",
+        "headers": {
+            "Accept": "*/*",
+            "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8",
+            "X-Requested-With": "com.v2ray.ang",
+        },
+    },
+    {
+        "user_agent": "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+        "headers": {
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8",
+            "Sec-CH-UA": "\"Chromium\";v=\"124\", \"Google Chrome\";v=\"124\", \"Not-A.Brand\";v=\"99\"",
+            "Sec-CH-UA-Mobile": "?1",
+            "Sec-CH-UA-Platform": "\"Android\"",
+        },
+    },
+]
 
 # Подключаем новую библиотеку
 go_lib = None
 HOST_GATES = {}
 HOST_LOCKS_GUARD = Lock()
-REASON_LOG_BUFFER = []
-REASON_LOG_LOCK = Lock()
-REASON_LOG_FLUSH_EVERY = 500
-REASON_LOG_FLUSH_INTERVAL_SEC = 10.0
-REASON_LOG_LAST_FLUSH_TS = time.time()
-_GEOIP_READER = None
-_GEOIP_READER_READY = False
-
-@lru_cache(maxsize=50000)
-def resolve_ipv4_cached(host: str) -> str:
-    if not host:
-        return host
-    return socket.gethostbyname(host)
-
-def _flush_reason_log_locked(force: bool = False) -> None:
-    global REASON_LOG_LAST_FLUSH_TS
-    now = time.time()
-    if not REASON_LOG_BUFFER:
-        REASON_LOG_LAST_FLUSH_TS = now
-        return
-    if not force:
-        if len(REASON_LOG_BUFFER) < REASON_LOG_FLUSH_EVERY and (now - REASON_LOG_LAST_FLUSH_TS) < REASON_LOG_FLUSH_INTERVAL_SEC:
-            return
-    with open(CHECK_LOG_FILE, "a", encoding="utf-8") as f:
-        f.write("\n".join(REASON_LOG_BUFFER) + "\n")
-    REASON_LOG_BUFFER.clear()
-    REASON_LOG_LAST_FLUSH_TS = now
-
-def flush_reason_log(force: bool = False) -> None:
-    with REASON_LOG_LOCK:
-        _flush_reason_log_locked(force=force)
-
-def get_geoip_country_code(ip: str) -> str | None:
-    """
-    Пытается определить страну через локальную MMDB-базу.
-    База опциональна: если недоступна, вернет None (далее fallback к API).
-    """
-    global _GEOIP_READER, _GEOIP_READER_READY
-    if _GEOIP_READER_READY and _GEOIP_READER is None:
-        return None
-    if not _GEOIP_READER_READY:
-        mmdb_candidates = [
-            os.getenv("GEOIP_MMDB_PATH", "").strip(),
-            "test1/GeoLite2-Country.mmdb",
-            "GeoLite2-Country.mmdb",
-        ]
-        mmdb_path = next((p for p in mmdb_candidates if p and os.path.exists(p)), "")
-        if not mmdb_path:
-            _GEOIP_READER_READY = True
-            _GEOIP_READER = None
-            return None
-        try:
-            import geoip2.database
-            _GEOIP_READER = geoip2.database.Reader(mmdb_path)
-            print(f"🌍 GeoIP MMDB загружена: {mmdb_path}")
-        except Exception as e:
-            print(f"⚠️ GeoIP MMDB недоступна ({mmdb_path}): {e}")
-            _GEOIP_READER = None
-        finally:
-            _GEOIP_READER_READY = True
-
-    if _GEOIP_READER is None:
-        return None
-    try:
-        record = _GEOIP_READER.country(ip)
-        code = getattr(getattr(record, "country", None), "iso_code", None)
-        if code:
-            return str(code)
-    except Exception:
-        return None
-    return None
 
 def get_host_gate(host: str, max_parallel_per_host: int) -> BoundedSemaphore:
     permits = max(1, int(max_parallel_per_host))
@@ -198,6 +155,53 @@ def init_checker_lib() -> None:
         ctypes.c_int,     # timeout
     ]
     go_lib.CheckAnyL7.restype = ctypes.c_int
+    if hasattr(go_lib, "SetProbeProfilesJSON"):
+        go_lib.SetProbeProfilesJSON.argtypes = [ctypes.c_char_p]
+        go_lib.SetProbeProfilesJSON.restype = ctypes.c_int
+
+def configure_go_probe_profiles(stress_config: dict) -> None:
+    """Прокидывает профили HTTP-заголовков в Go checker, если функция доступна."""
+    if go_lib is None or not hasattr(go_lib, "SetProbeProfilesJSON"):
+        return
+    raw_profiles = stress_config.get("mobile_header_profiles")
+    profiles = []
+    if isinstance(raw_profiles, list):
+        for p in raw_profiles:
+            if not isinstance(p, dict):
+                continue
+            ua = str(p.get("user_agent", "")).strip()
+            if not ua:
+                continue
+            headers = {}
+            if isinstance(p.get("headers"), dict):
+                for k, v in p["headers"].items():
+                    kk = str(k).strip()
+                    vv = str(v).strip()
+                    if kk and vv:
+                        headers[kk] = vv
+            profiles.append({"user_agent": ua, "headers": headers})
+    if not profiles:
+        # Фолбэк: соберем минимальные профили из user_agents.
+        for ua in stress_config.get("user_agents", [])[:5]:
+            u = str(ua).strip()
+            if not u:
+                continue
+            profiles.append({
+                "user_agent": u,
+                "headers": {
+                    "Accept": "*/*",
+                    "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8",
+                },
+            })
+    try:
+        payload = json.dumps(profiles, ensure_ascii=False).encode("utf-8")
+        rc = int(go_lib.SetProbeProfilesJSON(payload))
+        if rc == 1:
+            print(f"🧩 Go probe profiles configured: {len(profiles)}")
+        else:
+            print("⚠️ Go probe profiles rejected, keeping built-in defaults")
+    except Exception as e:
+        print(f"⚠️ Не удалось передать Go probe profiles: {e}")
 
 def probe_vless_l7(link, target_sni, timeout=5):
     """Парсит VLESS ссылку и возвращает пинг в мс (0 если ошибка)."""
@@ -963,22 +967,19 @@ def get_country_code(host, cache):
     if not is_ipv6(host):
         try:
             if not re.match(r"^\d{1,3}(\.\d{1,3}){3}$", host):
-                ip = resolve_ipv4_cached(host)
-        except Exception:
+                ip = socket.gethostbyname(host)
+        except:
             ip = host
 
     # 2. МГНОВЕННЫЙ ОТВЕТ: Если IP уже в кэше, выдаем результат БЕЗ пауз
     if ip in cache:
         return cache[ip]
 
-    # 3. ПЫТАЕМСЯ ЛОКАЛЬНЫЙ GeoIP (MMDB), если доступен
-    local_code = get_geoip_country_code(ip.replace("[", "").replace("]", ""))
-    if local_code:
-        cache[ip] = local_code
-        return local_code
-
-    # 4. FALLBACK: запрос к API, только если IP новый и MMDB недоступна
+    # 3. ЗАПРОС К API: Только если IP новый
     try:
+        # Паузу делаем ТОЛЬКО перед реальным сетевым запросом
+        time.sleep(0.5) 
+        
         clean_ip = ip.replace("[", "").replace("]", "")
         url = f"http://ip-api.com/json/{clean_ip}?fields=status,countryCode"
         
@@ -990,7 +991,7 @@ def get_country_code(host, cache):
                 # Сразу сохраняем в кэш
                 cache[ip] = code 
                 return code
-    except Exception:
+    except:
         pass
         
     return "Unknown"
@@ -1041,9 +1042,8 @@ def note_reason(reason_stats: dict, reason: str, base_part: str = "", extra: str
         line += f" | {base_part}"
     if extra:
         line += f" | {extra}"
-    with REASON_LOG_LOCK:
-        REASON_LOG_BUFFER.append(line)
-        _flush_reason_log_locked(force=False)
+    with open(CHECK_LOG_FILE, "a", encoding="utf-8") as f:
+        f.write(line + "\n")
 
 def normalize_rank_entry(base_part: str, entry):
     """Приводит запись ranking.json к единому виду."""
@@ -1176,16 +1176,12 @@ def l7_multi_probe(link: str, stress_config: dict):
 
 def main():
     import subprocess
-    global REASON_LOG_LAST_FLUSH_TS
     token = os.getenv("GH_TOKEN")
     repo = os.getenv("GITHUB_REPOSITORY")
     reason_stats = {}
     # сбрасываем лог текущего прогона
     with open(CHECK_LOG_FILE, "w", encoding="utf-8") as f:
         f.write("")
-    with REASON_LOG_LOCK:
-        REASON_LOG_BUFFER.clear()
-        REASON_LOG_LAST_FLUSH_TS = time.time()
 
     # --- ЗАГРУЗКА КЭША СТРАН ---
     countries_cache = {}
@@ -1340,6 +1336,7 @@ def main():
         "stability_p95_max_ms": 6000,
         "user_agents": list(DEFAULT_MOBILE_USER_AGENTS),
         "probe_paths": list(DEFAULT_PROBE_PATHS),
+        "mobile_header_profiles": list(DEFAULT_MOBILE_HEADER_PROFILES),
         "mobile_whitelist_enabled": True,
         "mobile_whitelist_fail_open": True,
         "mobile_whitelist_timeout_sec": 20.0,
@@ -1388,6 +1385,8 @@ def main():
                     stress_config["user_agents"] = [str(x) for x in data["user_agents"] if str(x).strip()]
                 if isinstance(data.get("probe_paths"), list) and data.get("probe_paths"):
                     stress_config["probe_paths"] = [str(x) for x in data["probe_paths"] if str(x).strip()]
+                if isinstance(data.get("mobile_header_profiles"), list) and data.get("mobile_header_profiles"):
+                    stress_config["mobile_header_profiles"] = data.get("mobile_header_profiles")
                 stress_config["mobile_whitelist_enabled"] = bool(data.get("mobile_whitelist_enabled", stress_config["mobile_whitelist_enabled"]))
                 stress_config["mobile_whitelist_fail_open"] = bool(data.get("mobile_whitelist_fail_open", stress_config["mobile_whitelist_fail_open"]))
                 stress_config["mobile_whitelist_timeout_sec"] = float(data.get("mobile_whitelist_timeout_sec", stress_config["mobile_whitelist_timeout_sec"]))
@@ -1402,6 +1401,7 @@ def main():
     # Принудительно работаем в mobile-only режиме для отбора под мобильную сеть.
     stress_config["profile_preset"] = "mobile_strict"
     apply_profile_preset(stress_config, stress_config.get("profile_preset", "mobile_strict"))
+    configure_go_probe_profiles(stress_config)
     mobile_whitelist = None
     if stress_config.get("mobile_whitelist_enabled", True):
         mobile_whitelist = get_mobile_whitelist(stress_config)
@@ -1652,7 +1652,6 @@ def main():
         json.dump(ranking_db, f, ensure_ascii=False, indent=4)
     with open(REASONS_FILE, "w", encoding="utf-8") as f:
         json.dump(reason_stats, f, ensure_ascii=False, indent=4)
-    flush_reason_log(force=True)
 
     print(f"🏁 Завершено. Подписка: {len(working_for_sub)}, Очередь: {len(new_deferred)}")
     print(f"🧾 Reasons: {json.dumps(reason_stats, ensure_ascii=False)}")
