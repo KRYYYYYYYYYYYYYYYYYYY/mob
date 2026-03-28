@@ -76,7 +76,8 @@ def l7_multi_probe_host_serialized(link: str, host: str, stress_config: dict):
     """
     lock = get_host_lock(host)
     with lock:
-        return l7_multi_probe(link, stress_config)
+        tuned_cfg = tuned_probe_settings(link, stress_config)
+        return l7_multi_probe(link, tuned_cfg)
 
 
 def init_checker_lib() -> None:
@@ -375,6 +376,15 @@ def probe_any_l7(link: str, timeout: int = 5) -> int:
 
 # --- НОВЫЙ БЛОК: ФИЛЬТРАЦИЯ И КАНДИДАТЫ ---
 BAD_SNI_KEYWORDS = ['google', 'apple', 'microsoft', 'facebook', 'netflix', 'youtube']
+REALITY_PBK_RE = re.compile(r"^[A-Za-z0-9_-]{43,44}$")
+REALITY_SID_RE = re.compile(r"^[0-9a-fA-F]{0,32}$")
+FLOW_ALIASES = {
+    "xtls-rprx-visi": "xtls-rprx-vision",
+}
+FLOW_ALLOWED = {
+    "",
+    "xtls-rprx-vision",
+}
 
 def is_sni_suspicious(link):
     """Проверяет, нет ли в SNI мусорных доменов (для мобильных сетей это важно)."""
@@ -477,11 +487,20 @@ def validate_transport_requirements(link: str):
     net_type = str(pc.get("net_type", "tcp")).lower()
     sni = str(pc.get("sni", "")).strip()
     pbk = str(pc.get("pbk", "")).strip()
+    sid = str(pc.get("sid", "")).strip()
+    flow = FLOW_ALIASES.get(str(pc.get("flow", "")).strip().lower(), str(pc.get("flow", "")).strip().lower())
 
     if security in {"tls", "reality"} and not sni:
         return False, "skip_missing_sni_for_tls"
-    if security == "reality" and not pbk:
-        return False, "skip_missing_pbk_for_reality"
+    if security == "reality":
+        if not pbk:
+            return False, "skip_missing_pbk_for_reality"
+        if not REALITY_PBK_RE.match(pbk):
+            return False, "skip_bad_pbk_for_reality"
+        if not REALITY_SID_RE.match(sid):
+            return False, "skip_bad_sid_for_reality"
+        if flow not in FLOW_ALLOWED:
+            return False, "skip_bad_flow_for_reality"
     if net_type == "ws" and not str(pc.get("path", "")).strip():
         return False, "skip_missing_ws_path"
     return True, ""
@@ -497,6 +516,79 @@ def build_recheck_stress_config(stress_config: dict) -> dict:
     cfg["l7_min_success"] = 1
     cfg["min_success"] = 1
     cfg["between_attempts_sleep"] = max(float(stress_config.get("between_attempts_sleep", 0.35)), 0.45)
+    return cfg
+
+def apply_profile_preset(stress_config: dict, profile_name: str) -> None:
+    """
+    Профили для разных задач:
+    - mobile_strict: отсекает Wi‑Fi-only узлы, оставляет более стабильные под мобильную сеть.
+    - wifi_lenient: мягче к нестабильности, чтобы не терять рабочие на Wi‑Fi ссылки.
+    - balanced: компромисс.
+    """
+    name = (profile_name or "mobile_strict").strip().lower()
+    if name == "mobile_strict":
+        stress_config["probe_attempts"] = max(4, int(stress_config.get("probe_attempts", 4)))
+        stress_config["l7_min_success"] = max(2, int(stress_config.get("l7_min_success", 2)))
+        stress_config["stability_min_success_rate"] = max(0.60, float(stress_config.get("stability_min_success_rate", 0.5)))
+        stress_config["stability_max_loss_rate"] = min(0.35, float(stress_config.get("stability_max_loss_rate", 0.5)))
+        stress_config["stability_max_jitter_ms"] = min(650, int(stress_config.get("stability_max_jitter_ms", 800)))
+    elif name == "wifi_lenient":
+        stress_config["probe_attempts"] = max(3, int(stress_config.get("probe_attempts", 4)))
+        stress_config["l7_min_success"] = 1
+        stress_config["stability_min_success_rate"] = min(0.34, float(stress_config.get("stability_min_success_rate", 0.5)))
+        stress_config["stability_max_loss_rate"] = max(0.60, float(stress_config.get("stability_max_loss_rate", 0.5)))
+        stress_config["stability_max_jitter_ms"] = max(1100, int(stress_config.get("stability_max_jitter_ms", 800)))
+    else:
+        # Для этого репозитория по умолчанию держим только mobile-friendly профиль.
+        stress_config["probe_attempts"] = max(4, int(stress_config.get("probe_attempts", 4)))
+        stress_config["l7_min_success"] = max(2, int(stress_config.get("l7_min_success", 2)))
+        stress_config["stability_min_success_rate"] = max(0.60, float(stress_config.get("stability_min_success_rate", 0.5)))
+        stress_config["stability_max_loss_rate"] = min(0.35, float(stress_config.get("stability_max_loss_rate", 0.5)))
+        stress_config["stability_max_jitter_ms"] = min(650, int(stress_config.get("stability_max_jitter_ms", 800)))
+
+def is_mobile_only_candidate(link: str) -> tuple[bool, str]:
+    """
+    Жесткий фильтр для mobile-only отбора:
+    - отсекаем SS;
+    - принимаем только TLS/REALITY;
+    - для TLS/REALITY обязателен SNI;
+    """
+    pc = parse_any_link(link)
+    if not pc:
+        return False, "skip_mobile_bad_parsed_link"
+    scheme = str(pc.get("scheme", "")).lower()
+    security = str(pc.get("security", "none")).lower()
+    sni = str(pc.get("sni", "")).strip()
+
+    if scheme == "shadowsocks":
+        return False, "skip_mobile_non_tls_scheme"
+    if security not in {"tls", "reality"}:
+        return False, "skip_mobile_non_tls_security"
+    if not sni:
+        return False, "skip_mobile_missing_sni"
+    return True, ""
+
+def tuned_probe_settings(link: str, stress_config: dict) -> dict:
+    """
+    Локальная подстройка проб под тип протокола/транспорта.
+    Позволяет ускорить общий цикл и отдельно подкрутить REALITY/WS.
+    """
+    cfg = dict(stress_config)
+    pc = parse_any_link(link)
+    if not pc:
+        return cfg
+
+    security = str(pc.get("security", "none")).lower()
+    net_type = str(pc.get("net_type", "tcp")).lower()
+
+    if security == "reality":
+        cfg["probe_attempts"] = max(int(cfg.get("probe_attempts", 4)), int(stress_config.get("reality_probe_attempts", 4)))
+        cfg["timeout"] = max(float(cfg.get("timeout", 2.5)), float(stress_config.get("reality_timeout", 3.5)))
+        cfg["l7_reject_threshold"] = max(2, int(stress_config.get("reality_reject_threshold", cfg.get("l7_reject_threshold", 2))))
+    if net_type == "ws":
+        cfg["probe_attempts"] = max(int(cfg.get("probe_attempts", 4)), int(stress_config.get("ws_probe_attempts", 4)))
+        cfg["timeout"] = max(float(cfg.get("timeout", 2.5)), float(stress_config.get("ws_timeout", 3.5)))
+
     return cfg
 
 
@@ -997,8 +1089,9 @@ def main():
         "between_attempts_sleep": 0.35,
         "l7_min_success": 2,
         "workers": 32,
+        "profile_preset": "mobile_strict",
         "max_latency_ms": 6000,
-        "max_check_duration_sec": 5 * 60 * 60,
+        "max_check_duration_sec": 2 * 60 * 60,
         "stability_max_spread_ms": 1200,
         "stability_max_ratio": 4.0,
         "stability_max_na": 0,
@@ -1033,6 +1126,12 @@ def main():
                 stress_config["stability_p95_max_ms"] = int(data.get("stability_p95_max_ms", stress_config["stability_p95_max_ms"]))
                 stress_config["recv_timeout"] = float(data.get("recv_timeout", stress_config["recv_timeout"]))
                 stress_config["between_attempts_sleep"] = float(data.get("between_attempts_sleep", stress_config["between_attempts_sleep"]))
+                stress_config["profile_preset"] = str(data.get("profile_preset", stress_config["profile_preset"])).strip() or "mobile_strict"
+                stress_config["reality_probe_attempts"] = int(data.get("reality_probe_attempts", stress_config["probe_attempts"]))
+                stress_config["reality_timeout"] = float(data.get("reality_timeout", max(stress_config["timeout"], 3.5)))
+                stress_config["reality_reject_threshold"] = int(data.get("reality_reject_threshold", 2))
+                stress_config["ws_probe_attempts"] = int(data.get("ws_probe_attempts", stress_config["probe_attempts"]))
+                stress_config["ws_timeout"] = float(data.get("ws_timeout", max(stress_config["timeout"], 3.5)))
                 if isinstance(data.get("mobile_user_agents"), list) and data.get("mobile_user_agents"):
                     stress_config["user_agents"] = [str(x) for x in data["mobile_user_agents"] if str(x).strip()]
                 elif isinstance(data.get("user_agents"), list) and data.get("user_agents"):
@@ -1040,6 +1139,9 @@ def main():
                 if isinstance(data.get("probe_paths"), list) and data.get("probe_paths"):
                     stress_config["probe_paths"] = [str(x) for x in data["probe_paths"] if str(x).strip()]
         except: pass
+    # Принудительно работаем в mobile-only режиме для отбора под мобильную сеть.
+    stress_config["profile_preset"] = "mobile_strict"
+    apply_profile_preset(stress_config, stress_config.get("profile_preset", "mobile_strict"))
 
     raw_external_loaded = False
     print(f"📡 Начинаю добор до 200. В очереди (текущие+отложенные): {len(check_queue)}")
@@ -1047,7 +1149,7 @@ def main():
     # --- [ШАГ 4: ЦИКЛ ПРОВЕРКИ] ---
     workers = max(1, int(stress_config.get("workers", 32)))
     batch_size = max(20, workers * 2)
-    max_check_duration_sec = max(60, int(stress_config.get("max_check_duration_sec", 5 * 60 * 60)))
+    max_check_duration_sec = max(60, int(stress_config.get("max_check_duration_sec", 2 * 60 * 60)))
     print(f"⚙️ Параллельная проверка: workers={workers}, batch={batch_size}")
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
@@ -1120,7 +1222,6 @@ def main():
                 if is_ipv6(host):
                     note_reason(reason_stats, "skip_ipv6", base_part)
                     add_to_blacklist(base_part)
-                    remove_from_input_file(base_part)
                     continue
 
                 auth_ok, auth_reason = validate_protocol_auth(base_part, link_scheme)
@@ -1132,6 +1233,12 @@ def main():
                 transport_ok, transport_reason = validate_transport_requirements(base_part)
                 if not transport_ok:
                     note_reason(reason_stats, transport_reason, base_part)
+                    add_to_blacklist(base_part)
+                    continue
+
+                mobile_ok, mobile_reason = is_mobile_only_candidate(base_part)
+                if not mobile_ok:
+                    note_reason(reason_stats, mobile_reason, base_part)
                     add_to_blacklist(base_part)
                     continue
 
@@ -1149,7 +1256,6 @@ def main():
                     break
                 base_part, host = futures[fut]
                 checked_today += 1
-                remove_from_input_file(base_part)
                 print(f"🔍 Тестирую: {host}...", end=" ", flush=True)
                 try:
                     is_alive, current_latency = fut.result()
