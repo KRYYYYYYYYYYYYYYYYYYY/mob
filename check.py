@@ -376,6 +376,11 @@ def probe_any_l7(link: str, timeout: int = 5) -> int:
 
 # --- НОВЫЙ БЛОК: ФИЛЬТРАЦИЯ И КАНДИДАТЫ ---
 BAD_SNI_KEYWORDS = ['google', 'apple', 'microsoft', 'facebook', 'netflix', 'youtube']
+DEFAULT_MOBILE_WHITELIST = {
+    "domains_url": "https://raw.githubusercontent.com/hxehex/russia-mobile-internet-whitelist/refs/heads/main/whitelist.txt",
+    "ips_url": "https://raw.githubusercontent.com/hxehex/russia-mobile-internet-whitelist/refs/heads/main/ipwhitelist.txt",
+    "cidrs_url": "https://raw.githubusercontent.com/hxehex/russia-mobile-internet-whitelist/refs/heads/main/cidrwhitelist.txt",
+}
 REALITY_PBK_RE = re.compile(r"^[A-Za-z0-9_-]{43,44}$")
 REALITY_SID_RE = re.compile(r"^[0-9a-fA-F]{0,32}$")
 FLOW_ALIASES = {
@@ -385,6 +390,97 @@ FLOW_ALLOWED = {
     "",
     "xtls-rprx-vision",
 }
+_MOBILE_WHITELIST_CACHE = None
+_MOBILE_WHITELIST_LOCK = Lock()
+
+def _download_lines(url: str, timeout: float = 20.0) -> list[str]:
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        raw = resp.read().decode("utf-8", errors="ignore")
+    out = []
+    for line in raw.splitlines():
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        out.append(s)
+    return out
+
+def _normalize_domain(value: str) -> str:
+    d = (value or "").strip().lower().rstrip(".")
+    if not d:
+        return ""
+    if "://" in d:
+        try:
+            p = urllib.parse.urlparse(d)
+            d = (p.hostname or "").strip().lower().rstrip(".")
+        except Exception:
+            return ""
+    return d
+
+def _is_domain_allowed(domain: str, allow_domains: set[str]) -> bool:
+    d = _normalize_domain(domain)
+    if not d:
+        return False
+    if d in allow_domains:
+        return True
+    parts = d.split(".")
+    for i in range(1, len(parts) - 1):
+        tail = ".".join(parts[i:])
+        if tail in allow_domains:
+            return True
+    return False
+
+def load_mobile_whitelist(config: dict) -> dict:
+    domains_url = str(config.get("mobile_whitelist_domains_url", DEFAULT_MOBILE_WHITELIST["domains_url"])).strip()
+    ips_url = str(config.get("mobile_whitelist_ips_url", DEFAULT_MOBILE_WHITELIST["ips_url"])).strip()
+    cidrs_url = str(config.get("mobile_whitelist_cidrs_url", DEFAULT_MOBILE_WHITELIST["cidrs_url"])).strip()
+    timeout = float(config.get("mobile_whitelist_timeout_sec", 20.0))
+    domains: set[str] = set()
+    ips: set[str] = set()
+    cidrs = []
+    errors = []
+
+    for item in _download_lines(domains_url, timeout=timeout):
+        d = _normalize_domain(item)
+        if d:
+            domains.add(d)
+
+    for item in _download_lines(ips_url, timeout=timeout):
+        s = item.strip()
+        try:
+            ipaddress.ip_address(s)
+            ips.add(s)
+        except Exception:
+            errors.append(f"bad_ip:{s}")
+
+    for item in _download_lines(cidrs_url, timeout=timeout):
+        s = item.strip()
+        try:
+            cidrs.append(ipaddress.ip_network(s, strict=False))
+        except Exception:
+            errors.append(f"bad_cidr:{s}")
+
+    return {
+        "ok": True,
+        "domains": domains,
+        "ips": ips,
+        "cidrs": cidrs,
+        "errors": errors,
+    }
+
+def get_mobile_whitelist(config: dict) -> dict:
+    global _MOBILE_WHITELIST_CACHE
+    with _MOBILE_WHITELIST_LOCK:
+        if _MOBILE_WHITELIST_CACHE is not None:
+            return _MOBILE_WHITELIST_CACHE
+        try:
+            wl = load_mobile_whitelist(config)
+            _MOBILE_WHITELIST_CACHE = wl
+            print(f"✅ Загружен mobile whitelist: domains={len(wl['domains'])}, ips={len(wl['ips'])}, cidrs={len(wl['cidrs'])}")
+        except Exception as e:
+            _MOBILE_WHITELIST_CACHE = {"ok": False, "domains": set(), "ips": set(), "cidrs": [], "error": str(e)}
+            print(f"⚠️ Не удалось загрузить mobile whitelist: {e}")
+        return _MOBILE_WHITELIST_CACHE
 
 def is_sni_suspicious(link):
     """Проверяет, нет ли в SNI мусорных доменов (для мобильных сетей это важно)."""
@@ -395,6 +491,32 @@ def is_sni_suspicious(link):
         if word in sni:
             return True
     return False
+
+def is_link_in_mobile_whitelist(link: str, whitelist: dict) -> tuple[bool, str]:
+    pc = parse_any_link(link)
+    if not pc:
+        return False, "skip_bad_parsed_link"
+    security = str(pc.get("security", "")).strip().lower()
+    if security not in {"tls", "reality"}:
+        return False, "skip_mobile_non_tls_security"
+
+    candidates = []
+    for field in ("sni", "host_hdr", "addr"):
+        v = str(pc.get(field, "")).strip()
+        if v:
+            candidates.append(v)
+
+    for v in candidates:
+        try:
+            ip = ipaddress.ip_address(v)
+            if str(ip) in whitelist.get("ips", set()):
+                return True, "ok_mobile_whitelist_ip"
+            if any(ip in net for net in whitelist.get("cidrs", [])):
+                return True, "ok_mobile_whitelist_cidr"
+        except Exception:
+            if _is_domain_allowed(v, whitelist.get("domains", set())):
+                return True, "ok_mobile_whitelist_domain"
+    return False, "skip_mobile_not_in_whitelist"
 
 def extract_sni_candidates(link):
     """Вытягивает список потенциальных SNI из разных частей ссылки."""
@@ -1102,6 +1224,12 @@ def main():
         "stability_p95_max_ms": 6000,
         "user_agents": list(DEFAULT_MOBILE_USER_AGENTS),
         "probe_paths": list(DEFAULT_PROBE_PATHS),
+        "mobile_whitelist_enabled": True,
+        "mobile_whitelist_fail_open": False,
+        "mobile_whitelist_timeout_sec": 20.0,
+        "mobile_whitelist_domains_url": DEFAULT_MOBILE_WHITELIST["domains_url"],
+        "mobile_whitelist_ips_url": DEFAULT_MOBILE_WHITELIST["ips_url"],
+        "mobile_whitelist_cidrs_url": DEFAULT_MOBILE_WHITELIST["cidrs_url"],
     }
     if os.path.exists('test1/stress_profile.json'):
         try:
@@ -1138,10 +1266,19 @@ def main():
                     stress_config["user_agents"] = [str(x) for x in data["user_agents"] if str(x).strip()]
                 if isinstance(data.get("probe_paths"), list) and data.get("probe_paths"):
                     stress_config["probe_paths"] = [str(x) for x in data["probe_paths"] if str(x).strip()]
+                stress_config["mobile_whitelist_enabled"] = bool(data.get("mobile_whitelist_enabled", stress_config["mobile_whitelist_enabled"]))
+                stress_config["mobile_whitelist_fail_open"] = bool(data.get("mobile_whitelist_fail_open", stress_config["mobile_whitelist_fail_open"]))
+                stress_config["mobile_whitelist_timeout_sec"] = float(data.get("mobile_whitelist_timeout_sec", stress_config["mobile_whitelist_timeout_sec"]))
+                stress_config["mobile_whitelist_domains_url"] = str(data.get("mobile_whitelist_domains_url", stress_config["mobile_whitelist_domains_url"])).strip() or stress_config["mobile_whitelist_domains_url"]
+                stress_config["mobile_whitelist_ips_url"] = str(data.get("mobile_whitelist_ips_url", stress_config["mobile_whitelist_ips_url"])).strip() or stress_config["mobile_whitelist_ips_url"]
+                stress_config["mobile_whitelist_cidrs_url"] = str(data.get("mobile_whitelist_cidrs_url", stress_config["mobile_whitelist_cidrs_url"])).strip() or stress_config["mobile_whitelist_cidrs_url"]
         except: pass
     # Принудительно работаем в mobile-only режиме для отбора под мобильную сеть.
     stress_config["profile_preset"] = "mobile_strict"
     apply_profile_preset(stress_config, stress_config.get("profile_preset", "mobile_strict"))
+    mobile_whitelist = None
+    if stress_config.get("mobile_whitelist_enabled", True):
+        mobile_whitelist = get_mobile_whitelist(stress_config)
 
     raw_external_loaded = False
     print(f"📡 Начинаю добор до 200. В очереди (текущие+отложенные): {len(check_queue)}")
@@ -1192,11 +1329,6 @@ def main():
                     note_reason(reason_stats, "skip_unknown_scheme", base_part)
                     continue
 
-                # SNI-фильтр — только для vless (у vmess/trojan/ss нет sni= в URL)
-                if link_scheme == "vless" and is_sni_suspicious(link):
-                    note_reason(reason_stats, "skip_sni_suspicious", base_part)
-                    continue
-
                 # Извлекаем хост/порт: для vmess из base64, иначе из URL
                 if link_scheme == "vmess":
                     pc = parse_vmess_link(base_part)
@@ -1241,6 +1373,19 @@ def main():
                     note_reason(reason_stats, mobile_reason, base_part)
                     add_to_blacklist(base_part)
                     continue
+
+                if link_scheme == "vless":
+                    if mobile_whitelist and mobile_whitelist.get("ok"):
+                        wl_ok, wl_reason = is_link_in_mobile_whitelist(base_part, mobile_whitelist)
+                        if not wl_ok:
+                            note_reason(reason_stats, wl_reason, base_part)
+                            add_to_blacklist(base_part)
+                            continue
+                    elif stress_config.get("mobile_whitelist_enabled", True):
+                        if not stress_config.get("mobile_whitelist_fail_open", False):
+                            note_reason(reason_stats, "skip_mobile_whitelist_unavailable", base_part)
+                            add_to_blacklist(base_part)
+                            continue
 
                 batch.append((link, base_part, host))
 
