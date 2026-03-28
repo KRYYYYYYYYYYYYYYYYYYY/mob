@@ -55,6 +55,47 @@ var probeProfiles = []probeProfile{
 	},
 }
 
+//export SetProbeProfilesJSON
+func SetProbeProfilesJSON(profilesJSON *C.char) C.int {
+	if profilesJSON == nil {
+		return 0
+	}
+	raw := strings.TrimSpace(C.GoString(profilesJSON))
+	if raw == "" {
+		return 0
+	}
+	type profileIn struct {
+		UserAgent string            `json:"user_agent"`
+		Headers   map[string]string `json:"headers"`
+	}
+	var in []profileIn
+	if err := json.Unmarshal([]byte(raw), &in); err != nil {
+		return 0
+	}
+	next := make([]probeProfile, 0, len(in))
+	for _, p := range in {
+		ua := strings.TrimSpace(p.UserAgent)
+		if ua == "" {
+			continue
+		}
+		hdr := map[string]string{}
+		for k, v := range p.Headers {
+			kk := strings.TrimSpace(k)
+			vv := strings.TrimSpace(v)
+			if kk == "" || vv == "" {
+				continue
+			}
+			hdr[kk] = vv
+		}
+		next = append(next, probeProfile{UserAgent: ua, Headers: hdr})
+	}
+	if len(next) == 0 {
+		return 0
+	}
+	probeProfiles = next
+	return 1
+}
+
 func applyProbeHeaders(req *http.Request, idx int) {
 	req.Header.Set("Connection", "close")
 	if len(probeProfiles) == 0 {
