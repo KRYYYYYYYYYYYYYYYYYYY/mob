@@ -1,3 +1,4 @@
+
 package main
 
 import "C"
@@ -70,7 +71,7 @@ func extractSNICandidates(sni, hostHdr, fallbackHost string) []string {
 // Вдохновлено build.go из crazy_xray_checker.
 func buildProxyConfig(
 	scheme, addr string, port int,
-	id, security, sni, pbk, sid, flow, netType, path, hostHdr, method, password string,
+	id, security, sni, pbk, sid, fp, flow, netType, path, hostHdr, method, password string,
 	socksPort int,
 ) ([]byte, error) {
 	type Obj = map[string]any
@@ -101,9 +102,13 @@ func buildProxyConfig(
 		stream["tlsSettings"] = tlsSettings
 	case "reality":
 		stream["security"] = "reality"
+		fingerprint := strings.TrimSpace(fp)
+		if fingerprint == "" {
+			fingerprint = "chrome"
+		}
 		stream["realitySettings"] = Obj{
 			"show":        false,
-			"fingerprint": "chrome",
+			"fingerprint": fingerprint,
 			"serverName":  sni,
 			"publicKey":   pbk,
 			"shortId":     sid,
@@ -335,6 +340,7 @@ func CheckAnyL7(
 	cSni      *C.char,
 	cPbk      *C.char,
 	cSid      *C.char,
+	cFp       *C.char,
 	cFlow     *C.char,
 	cNetType  *C.char,
 	cPath     *C.char,
@@ -351,6 +357,7 @@ func CheckAnyL7(
 	sni      := strings.TrimSpace(C.GoString(cSni))
 	pbk      := strings.TrimSpace(C.GoString(cPbk))
 	sid      := strings.TrimSpace(C.GoString(cSid))
+	fp       := strings.TrimSpace(C.GoString(cFp))
 	flow     := strings.TrimSpace(C.GoString(cFlow))
 	netType  := strings.TrimSpace(C.GoString(cNetType))
 	path     := strings.TrimSpace(C.GoString(cPath))
@@ -367,7 +374,11 @@ func CheckAnyL7(
 	}
 
 	// Быстрый TCP-проб (из crazy_xray_checker)
-	d := net.Dialer{Timeout: 800 * time.Millisecond}
+	precheckTimeout := time.Duration(timeout) * time.Second
+	if precheckTimeout < 3*time.Second {
+		precheckTimeout = 3 * time.Second
+	}
+	d := net.Dialer{Timeout: precheckTimeout}
 	conn, err := d.Dial("tcp", net.JoinHostPort(addr, fmt.Sprintf("%d", port)))
 	if err != nil {
 		return 0
@@ -397,7 +408,7 @@ func CheckAnyL7(
 
 		cfgJSON, err := buildProxyConfig(
 			scheme, addr, port,
-			id, security, candidateSNI, pbk, sid, flow,
+			id, security, candidateSNI, pbk, sid, fp, flow,
 			netType, path, hostHdr, method, password,
 			socksPort,
 		)
