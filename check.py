@@ -13,6 +13,7 @@ import ipaddress
 import ctypes
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from threading import Lock
 
 
 
@@ -56,6 +57,26 @@ DEFAULT_PROBE_PATHS = ["/", "/generate_204", "/favicon.ico"]
 
 # Подключаем новую библиотеку
 go_lib = None
+HOST_LOCKS = {}
+HOST_LOCKS_GUARD = Lock()
+
+def get_host_lock(host: str) -> Lock:
+    with HOST_LOCKS_GUARD:
+        lk = HOST_LOCKS.get(host)
+        if lk is None:
+            lk = Lock()
+            HOST_LOCKS[host] = lk
+        return lk
+
+def l7_multi_probe_host_serialized(link: str, host: str, stress_config: dict):
+    """
+    Сериализует проверки в рамках одного host/IP.
+    Это снижает ложные reject при параллельной долбежке одного сервера
+    разными UUID в одном батче.
+    """
+    lock = get_host_lock(host)
+    with lock:
+        return l7_multi_probe(link, stress_config)
 
 
 def init_checker_lib() -> None:
@@ -1154,7 +1175,7 @@ def main():
                 continue
 
             futures = {
-                pool.submit(l7_multi_probe, link, stress_config): (base_part, host)
+                pool.submit(l7_multi_probe_host_serialized, link, host, stress_config): (base_part, host)
                 for link, base_part, host in batch
             }
             for fut in as_completed(futures):
@@ -1201,7 +1222,11 @@ def main():
                     if current_latency < 0:
                         # Подтверждаем L7-отказ повторной проверкой с более мягкими параметрами,
                         # чтобы убрать ложные "reject" на пиках нагрузки/потерях.
-                        recheck_alive, recheck_latency = l7_multi_probe(base_part, build_recheck_stress_config(stress_config))
+                        recheck_alive, recheck_latency = l7_multi_probe_host_serialized(
+                            base_part,
+                            host,
+                            build_recheck_stress_config(stress_config),
+                        )
                         if recheck_alive:
                             host_l7_reject_counts[host] = 0
                             ip_counts[host] = ip_counts.get(host, 0) + 1
