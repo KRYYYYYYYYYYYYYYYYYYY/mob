@@ -46,14 +46,6 @@ HEADER = """# profile-title: 🏳️Мобильный инет🏳️
 
 ALLOWED_COUNTRIES = {"US", "DE", "NL", "GB", "FR", "FI", "SG", "JP", "PL", "TR", "RU"}
 
-DEFAULT_MOBILE_USER_AGENTS = [
-    "Mozilla/5.0 (Linux; Android 16; SM-A336B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.7680.119 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
-    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1",
-    # Ближе к реальному трафику с Samsung A33 + Android-клиентов
-    "Happ/3.15.1 (com.happproxy; Android 16; Samsung SM-A336B)",
-    "okhttp/4.12.0 v2rayNG/1.12.28",
-]
 DEFAULT_PROBE_PATHS = ["/", "/generate_204", "/favicon.ico"]
 DEFAULT_MOBILE_HEADER_PROFILES = [
     {
@@ -181,18 +173,13 @@ def configure_go_probe_profiles(stress_config: dict) -> None:
                         headers[kk] = vv
             profiles.append({"user_agent": ua, "headers": headers})
     if not profiles:
-        # Фолбэк: соберем минимальные профили из user_agents.
-        for ua in stress_config.get("user_agents", [])[:5]:
-            u = str(ua).strip()
+        # Фолбэк: соберем минимальные профили из default header profiles.
+        for p in DEFAULT_MOBILE_HEADER_PROFILES:
+            u = str(p.get("user_agent", "")).strip()
             if not u:
                 continue
-            profiles.append({
-                "user_agent": u,
-                "headers": {
-                    "Accept": "*/*",
-                    "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8",
-                },
-            })
+            headers = p.get("headers", {}) if isinstance(p.get("headers"), dict) else {}
+            profiles.append({"user_agent": u, "headers": dict(headers)})
     try:
         payload = json.dumps(profiles, ensure_ascii=False).encode("utf-8")
         rc = int(go_lib.SetProbeProfilesJSON(payload))
@@ -1323,7 +1310,6 @@ def main():
         "stability_max_loss_rate": 0.5,
         "stability_min_samples": 3,
         "stability_p95_max_ms": 6000,
-        "user_agents": list(DEFAULT_MOBILE_USER_AGENTS),
         "probe_paths": list(DEFAULT_PROBE_PATHS),
         "mobile_header_profiles": list(DEFAULT_MOBILE_HEADER_PROFILES),
         "mobile_whitelist_enabled": True,
@@ -1368,10 +1354,6 @@ def main():
                 stress_config["reality_reject_threshold"] = int(data.get("reality_reject_threshold", 2))
                 stress_config["ws_probe_attempts"] = int(data.get("ws_probe_attempts", stress_config["probe_attempts"]))
                 stress_config["ws_timeout"] = float(data.get("ws_timeout", max(stress_config["timeout"], 3.5)))
-                if isinstance(data.get("mobile_user_agents"), list) and data.get("mobile_user_agents"):
-                    stress_config["user_agents"] = [str(x) for x in data["mobile_user_agents"] if str(x).strip()]
-                elif isinstance(data.get("user_agents"), list) and data.get("user_agents"):
-                    stress_config["user_agents"] = [str(x) for x in data["user_agents"] if str(x).strip()]
                 if isinstance(data.get("probe_paths"), list) and data.get("probe_paths"):
                     stress_config["probe_paths"] = [str(x) for x in data["probe_paths"] if str(x).strip()]
                 if isinstance(data.get("mobile_header_profiles"), list) and data.get("mobile_header_profiles"):
