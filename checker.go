@@ -21,6 +21,111 @@ import (
 	_ "github.com/xtls/xray-core/main/distro/all"
 )
 
+type probeProfile struct {
+	UserAgent string
+	Headers   map[string]string
+}
+
+var probeProfiles = []probeProfile{
+	{
+		UserAgent: "Happ/3.15.1 (com.happproxy; Android 16; Samsung SM-A336B)",
+		Headers: map[string]string{
+			"Accept":           "*/*",
+			"Accept-Language":  "ru-RU,ru;q=0.9,en-US;q=0.8",
+			"X-Requested-With": "com.happproxy",
+		},
+	},
+	{
+		UserAgent: "okhttp/4.12.0 v2rayNG/1.12.28",
+		Headers: map[string]string{
+			"Accept":           "*/*",
+			"Accept-Language":  "ru-RU,ru;q=0.9,en-US;q=0.8",
+			"X-Requested-With": "com.v2ray.ang",
+		},
+	},
+	{
+		UserAgent: "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+		Headers: map[string]string{
+			"Accept":             "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+			"Accept-Language":    "ru-RU,ru;q=0.9,en-US;q=0.8",
+			"Sec-CH-UA":          "\"Chromium\";v=\"124\", \"Google Chrome\";v=\"124\", \"Not-A.Brand\";v=\"99\"",
+			"Sec-CH-UA-Mobile":   "?1",
+			"Sec-CH-UA-Platform": "\"Android\"",
+		},
+	},
+}
+
+//export SetProbeProfilesJSON
+func SetProbeProfilesJSON(profilesJSON *C.char) C.int {
+	if profilesJSON == nil {
+		return 0
+	}
+	raw := strings.TrimSpace(C.GoString(profilesJSON))
+	if raw == "" {
+		return 0
+	}
+	type profileIn struct {
+		UserAgent string            `json:"user_agent"`
+		Headers   map[string]string `json:"headers"`
+	}
+	var in []profileIn
+	if err := json.Unmarshal([]byte(raw), &in); err != nil {
+		return 0
+	}
+	next := make([]probeProfile, 0, len(in))
+	for _, p := range in {
+		ua := strings.TrimSpace(p.UserAgent)
+		if ua == "" {
+			continue
+		}
+		hdr := map[string]string{}
+		for k, v := range p.Headers {
+			kk := strings.TrimSpace(k)
+			vv := strings.TrimSpace(v)
+			if kk == "" || vv == "" {
+				continue
+			}
+			hdr[kk] = vv
+		}
+		next = append(next, probeProfile{UserAgent: ua, Headers: hdr})
+	}
+	if len(next) == 0 {
+		return 0
+	}
+	probeProfiles = next
+	return 1
+}
+
+func applyProbeHeaders(req *http.Request, idx int) {
+	req.Header.Set("Connection", "close")
+	if len(probeProfiles) == 0 {
+		req.Header.Set("Accept", "*/*")
+		req.Header.Set("User-Agent", "Mozilla/5.0")
+		return
+	}
+	profile := probeProfiles[idx%len(probeProfiles)]
+	req.Header.Set("User-Agent", profile.UserAgent)
+	for key, val := range profile.Headers {
+		req.Header.Set(key, val)
+	}
+	if req.Header.Get("Accept") == "" {
+		req.Header.Set("Accept", "*/*")
+	}
+}
+
+func waitSocksReady(port, timeoutSec int) bool {
+	deadline := time.Now().Add(time.Duration(timeoutSec) * time.Second)
+	for time.Now().Before(deadline) {
+		conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 120*time.Millisecond)
+		if err == nil {
+			conn.Close()
+			return true
+		}
+		time.Sleep(40 * time.Millisecond)
+	}
+	return false
+}
+
 func pickFreeLocalPort() (int, error) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -226,7 +331,9 @@ func startXrayAndProbe(configJSON []byte, socksPort, timeoutSec int) int {
 	}
 	defer instance.Close()
 
-	time.Sleep(500 * time.Millisecond)
+	if !waitSocksReady(socksPort, timeoutSec) {
+		return -1
+	}
 
 	socksDialer, err := proxy.SOCKS5("tcp", fmt.Sprintf("127.0.0.1:%d", socksPort), nil, &net.Dialer{
 		Timeout:   time.Duration(timeoutSec) * time.Second,
@@ -263,19 +370,19 @@ func startXrayAndProbe(configJSON []byte, socksPort, timeoutSec int) int {
 		"https://detectportal.firefox.com/success.txt",
 		"http://example.com/",
 	}
-	probeUAs := []string{
-		"Happ/3.15.1 (com.happproxy; Android 16; Samsung SM-A336B)",
-		"okhttp/4.12.0 v2rayNG/1.12.28",
-	}
 
 	successHits := 0
 	firstSuccessLatency := 0
+	successHosts := map[string]struct{}{}
+	minSuccessHits := 2
 	maxAcceptedLatencyMs := 12000
 
 	for idx, probeURL := range probeURLs {
 		for attempt := 0; attempt < 2; attempt++ {
-			req, err := http.NewRequest(http.MethodGet, probeURL, nil)
+			reqCtx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSec)*time.Second)
+			req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, probeURL, nil)
 			if err != nil {
+				cancel()
 				continue
 			}
 			reqStart := time.Now()
@@ -284,11 +391,10 @@ func startXrayAndProbe(configJSON []byte, socksPort, timeoutSec int) int {
 				GotFirstResponseByte: func() { gotFirstByte = true },
 			}
 			req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
-			req.Header.Set("Accept", "*/*")
-			req.Header.Set("Connection", "close")
-			req.Header.Set("User-Agent", probeUAs[idx%len(probeUAs)])
+			applyProbeHeaders(req, idx)
 
 			resp, err := client.Do(req)
+			cancel()
 			if err != nil {
 				if attempt == 0 {
 					time.Sleep(200 * time.Millisecond)
@@ -305,8 +411,15 @@ func startXrayAndProbe(configJSON []byte, socksPort, timeoutSec int) int {
 					continue
 				}
 				successHits++
+				if req.URL != nil {
+					successHosts[req.URL.Hostname()] = struct{}{}
+				}
 				if firstSuccessLatency == 0 {
 					firstSuccessLatency = latencyMs
+				}
+				// Mobile-строгость: нужно минимум 2 успешных ответа с разных endpoint'ов.
+				if successHits >= minSuccessHits && len(successHosts) >= 2 {
+					return firstSuccessLatency
 				}
 				break
 			}
@@ -316,9 +429,9 @@ func startXrayAndProbe(configJSON []byte, socksPort, timeoutSec int) int {
 		}
 	}
 
-	// Для практической проверки достаточно хотя бы одного уверенного L7-успеха
-	// на одном из нескольких разнотипных endpoint'ов.
-	if successHits >= 1 {
+	// Для mobile-only отбора просим минимум 2 успешных ответа
+	// и минимум с 2 разных endpoint'ов.
+	if successHits >= minSuccessHits && len(successHosts) >= 2 {
 		return firstSuccessLatency
 	}
 	return -1
@@ -548,10 +661,6 @@ func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C
 		"https://detectportal.firefox.com/success.txt",
 		"http://example.com/",
 	}
-	probeUAs := []string{
-		"Happ/3.15.1 (com.happproxy; Android 16; Samsung SM-A336B)",
-		"okhttp/4.12.0 v2rayNG/1.12.28",
-	}
 	successHits := 0
 	firstSuccessLatency := 0
 	maxAcceptedLatencyMs := 12000
@@ -568,9 +677,7 @@ func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C
 				GotFirstResponseByte: func() { gotFirstByte = true },
 			}
 			req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
-			req.Header.Set("Accept", "*/*")
-			req.Header.Set("Connection", "close")
-			req.Header.Set("User-Agent", probeUAs[idx%len(probeUAs)])
+			applyProbeHeaders(req, idx)
 
 			resp, err := client.Do(req)
 			if err != nil {

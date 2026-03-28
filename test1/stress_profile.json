@@ -5,11 +5,58 @@
   "probe_attempts": 4,
   "min_success": 2,
   "l7_min_success": 2,
+  "profile_preset": "mobile_strict",
+  "reality_probe_attempts": 4,
+  "reality_timeout": 3.5,
+  "reality_reject_threshold": 2,
+  "ws_probe_attempts": 4,
+  "ws_timeout": 3.5,
   "l7_max_candidates": 3,
   "workers": 32,
+  "batch_multiplier": 4,
+  "max_parallel_per_host": 2,
+  "max_check_duration_sec": 7200,
   "max_latency_ms": 6000,
   "recv_timeout": 1.7,
   "between_attempts_sleep": 0.35,
+  "mobile_whitelist_enabled": true,
+  "mobile_whitelist_fail_open": true,
+  "mobile_whitelist_timeout_sec": 20,
+  "mobile_whitelist_retries": 3,
+  "mobile_whitelist_retry_sleep_sec": 2,
+  "mobile_whitelist_retry_interval_sec": 60,
+  "external_respect_blacklist": false,
+  "mobile_whitelist_domains_url": "https://raw.githubusercontent.com/hxehex/russia-mobile-internet-whitelist/refs/heads/main/whitelist.txt",
+  "mobile_whitelist_ips_url": "https://raw.githubusercontent.com/hxehex/russia-mobile-internet-whitelist/refs/heads/main/ipwhitelist.txt",
+  "mobile_whitelist_cidrs_url": "https://raw.githubusercontent.com/hxehex/russia-mobile-internet-whitelist/refs/heads/main/cidrwhitelist.txt",
+  "mobile_header_profiles": [
+    {
+      "user_agent": "Happ/3.15.1 (com.happproxy; Android 16; Samsung SM-A336B)",
+      "headers": {
+        "Accept": "*/*",
+        "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8",
+        "X-Requested-With": "com.happproxy"
+      }
+    },
+    {
+      "user_agent": "okhttp/4.12.0 v2rayNG/1.12.28",
+      "headers": {
+        "Accept": "*/*",
+        "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8",
+        "X-Requested-With": "com.v2ray.ang"
+      }
+    },
+    {
+      "user_agent": "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+      "headers": {
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8",
+        "Sec-CH-UA": "\"Chromium\";v=\"124\", \"Google Chrome\";v=\"124\", \"Not-A.Brand\";v=\"99\"",
+        "Sec-CH-UA-Mobile": "?1",
+        "Sec-CH-UA-Platform": "\"Android\""
+      }
+    }
+  ],
   "mobile_user_agents": [
     "Happ/3.15.1 (com.happproxy; Android 16; Samsung SM-A336B)",
     "okhttp/4.12.0 v2rayNG/1.12.28"
