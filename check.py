@@ -376,6 +376,15 @@ def probe_any_l7(link: str, timeout: int = 5) -> int:
 
 # --- НОВЫЙ БЛОК: ФИЛЬТРАЦИЯ И КАНДИДАТЫ ---
 BAD_SNI_KEYWORDS = ['google', 'apple', 'microsoft', 'facebook', 'netflix', 'youtube']
+REALITY_PBK_RE = re.compile(r"^[A-Za-z0-9_-]{43,44}$")
+REALITY_SID_RE = re.compile(r"^[0-9a-fA-F]{0,32}$")
+FLOW_ALIASES = {
+    "xtls-rprx-visi": "xtls-rprx-vision",
+}
+FLOW_ALLOWED = {
+    "",
+    "xtls-rprx-vision",
+}
 
 def is_sni_suspicious(link):
     """Проверяет, нет ли в SNI мусорных доменов (для мобильных сетей это важно)."""
@@ -478,11 +487,20 @@ def validate_transport_requirements(link: str):
     net_type = str(pc.get("net_type", "tcp")).lower()
     sni = str(pc.get("sni", "")).strip()
     pbk = str(pc.get("pbk", "")).strip()
+    sid = str(pc.get("sid", "")).strip()
+    flow = FLOW_ALIASES.get(str(pc.get("flow", "")).strip().lower(), str(pc.get("flow", "")).strip().lower())
 
     if security in {"tls", "reality"} and not sni:
         return False, "skip_missing_sni_for_tls"
-    if security == "reality" and not pbk:
-        return False, "skip_missing_pbk_for_reality"
+    if security == "reality":
+        if not pbk:
+            return False, "skip_missing_pbk_for_reality"
+        if not REALITY_PBK_RE.match(pbk):
+            return False, "skip_bad_pbk_for_reality"
+        if not REALITY_SID_RE.match(sid):
+            return False, "skip_bad_sid_for_reality"
+        if flow not in FLOW_ALLOWED:
+            return False, "skip_bad_flow_for_reality"
     if net_type == "ws" and not str(pc.get("path", "")).strip():
         return False, "skip_missing_ws_path"
     return True, ""
