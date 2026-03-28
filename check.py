@@ -11,9 +11,10 @@ import time
 import subprocess
 import ipaddress
 import ctypes
+from functools import lru_cache
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from threading import Lock
+from threading import Lock, BoundedSemaphore
 
 
 
@@ -57,16 +58,17 @@ DEFAULT_PROBE_PATHS = ["/", "/generate_204", "/favicon.ico"]
 
 # Подключаем новую библиотеку
 go_lib = None
-HOST_LOCKS = {}
+HOST_GATES = {}
 HOST_LOCKS_GUARD = Lock()
 
-def get_host_lock(host: str) -> Lock:
+def get_host_gate(host: str, max_parallel_per_host: int) -> BoundedSemaphore:
+    permits = max(1, int(max_parallel_per_host))
     with HOST_LOCKS_GUARD:
-        lk = HOST_LOCKS.get(host)
-        if lk is None:
-            lk = Lock()
-            HOST_LOCKS[host] = lk
-        return lk
+        gate = HOST_GATES.get(host)
+        if gate is None:
+            gate = BoundedSemaphore(permits)
+            HOST_GATES[host] = gate
+        return gate
 
 def l7_multi_probe_host_serialized(link: str, host: str, stress_config: dict):
     """
@@ -74,9 +76,11 @@ def l7_multi_probe_host_serialized(link: str, host: str, stress_config: dict):
     Это снижает ложные reject при параллельной долбежке одного сервера
     разными UUID в одном батче.
     """
-    lock = get_host_lock(host)
-    with lock:
-        return l7_multi_probe(link, stress_config)
+    max_parallel_per_host = int(stress_config.get("max_parallel_per_host", 2))
+    gate = get_host_gate(host, max_parallel_per_host)
+    with gate:
+        tuned_cfg = tuned_probe_settings(link, stress_config)
+        return l7_multi_probe(link, tuned_cfg)
 
 
 def init_checker_lib() -> None:
@@ -338,6 +342,10 @@ def parse_any_link(link: str) -> dict | None:
     if scheme == "shadowsocks":  return parse_ss_link(link)
     return None
 
+@lru_cache(maxsize=20000)
+def parse_any_link_cached(link: str):
+    return parse_any_link(link)
+
 def probe_any_l7(link: str, timeout: int = 5) -> int:
     """
     Универсальный L7-пробник для любого протокола через CheckAnyL7.
@@ -375,6 +383,136 @@ def probe_any_l7(link: str, timeout: int = 5) -> int:
 
 # --- НОВЫЙ БЛОК: ФИЛЬТРАЦИЯ И КАНДИДАТЫ ---
 BAD_SNI_KEYWORDS = ['google', 'apple', 'microsoft', 'facebook', 'netflix', 'youtube']
+DEFAULT_MOBILE_WHITELIST = {
+    "domains_url": "https://raw.githubusercontent.com/hxehex/russia-mobile-internet-whitelist/refs/heads/main/whitelist.txt",
+    "ips_url": "https://raw.githubusercontent.com/hxehex/russia-mobile-internet-whitelist/refs/heads/main/ipwhitelist.txt",
+    "cidrs_url": "https://raw.githubusercontent.com/hxehex/russia-mobile-internet-whitelist/refs/heads/main/cidrwhitelist.txt",
+}
+REALITY_PBK_RE = re.compile(r"^[A-Za-z0-9_-]{43,44}$")
+REALITY_SID_RE = re.compile(r"^[0-9a-fA-F]{0,32}$")
+FLOW_ALIASES = {
+    "xtls-rprx-visi": "xtls-rprx-vision",
+}
+FLOW_ALLOWED = {
+    "",
+    "xtls-rprx-vision",
+}
+_MOBILE_WHITELIST_CACHE = None
+_MOBILE_WHITELIST_LOCK = Lock()
+
+def _download_lines(url: str, timeout: float = 20.0) -> list[str]:
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        raw = resp.read().decode("utf-8", errors="ignore")
+    out = []
+    for line in raw.splitlines():
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        out.append(s)
+    return out
+
+def _normalize_domain(value: str) -> str:
+    d = (value or "").strip().lower().rstrip(".")
+    if not d:
+        return ""
+    if "://" in d:
+        try:
+            p = urllib.parse.urlparse(d)
+            d = (p.hostname or "").strip().lower().rstrip(".")
+        except Exception:
+            return ""
+    return d
+
+def _is_domain_allowed(domain: str, allow_domains: set[str]) -> bool:
+    d = _normalize_domain(domain)
+    if not d:
+        return False
+    if d in allow_domains:
+        return True
+    parts = d.split(".")
+    for i in range(1, len(parts) - 1):
+        tail = ".".join(parts[i:])
+        if tail in allow_domains:
+            return True
+    return False
+
+def load_mobile_whitelist(config: dict) -> dict:
+    domains_url = str(config.get("mobile_whitelist_domains_url", DEFAULT_MOBILE_WHITELIST["domains_url"])).strip()
+    ips_url = str(config.get("mobile_whitelist_ips_url", DEFAULT_MOBILE_WHITELIST["ips_url"])).strip()
+    cidrs_url = str(config.get("mobile_whitelist_cidrs_url", DEFAULT_MOBILE_WHITELIST["cidrs_url"])).strip()
+    timeout = float(config.get("mobile_whitelist_timeout_sec", 20.0))
+    domains: set[str] = set()
+    ips: set[str] = set()
+    cidrs = []
+    errors = []
+
+    for item in _download_lines(domains_url, timeout=timeout):
+        d = _normalize_domain(item)
+        if d:
+            domains.add(d)
+
+    for item in _download_lines(ips_url, timeout=timeout):
+        s = item.strip()
+        try:
+            ipaddress.ip_address(s)
+            ips.add(s)
+        except Exception:
+            errors.append(f"bad_ip:{s}")
+
+    for item in _download_lines(cidrs_url, timeout=timeout):
+        s = item.strip()
+        try:
+            cidrs.append(ipaddress.ip_network(s, strict=False))
+        except Exception:
+            errors.append(f"bad_cidr:{s}")
+
+    return {
+        "ok": True,
+        "domains": domains,
+        "ips": ips,
+        "cidrs": cidrs,
+        "errors": errors,
+    }
+
+def get_mobile_whitelist(config: dict, force_reload: bool = False) -> dict:
+    global _MOBILE_WHITELIST_CACHE
+    with _MOBILE_WHITELIST_LOCK:
+        retry_interval_sec = float(config.get("mobile_whitelist_retry_interval_sec", 60.0))
+        if _MOBILE_WHITELIST_CACHE is not None and not force_reload:
+            if _MOBILE_WHITELIST_CACHE.get("ok"):
+                return _MOBILE_WHITELIST_CACHE
+            failed_at = float(_MOBILE_WHITELIST_CACHE.get("failed_at", 0.0))
+            if (time.time() - failed_at) < max(1.0, retry_interval_sec):
+                return _MOBILE_WHITELIST_CACHE
+
+        if _MOBILE_WHITELIST_CACHE is not None and force_reload is False and _MOBILE_WHITELIST_CACHE.get("ok"):
+            return _MOBILE_WHITELIST_CACHE
+
+        retries = max(1, int(config.get("mobile_whitelist_retries", 3)))
+        retry_sleep_sec = float(config.get("mobile_whitelist_retry_sleep_sec", 2.0))
+        last_error = None
+        for attempt in range(1, retries + 1):
+            try:
+                wl = load_mobile_whitelist(config)
+                _MOBILE_WHITELIST_CACHE = wl
+                print(f"✅ Загружен mobile whitelist: domains={len(wl['domains'])}, ips={len(wl['ips'])}, cidrs={len(wl['cidrs'])}")
+                return _MOBILE_WHITELIST_CACHE
+            except Exception as e:
+                last_error = e
+                if attempt < retries:
+                    time.sleep(max(0.0, retry_sleep_sec))
+
+        _MOBILE_WHITELIST_CACHE = {
+            "ok": False,
+            "domains": set(),
+            "ips": set(),
+            "cidrs": [],
+            "error": str(last_error),
+            "failed_at": time.time(),
+        }
+        print(f"⚠️ Не удалось загрузить mobile whitelist: {last_error}")
+        return _MOBILE_WHITELIST_CACHE
 
 def is_sni_suspicious(link):
     """Проверяет, нет ли в SNI мусорных доменов (для мобильных сетей это важно)."""
@@ -385,6 +523,32 @@ def is_sni_suspicious(link):
         if word in sni:
             return True
     return False
+
+def is_link_in_mobile_whitelist(link: str, whitelist: dict, pc: dict | None = None) -> tuple[bool, str]:
+    pc = pc or parse_any_link_cached(link)
+    if not pc:
+        return False, "skip_bad_parsed_link"
+    security = str(pc.get("security", "")).strip().lower()
+    if security not in {"tls", "reality"}:
+        return False, "skip_mobile_non_tls_security"
+
+    candidates = []
+    for field in ("sni", "host_hdr", "addr"):
+        v = str(pc.get(field, "")).strip()
+        if v:
+            candidates.append(v)
+
+    for v in candidates:
+        try:
+            ip = ipaddress.ip_address(v)
+            if str(ip) in whitelist.get("ips", set()):
+                return True, "ok_mobile_whitelist_ip"
+            if any(ip in net for net in whitelist.get("cidrs", [])):
+                return True, "ok_mobile_whitelist_cidr"
+        except Exception:
+            if _is_domain_allowed(v, whitelist.get("domains", set())):
+                return True, "ok_mobile_whitelist_domain"
+    return False, "skip_mobile_not_in_whitelist"
 
 def extract_sni_candidates(link):
     """Вытягивает список потенциальных SNI из разных частей ссылки."""
@@ -438,12 +602,12 @@ def is_uuid_like(value: str) -> bool:
     """Совместимость со старым именем."""
     return is_valid_vless_id(value)
 
-def validate_protocol_auth(link: str, link_scheme: str):
+def validate_protocol_auth(link: str, link_scheme: str, pc: dict | None = None):
     """
     Лёгкая валидация учетки до L7-чека, чтобы не тратить пробы на заведомый мусор.
     Возвращает: (ok, reason)
     """
-    pc = parse_any_link(link)
+    pc = pc or parse_any_link_cached(link)
     if not pc:
         return False, "skip_bad_parsed_link"
 
@@ -464,12 +628,12 @@ def validate_protocol_auth(link: str, link_scheme: str):
             return False, "skip_bad_ss_auth"
     return True, ""
 
-def validate_transport_requirements(link: str):
+def validate_transport_requirements(link: str, pc: dict | None = None):
     """
     Валидация transport/TLS/REALITY параметров перед запуском Go-чекера.
     Возвращает: (ok, reason)
     """
-    pc = parse_any_link(link)
+    pc = pc or parse_any_link_cached(link)
     if not pc:
         return False, "skip_bad_transport_parsed_link"
 
@@ -477,11 +641,20 @@ def validate_transport_requirements(link: str):
     net_type = str(pc.get("net_type", "tcp")).lower()
     sni = str(pc.get("sni", "")).strip()
     pbk = str(pc.get("pbk", "")).strip()
+    sid = str(pc.get("sid", "")).strip()
+    flow = FLOW_ALIASES.get(str(pc.get("flow", "")).strip().lower(), str(pc.get("flow", "")).strip().lower())
 
     if security in {"tls", "reality"} and not sni:
         return False, "skip_missing_sni_for_tls"
-    if security == "reality" and not pbk:
-        return False, "skip_missing_pbk_for_reality"
+    if security == "reality":
+        if not pbk:
+            return False, "skip_missing_pbk_for_reality"
+        if not REALITY_PBK_RE.match(pbk):
+            return False, "skip_bad_pbk_for_reality"
+        if not REALITY_SID_RE.match(sid):
+            return False, "skip_bad_sid_for_reality"
+        if flow not in FLOW_ALLOWED:
+            return False, "skip_bad_flow_for_reality"
     if net_type == "ws" and not str(pc.get("path", "")).strip():
         return False, "skip_missing_ws_path"
     return True, ""
@@ -497,6 +670,79 @@ def build_recheck_stress_config(stress_config: dict) -> dict:
     cfg["l7_min_success"] = 1
     cfg["min_success"] = 1
     cfg["between_attempts_sleep"] = max(float(stress_config.get("between_attempts_sleep", 0.35)), 0.45)
+    return cfg
+
+def apply_profile_preset(stress_config: dict, profile_name: str) -> None:
+    """
+    Профили для разных задач:
+    - mobile_strict: отсекает Wi‑Fi-only узлы, оставляет более стабильные под мобильную сеть.
+    - wifi_lenient: мягче к нестабильности, чтобы не терять рабочие на Wi‑Fi ссылки.
+    - balanced: компромисс.
+    """
+    name = (profile_name or "mobile_strict").strip().lower()
+    if name == "mobile_strict":
+        stress_config["probe_attempts"] = max(4, int(stress_config.get("probe_attempts", 4)))
+        stress_config["l7_min_success"] = max(2, int(stress_config.get("l7_min_success", 2)))
+        stress_config["stability_min_success_rate"] = max(0.60, float(stress_config.get("stability_min_success_rate", 0.5)))
+        stress_config["stability_max_loss_rate"] = min(0.35, float(stress_config.get("stability_max_loss_rate", 0.5)))
+        stress_config["stability_max_jitter_ms"] = min(650, int(stress_config.get("stability_max_jitter_ms", 800)))
+    elif name == "wifi_lenient":
+        stress_config["probe_attempts"] = max(3, int(stress_config.get("probe_attempts", 4)))
+        stress_config["l7_min_success"] = 1
+        stress_config["stability_min_success_rate"] = min(0.34, float(stress_config.get("stability_min_success_rate", 0.5)))
+        stress_config["stability_max_loss_rate"] = max(0.60, float(stress_config.get("stability_max_loss_rate", 0.5)))
+        stress_config["stability_max_jitter_ms"] = max(1100, int(stress_config.get("stability_max_jitter_ms", 800)))
+    else:
+        # Для этого репозитория по умолчанию держим только mobile-friendly профиль.
+        stress_config["probe_attempts"] = max(4, int(stress_config.get("probe_attempts", 4)))
+        stress_config["l7_min_success"] = max(2, int(stress_config.get("l7_min_success", 2)))
+        stress_config["stability_min_success_rate"] = max(0.60, float(stress_config.get("stability_min_success_rate", 0.5)))
+        stress_config["stability_max_loss_rate"] = min(0.35, float(stress_config.get("stability_max_loss_rate", 0.5)))
+        stress_config["stability_max_jitter_ms"] = min(650, int(stress_config.get("stability_max_jitter_ms", 800)))
+
+def is_mobile_only_candidate(link: str, pc: dict | None = None) -> tuple[bool, str]:
+    """
+    Жесткий фильтр для mobile-only отбора:
+    - отсекаем SS;
+    - принимаем только TLS/REALITY;
+    - для TLS/REALITY обязателен SNI;
+    """
+    pc = pc or parse_any_link_cached(link)
+    if not pc:
+        return False, "skip_mobile_bad_parsed_link"
+    scheme = str(pc.get("scheme", "")).lower()
+    security = str(pc.get("security", "none")).lower()
+    sni = str(pc.get("sni", "")).strip()
+
+    if scheme == "shadowsocks":
+        return False, "skip_mobile_non_tls_scheme"
+    if security not in {"tls", "reality"}:
+        return False, "skip_mobile_non_tls_security"
+    if not sni:
+        return False, "skip_mobile_missing_sni"
+    return True, ""
+
+def tuned_probe_settings(link: str, stress_config: dict) -> dict:
+    """
+    Локальная подстройка проб под тип протокола/транспорта.
+    Позволяет ускорить общий цикл и отдельно подкрутить REALITY/WS.
+    """
+    cfg = dict(stress_config)
+    pc = parse_any_link(link)
+    if not pc:
+        return cfg
+
+    security = str(pc.get("security", "none")).lower()
+    net_type = str(pc.get("net_type", "tcp")).lower()
+
+    if security == "reality":
+        cfg["probe_attempts"] = max(int(cfg.get("probe_attempts", 4)), int(stress_config.get("reality_probe_attempts", 4)))
+        cfg["timeout"] = max(float(cfg.get("timeout", 2.5)), float(stress_config.get("reality_timeout", 3.5)))
+        cfg["l7_reject_threshold"] = max(2, int(stress_config.get("reality_reject_threshold", cfg.get("l7_reject_threshold", 2))))
+    if net_type == "ws":
+        cfg["probe_attempts"] = max(int(cfg.get("probe_attempts", 4)), int(stress_config.get("ws_probe_attempts", 4)))
+        cfg["timeout"] = max(float(cfg.get("timeout", 2.5)), float(stress_config.get("ws_timeout", 3.5)))
+
     return cfg
 
 
@@ -997,8 +1243,11 @@ def main():
         "between_attempts_sleep": 0.35,
         "l7_min_success": 2,
         "workers": 32,
+        "batch_multiplier": 4,
+        "max_parallel_per_host": 2,
+        "profile_preset": "mobile_strict",
         "max_latency_ms": 6000,
-        "max_check_duration_sec": 5 * 60 * 60,
+        "max_check_duration_sec": 2 * 60 * 60,
         "stability_max_spread_ms": 1200,
         "stability_max_ratio": 4.0,
         "stability_max_na": 0,
@@ -1009,6 +1258,15 @@ def main():
         "stability_p95_max_ms": 6000,
         "user_agents": list(DEFAULT_MOBILE_USER_AGENTS),
         "probe_paths": list(DEFAULT_PROBE_PATHS),
+        "mobile_whitelist_enabled": True,
+        "mobile_whitelist_fail_open": True,
+        "mobile_whitelist_timeout_sec": 20.0,
+        "mobile_whitelist_retries": 3,
+        "mobile_whitelist_retry_sleep_sec": 2.0,
+        "mobile_whitelist_retry_interval_sec": 60.0,
+        "mobile_whitelist_domains_url": DEFAULT_MOBILE_WHITELIST["domains_url"],
+        "mobile_whitelist_ips_url": DEFAULT_MOBILE_WHITELIST["ips_url"],
+        "mobile_whitelist_cidrs_url": DEFAULT_MOBILE_WHITELIST["cidrs_url"],
     }
     if os.path.exists('test1/stress_profile.json'):
         try:
@@ -1021,6 +1279,8 @@ def main():
                 stress_config["min_success"] = int(data.get("min_success", stress_config["min_success"]))
                 stress_config["l7_min_success"] = int(data.get("l7_min_success", stress_config["l7_min_success"]))
                 stress_config["workers"] = int(data.get("workers", stress_config["workers"]))
+                stress_config["batch_multiplier"] = int(data.get("batch_multiplier", stress_config["batch_multiplier"]))
+                stress_config["max_parallel_per_host"] = int(data.get("max_parallel_per_host", stress_config["max_parallel_per_host"]))
                 stress_config["max_latency_ms"] = int(data.get("max_latency_ms", stress_config["max_latency_ms"]))
                 stress_config["max_check_duration_sec"] = int(data.get("max_check_duration_sec", stress_config["max_check_duration_sec"]))
                 stress_config["stability_max_spread_ms"] = int(data.get("stability_max_spread_ms", stress_config["stability_max_spread_ms"]))
@@ -1033,25 +1293,49 @@ def main():
                 stress_config["stability_p95_max_ms"] = int(data.get("stability_p95_max_ms", stress_config["stability_p95_max_ms"]))
                 stress_config["recv_timeout"] = float(data.get("recv_timeout", stress_config["recv_timeout"]))
                 stress_config["between_attempts_sleep"] = float(data.get("between_attempts_sleep", stress_config["between_attempts_sleep"]))
+                stress_config["profile_preset"] = str(data.get("profile_preset", stress_config["profile_preset"])).strip() or "mobile_strict"
+                stress_config["reality_probe_attempts"] = int(data.get("reality_probe_attempts", stress_config["probe_attempts"]))
+                stress_config["reality_timeout"] = float(data.get("reality_timeout", max(stress_config["timeout"], 3.5)))
+                stress_config["reality_reject_threshold"] = int(data.get("reality_reject_threshold", 2))
+                stress_config["ws_probe_attempts"] = int(data.get("ws_probe_attempts", stress_config["probe_attempts"]))
+                stress_config["ws_timeout"] = float(data.get("ws_timeout", max(stress_config["timeout"], 3.5)))
                 if isinstance(data.get("mobile_user_agents"), list) and data.get("mobile_user_agents"):
                     stress_config["user_agents"] = [str(x) for x in data["mobile_user_agents"] if str(x).strip()]
                 elif isinstance(data.get("user_agents"), list) and data.get("user_agents"):
                     stress_config["user_agents"] = [str(x) for x in data["user_agents"] if str(x).strip()]
                 if isinstance(data.get("probe_paths"), list) and data.get("probe_paths"):
                     stress_config["probe_paths"] = [str(x) for x in data["probe_paths"] if str(x).strip()]
+                stress_config["mobile_whitelist_enabled"] = bool(data.get("mobile_whitelist_enabled", stress_config["mobile_whitelist_enabled"]))
+                stress_config["mobile_whitelist_fail_open"] = bool(data.get("mobile_whitelist_fail_open", stress_config["mobile_whitelist_fail_open"]))
+                stress_config["mobile_whitelist_timeout_sec"] = float(data.get("mobile_whitelist_timeout_sec", stress_config["mobile_whitelist_timeout_sec"]))
+                stress_config["mobile_whitelist_retries"] = int(data.get("mobile_whitelist_retries", stress_config["mobile_whitelist_retries"]))
+                stress_config["mobile_whitelist_retry_sleep_sec"] = float(data.get("mobile_whitelist_retry_sleep_sec", stress_config["mobile_whitelist_retry_sleep_sec"]))
+                stress_config["mobile_whitelist_retry_interval_sec"] = float(data.get("mobile_whitelist_retry_interval_sec", stress_config["mobile_whitelist_retry_interval_sec"]))
+                stress_config["mobile_whitelist_domains_url"] = str(data.get("mobile_whitelist_domains_url", stress_config["mobile_whitelist_domains_url"])).strip() or stress_config["mobile_whitelist_domains_url"]
+                stress_config["mobile_whitelist_ips_url"] = str(data.get("mobile_whitelist_ips_url", stress_config["mobile_whitelist_ips_url"])).strip() or stress_config["mobile_whitelist_ips_url"]
+                stress_config["mobile_whitelist_cidrs_url"] = str(data.get("mobile_whitelist_cidrs_url", stress_config["mobile_whitelist_cidrs_url"])).strip() or stress_config["mobile_whitelist_cidrs_url"]
         except: pass
+    # Принудительно работаем в mobile-only режиме для отбора под мобильную сеть.
+    stress_config["profile_preset"] = "mobile_strict"
+    apply_profile_preset(stress_config, stress_config.get("profile_preset", "mobile_strict"))
+    mobile_whitelist = None
+    if stress_config.get("mobile_whitelist_enabled", True):
+        mobile_whitelist = get_mobile_whitelist(stress_config)
 
     raw_external_loaded = False
     print(f"📡 Начинаю добор до 200. В очереди (текущие+отложенные): {len(check_queue)}")
 
     # --- [ШАГ 4: ЦИКЛ ПРОВЕРКИ] ---
     workers = max(1, int(stress_config.get("workers", 32)))
-    batch_size = max(20, workers * 2)
-    max_check_duration_sec = max(60, int(stress_config.get("max_check_duration_sec", 5 * 60 * 60)))
+    batch_multiplier = max(2, int(stress_config.get("batch_multiplier", 4)))
+    batch_size = max(20, workers * batch_multiplier)
+    max_check_duration_sec = max(60, int(stress_config.get("max_check_duration_sec", 2 * 60 * 60)))
     print(f"⚙️ Параллельная проверка: workers={workers}, batch={batch_size}")
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
         while len(working_for_sub) < 200:
+            if stress_config.get("mobile_whitelist_enabled", True):
+                mobile_whitelist = get_mobile_whitelist(stress_config)
             if time.time() - start_time >= max_check_duration_sec:
                 print(f"⏱️ Достигнут лимит времени проверки ({max_check_duration_sec} сек)")
                 note_reason(reason_stats, "limit_reached_time", extra=str(max_check_duration_sec))
@@ -1089,15 +1373,13 @@ def main():
                 if not link_scheme:
                     note_reason(reason_stats, "skip_unknown_scheme", base_part)
                     continue
-
-                # SNI-фильтр — только для vless (у vmess/trojan/ss нет sni= в URL)
-                if link_scheme == "vless" and is_sni_suspicious(link):
-                    note_reason(reason_stats, "skip_sni_suspicious", base_part)
+                pc = parse_any_link_cached(base_part)
+                if not pc:
+                    note_reason(reason_stats, "skip_bad_parsed_link", base_part)
                     continue
 
                 # Извлекаем хост/порт: для vmess из base64, иначе из URL
                 if link_scheme == "vmess":
-                    pc = parse_vmess_link(base_part)
                     if not pc or not pc["addr"] or not pc["port"]:
                         note_reason(reason_stats, "skip_bad_endpoint", base_part)
                         continue
@@ -1120,20 +1402,37 @@ def main():
                 if is_ipv6(host):
                     note_reason(reason_stats, "skip_ipv6", base_part)
                     add_to_blacklist(base_part)
-                    remove_from_input_file(base_part)
                     continue
 
-                auth_ok, auth_reason = validate_protocol_auth(base_part, link_scheme)
+                auth_ok, auth_reason = validate_protocol_auth(base_part, link_scheme, pc=pc)
                 if not auth_ok:
                     note_reason(reason_stats, auth_reason, base_part)
                     add_to_blacklist(base_part)
                     continue
 
-                transport_ok, transport_reason = validate_transport_requirements(base_part)
+                transport_ok, transport_reason = validate_transport_requirements(base_part, pc=pc)
                 if not transport_ok:
                     note_reason(reason_stats, transport_reason, base_part)
                     add_to_blacklist(base_part)
                     continue
+
+                mobile_ok, mobile_reason = is_mobile_only_candidate(base_part, pc=pc)
+                if not mobile_ok:
+                    note_reason(reason_stats, mobile_reason, base_part)
+                    add_to_blacklist(base_part)
+                    continue
+
+                if link_scheme == "vless":
+                    if mobile_whitelist and mobile_whitelist.get("ok"):
+                        wl_ok, wl_reason = is_link_in_mobile_whitelist(base_part, mobile_whitelist, pc=pc)
+                        if not wl_ok:
+                            note_reason(reason_stats, wl_reason, base_part)
+                            add_to_blacklist(base_part)
+                            continue
+                    elif stress_config.get("mobile_whitelist_enabled", True):
+                        if not stress_config.get("mobile_whitelist_fail_open", False):
+                            note_reason(reason_stats, "skip_mobile_whitelist_unavailable", base_part)
+                            continue
 
                 batch.append((link, base_part, host))
 
@@ -1149,7 +1448,6 @@ def main():
                     break
                 base_part, host = futures[fut]
                 checked_today += 1
-                remove_from_input_file(base_part)
                 print(f"🔍 Тестирую: {host}...", end=" ", flush=True)
                 try:
                     is_alive, current_latency = fut.result()
