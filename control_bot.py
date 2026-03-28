@@ -23,8 +23,6 @@ CONTROL_LABEL_CANDIDATES = [CONTROL_PRIMARY_LABEL, "control"]
 CONTROL_LABEL_CANDIDATES = list(dict.fromkeys([x for x in CONTROL_LABEL_CANDIDATES if x]))
 CONTROL_BODY_FILE = "test1/menu1.txt"
 CHECK_WORKFLOW_FILE = os.getenv("CHECK_WORKFLOW_FILE", "main.yml")
-FULL_REPLACE_MARKER = "♻️ **ПОЛНАЯ_ЗАМЕНА**"
-FULL_REPLACE_CONFIRM_MARKER = "✅ **ПОДТВЕРДИТЬ**"
 
 
 def _load_lines(path: str):
@@ -206,15 +204,9 @@ def refresh_all_panels(token, repo, ranking_db, vetted_list, pinned_list):
             fav_list = [l.strip() for l in f if 'vless' in l]
     fav_bases = {l.split('#')[0].strip() for l in fav_list}
 
-    body_ctrl = f"### 🎮 Меню\n🕒 `{update_time}`\n\n"
-    body_ctrl += f"- [ ] {FULL_REPLACE_MARKER}\n"
-    body_ctrl += f"- [ ] {FULL_REPLACE_CONFIRM_MARKER}\n\n---\n\n"
-    wifi_to_ban = get_wifi_candidates(pinned_list, fav_list)
-    if wifi_to_ban:
-        for full_link in wifi_to_ban:
-            body_ctrl += f"- [ ] {full_link.strip()}\n"
-    else:
-        body_ctrl += "_Список пуст_\n"
+    body_ctrl = f"### 🎮 Панель меню (Весь wifi.txt)\n🕒 `{update_time}`\n\n"
+    body_ctrl += "- [ ] ✅ **ПОДТВЕРДИТЬ**\n\n---\n\n"
+    body_ctrl += "- [ ] ♻️ **ПОЛНАЯ_ЗАМЕНА**\n\n---\n\n"
     with open(CONTROL_BODY_FILE, 'w', encoding='utf-8') as f:
         f.write(body_ctrl)
     update_issue_from_file(repo, CONTROL_PRIMARY_LABEL, CONTROL_BODY_FILE, env_gh)
@@ -261,9 +253,11 @@ def process_all_controls(token, repo, vetted_list, pinned_list, ranking_db):
     try:
         body, _ = _get_issue_body_by_labels(repo, CONTROL_LABEL_CANDIDATES, env_gh)
         if body:
-            full_replace_requested = _is_checkbox_command_checked(body, FULL_REPLACE_MARKER)
-            full_replace_confirmed = _is_checkbox_command_checked(body, FULL_REPLACE_CONFIRM_MARKER)
-            if full_replace_requested and full_replace_confirmed:
+            confirm_checked = _is_checkbox_command_checked(body, "ПОДТВЕРДИТЬ")
+            full_replace_checked = _is_checkbox_command_checked(body, "ПОЛНАЯ_ЗАМЕНА")
+            legacy_full_replace_checked = _is_checkbox_command_checked(body, "ПОДТВЕРДИТЬ_ПОЛНУЮ_ЗАМЕНУ")
+
+            if confirm_checked and (full_replace_checked or legacy_full_replace_checked):
                 fav_list = []
                 if os.path.exists(FAVORITES_FILE):
                     with open(FAVORITES_FILE, 'r', encoding='utf-8') as f:
@@ -276,6 +270,19 @@ def process_all_controls(token, repo, vetted_list, pinned_list, ranking_db):
                 _cancel_running_workflow_runs(repo, CHECK_WORKFLOW_FILE, env_gh)
                 _dispatch_workflow(repo, CHECK_WORKFLOW_FILE, env_gh)
                 executed_any = True
+
+            if (
+                (confirm_checked and not full_replace_checked)
+                or ("ПОДТВЕРДИТЬ_БАН" in body and "[x]" in body)
+            ):
+                links = find_checked_vless(body)
+                for base_full in links:
+                    base = base_full.split('#')[0].strip()
+                    add_to_blacklist(base)
+                    remove_from_all(base)
+                    if base in ranking_db:
+                        del ranking_db[base]
+                    executed_any = True
 
         out = subprocess.check_output(['gh', 'issue', 'list', '--repo', repo, '--label', 'pin_control', '--json', 'body'], env=env_gh)
         data = json.loads(out)
@@ -373,14 +380,7 @@ def _commit_and_push():
     try:
         subprocess.run(['git', 'config', '--local', 'user.name', 'github-actions[bot]'], check=True)
         subprocess.run(['git', 'config', '--local', 'user.email', 'github-actions[bot]@users.noreply.github.com'], check=True)
-        subprocess.run(
-            [
-                'git', 'add',
-                WIFI_FILE, VETTED_FILE, PINNED_FILE, RANK_FILE, FAVORITES_FILE,
-                'test1/blacklist.txt', CONTROL_BODY_FILE
-            ],
-            check=True
-        )
+        subprocess.run(['git', 'add', WIFI_FILE, VETTED_FILE, PINNED_FILE, RANK_FILE, FAVORITES_FILE, 'test1/blacklist.txt'], check=True)
         status = subprocess.run(['git', 'diff', '--cached', '--quiet'])
         if status.returncode != 0:
             subprocess.run(['git', 'commit', '-m', '🎛️ Apply control-panel actions [skip ci]'], check=True)
