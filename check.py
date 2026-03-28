@@ -1225,7 +1225,7 @@ def main():
         "user_agents": list(DEFAULT_MOBILE_USER_AGENTS),
         "probe_paths": list(DEFAULT_PROBE_PATHS),
         "mobile_whitelist_enabled": True,
-        "mobile_whitelist_fail_open": False,
+        "mobile_whitelist_fail_open": True,
         "mobile_whitelist_timeout_sec": 20.0,
         "mobile_whitelist_domains_url": DEFAULT_MOBILE_WHITELIST["domains_url"],
         "mobile_whitelist_ips_url": DEFAULT_MOBILE_WHITELIST["ips_url"],
@@ -1384,7 +1384,6 @@ def main():
                     elif stress_config.get("mobile_whitelist_enabled", True):
                         if not stress_config.get("mobile_whitelist_fail_open", False):
                             note_reason(reason_stats, "skip_mobile_whitelist_unavailable", base_part)
-                            add_to_blacklist(base_part)
                             continue
 
                 batch.append((link, base_part, host))
