@@ -21,6 +21,57 @@ import (
 	_ "github.com/xtls/xray-core/main/distro/all"
 )
 
+type probeProfile struct {
+	UserAgent string
+	Headers   map[string]string
+}
+
+var probeProfiles = []probeProfile{
+	{
+		UserAgent: "Happ/3.15.1 (com.happproxy; Android 16; Samsung SM-A336B)",
+		Headers: map[string]string{
+			"Accept":           "*/*",
+			"Accept-Language":  "ru-RU,ru;q=0.9,en-US;q=0.8",
+			"X-Requested-With": "com.happproxy",
+		},
+	},
+	{
+		UserAgent: "okhttp/4.12.0 v2rayNG/1.12.28",
+		Headers: map[string]string{
+			"Accept":           "*/*",
+			"Accept-Language":  "ru-RU,ru;q=0.9,en-US;q=0.8",
+			"X-Requested-With": "com.v2ray.ang",
+		},
+	},
+	{
+		UserAgent: "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+		Headers: map[string]string{
+			"Accept":             "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+			"Accept-Language":    "ru-RU,ru;q=0.9,en-US;q=0.8",
+			"Sec-CH-UA":          "\"Chromium\";v=\"124\", \"Google Chrome\";v=\"124\", \"Not-A.Brand\";v=\"99\"",
+			"Sec-CH-UA-Mobile":   "?1",
+			"Sec-CH-UA-Platform": "\"Android\"",
+		},
+	},
+}
+
+func applyProbeHeaders(req *http.Request, idx int) {
+	req.Header.Set("Connection", "close")
+	if len(probeProfiles) == 0 {
+		req.Header.Set("Accept", "*/*")
+		req.Header.Set("User-Agent", "Mozilla/5.0")
+		return
+	}
+	profile := probeProfiles[idx%len(probeProfiles)]
+	req.Header.Set("User-Agent", profile.UserAgent)
+	for key, val := range profile.Headers {
+		req.Header.Set(key, val)
+	}
+	if req.Header.Get("Accept") == "" {
+		req.Header.Set("Accept", "*/*")
+	}
+}
+
 func waitSocksReady(port, timeoutSec int) bool {
 	deadline := time.Now().Add(time.Duration(timeoutSec) * time.Second)
 	for time.Now().Before(deadline) {
@@ -278,10 +329,6 @@ func startXrayAndProbe(configJSON []byte, socksPort, timeoutSec int) int {
 		"https://detectportal.firefox.com/success.txt",
 		"http://example.com/",
 	}
-	probeUAs := []string{
-		"Happ/3.15.1 (com.happproxy; Android 16; Samsung SM-A336B)",
-		"okhttp/4.12.0 v2rayNG/1.12.28",
-	}
 
 	successHits := 0
 	firstSuccessLatency := 0
@@ -303,9 +350,7 @@ func startXrayAndProbe(configJSON []byte, socksPort, timeoutSec int) int {
 				GotFirstResponseByte: func() { gotFirstByte = true },
 			}
 			req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
-			req.Header.Set("Accept", "*/*")
-			req.Header.Set("Connection", "close")
-			req.Header.Set("User-Agent", probeUAs[idx%len(probeUAs)])
+			applyProbeHeaders(req, idx)
 
 			resp, err := client.Do(req)
 			cancel()
@@ -575,10 +620,6 @@ func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C
 		"https://detectportal.firefox.com/success.txt",
 		"http://example.com/",
 	}
-	probeUAs := []string{
-		"Happ/3.15.1 (com.happproxy; Android 16; Samsung SM-A336B)",
-		"okhttp/4.12.0 v2rayNG/1.12.28",
-	}
 	successHits := 0
 	firstSuccessLatency := 0
 	maxAcceptedLatencyMs := 12000
@@ -595,9 +636,7 @@ func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C
 				GotFirstResponseByte: func() { gotFirstByte = true },
 			}
 			req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
-			req.Header.Set("Accept", "*/*")
-			req.Header.Set("Connection", "close")
-			req.Header.Set("User-Agent", probeUAs[idx%len(probeUAs)])
+			applyProbeHeaders(req, idx)
 
 			resp, err := client.Do(req)
 			if err != nil {
