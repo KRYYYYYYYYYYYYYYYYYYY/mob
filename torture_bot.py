@@ -5,6 +5,7 @@ import ssl
 import re
 import json
 import ctypes
+import ipaddress
 import urllib.parse
 import requests
 import psutil
@@ -25,19 +26,45 @@ PROFILE_FILE = 'test1/stress_profile.json'
 COUNTRY_CACHE_FILE = 'test1/countries_cache.json'
 THRESHOLD = 50
 
-DEFAULT_MOBILE_USER_AGENTS = [
-    "Mozilla/5.0 (Linux; Android 13; SM-A336B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 16; SM-A336B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.7680.119 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
-    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1",
-    "Happ/3.15.1 (com.happproxy; Android 16; Samsung SM-A336B)",
-    "okhttp/4.12.0 v2rayNG/1.12.28",
-]
 DEFAULT_PROBE_PATHS = ["/", "/generate_204", "/favicon.ico"]
-BAD_SNI_KEYWORDS = ['google', 'apple', 'microsoft', 'facebook', 'netflix', 'youtube']
+DEFAULT_MOBILE_HEADER_PROFILES = [
+    {
+        "user_agent": "Happ/3.15.1 (com.happproxy; Android 16; Samsung SM-A336B)",
+        "headers": {
+            "Accept": "*/*",
+            "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8",
+            "X-Requested-With": "com.happproxy",
+        },
+    },
+    {
+        "user_agent": "okhttp/4.12.0 v2rayNG/1.12.28",
+        "headers": {
+            "Accept": "*/*",
+            "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8",
+            "X-Requested-With": "com.v2ray.ang",
+        },
+    },
+    {
+        "user_agent": "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+        "headers": {
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8",
+            "Sec-CH-UA": "\"Chromium\";v=\"124\", \"Google Chrome\";v=\"124\", \"Not-A.Brand\";v=\"99\"",
+            "Sec-CH-UA-Mobile": "?1",
+            "Sec-CH-UA-Platform": "\"Android\"",
+        },
+    },
+]
+DEFAULT_MOBILE_WHITELIST = {
+    "domains_url": "https://raw.githubusercontent.com/hxehex/russia-mobile-internet-whitelist/refs/heads/main/whitelist.txt",
+    "ips_url": "https://raw.githubusercontent.com/hxehex/russia-mobile-internet-whitelist/refs/heads/main/ipwhitelist.txt",
+    "cidrs_url": "https://raw.githubusercontent.com/hxehex/russia-mobile-internet-whitelist/refs/heads/main/cidrwhitelist.txt",
+}
 
 file_lock = threading.Lock()
 go_lib = None
+_MOBILE_WHITELIST_CACHE = None
+_MOBILE_WHITELIST_LOCK = threading.Lock()
 
 def normalize_rank_entry(base: str, data):
     """Унифицирует формат ranking.json: dict(rank, link, ...)."""
@@ -70,10 +97,7 @@ def l7_multi_probe(link: str, stress_config: dict, fallback_sni: str) -> bool:
     sni_candidates = extract_sni_candidates(link)
     if fallback_sni and fallback_sni not in sni_candidates:
         sni_candidates.append(fallback_sni)
-    sni_candidates = [
-        c for c in sni_candidates
-        if c and not any(word in c.lower() for word in BAD_SNI_KEYWORDS)
-    ]
+    sni_candidates = [c for c in sni_candidates if c]
     sni_candidates = sni_candidates[:max_candidates]
     hits = 0
     for candidate_sni in sni_candidates:
@@ -100,12 +124,141 @@ def init_checker_lib():
         ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int
     ]
     go_lib.CheckVlessL7.restype = ctypes.c_int
+    if hasattr(go_lib, "SetProbeProfilesJSON"):
+        go_lib.SetProbeProfilesJSON.argtypes = [ctypes.c_char_p]
+        go_lib.SetProbeProfilesJSON.restype = ctypes.c_int
+
+def configure_go_probe_profiles(stress_config):
+    if go_lib is None or not hasattr(go_lib, "SetProbeProfilesJSON"):
+        return
+    profiles = []
+    raw = stress_config.get("mobile_header_profiles")
+    if isinstance(raw, list):
+        for p in raw:
+            if not isinstance(p, dict):
+                continue
+            ua = str(p.get("user_agent", "")).strip()
+            if not ua:
+                continue
+            headers = p.get("headers", {}) if isinstance(p.get("headers"), dict) else {}
+            profiles.append({"user_agent": ua, "headers": headers})
+    if not profiles:
+        profiles = list(DEFAULT_MOBILE_HEADER_PROFILES)
+    try:
+        payload = json.dumps(profiles, ensure_ascii=False).encode("utf-8")
+        rc = int(go_lib.SetProbeProfilesJSON(payload))
+        if rc == 1:
+            print(f"🧩 [TORTURE] Go probe profiles configured: {len(profiles)}")
+    except Exception as e:
+        print(f"⚠️ [TORTURE] Не удалось передать профили в Go checker: {e}")
 
 
 def extract_sni(link: str) -> str:
     parsed = urllib.parse.urlparse(link)
     params = urllib.parse.parse_qs(parsed.query)
     return params.get("sni", [""])[0]
+
+def _normalize_domain(value: str) -> str:
+    d = (value or "").strip().lower().rstrip(".")
+    if not d:
+        return ""
+    if "://" in d:
+        try:
+            p = urllib.parse.urlparse(d)
+            d = (p.hostname or "").strip().lower().rstrip(".")
+        except Exception:
+            return ""
+    return d
+
+def _is_domain_allowed(domain: str, allow_domains: set[str]) -> bool:
+    d = _normalize_domain(domain)
+    if not d:
+        return False
+    if d in allow_domains:
+        return True
+    parts = d.split(".")
+    for i in range(1, len(parts) - 1):
+        tail = ".".join(parts[i:])
+        if tail in allow_domains:
+            return True
+    return False
+
+def _download_lines(url: str, timeout: float = 20.0) -> list[str]:
+    resp = requests.get(url, timeout=timeout, headers={"User-Agent": "Mozilla/5.0"})
+    resp.raise_for_status()
+    out = []
+    for line in resp.text.splitlines():
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        out.append(s)
+    return out
+
+def load_mobile_whitelist(config: dict) -> dict:
+    domains_url = str(config.get("mobile_whitelist_domains_url", DEFAULT_MOBILE_WHITELIST["domains_url"])).strip()
+    ips_url = str(config.get("mobile_whitelist_ips_url", DEFAULT_MOBILE_WHITELIST["ips_url"])).strip()
+    cidrs_url = str(config.get("mobile_whitelist_cidrs_url", DEFAULT_MOBILE_WHITELIST["cidrs_url"])).strip()
+    timeout = float(config.get("mobile_whitelist_timeout_sec", 20.0))
+    domains, ips, cidrs = set(), set(), []
+    for item in _download_lines(domains_url, timeout=timeout):
+        d = _normalize_domain(item)
+        if d:
+            domains.add(d)
+    for item in _download_lines(ips_url, timeout=timeout):
+        try:
+            ips.add(str(ipaddress.ip_address(item.strip())))
+        except Exception:
+            pass
+    for item in _download_lines(cidrs_url, timeout=timeout):
+        try:
+            cidrs.append(ipaddress.ip_network(item.strip(), strict=False))
+        except Exception:
+            pass
+    return {"ok": True, "domains": domains, "ips": ips, "cidrs": cidrs}
+
+def get_mobile_whitelist(config: dict):
+    global _MOBILE_WHITELIST_CACHE
+    with _MOBILE_WHITELIST_LOCK:
+        if _MOBILE_WHITELIST_CACHE is not None and _MOBILE_WHITELIST_CACHE.get("ok"):
+            return _MOBILE_WHITELIST_CACHE
+        retries = max(1, int(config.get("mobile_whitelist_retries", 3)))
+        sleep_sec = float(config.get("mobile_whitelist_retry_sleep_sec", 2.0))
+        last_error = None
+        for attempt in range(1, retries + 1):
+            try:
+                _MOBILE_WHITELIST_CACHE = load_mobile_whitelist(config)
+                wl = _MOBILE_WHITELIST_CACHE
+                print(f"✅ [TORTURE] mobile whitelist loaded: domains={len(wl['domains'])}, ips={len(wl['ips'])}, cidrs={len(wl['cidrs'])}")
+                return wl
+            except Exception as e:
+                last_error = e
+                if attempt < retries:
+                    time.sleep(max(0.0, sleep_sec))
+        _MOBILE_WHITELIST_CACHE = {"ok": False, "domains": set(), "ips": set(), "cidrs": [], "error": str(last_error)}
+        print(f"⚠️ [TORTURE] mobile whitelist unavailable: {last_error}")
+        return _MOBILE_WHITELIST_CACHE
+
+def is_link_in_mobile_whitelist(link: str, whitelist: dict) -> bool:
+    parsed = urllib.parse.urlparse(link)
+    params = urllib.parse.parse_qs(parsed.query)
+    candidates = []
+    for k in ("sni", "host"):
+        v = params.get(k, [""])[0].strip()
+        if v:
+            candidates.append(v)
+    if parsed.hostname:
+        candidates.append(parsed.hostname)
+    for v in candidates:
+        try:
+            ip = ipaddress.ip_address(v)
+            if str(ip) in whitelist.get("ips", set()):
+                return True
+            if any(ip in net for net in whitelist.get("cidrs", [])):
+                return True
+        except Exception:
+            if _is_domain_allowed(v, whitelist.get("domains", set())):
+                return True
+    return False
 
 def extract_sni_candidates(link: str):
     parsed = urllib.parse.urlparse(link)
@@ -207,8 +360,16 @@ def load_stress_config():
         "torture_cycle_sleep": 60,
         "l7_min_success": 2,
         "l7_max_candidates": 3,
-        "user_agents": list(DEFAULT_MOBILE_USER_AGENTS),
         "probe_paths": list(DEFAULT_PROBE_PATHS),
+        "mobile_header_profiles": list(DEFAULT_MOBILE_HEADER_PROFILES),
+        "mobile_whitelist_enabled": True,
+        "mobile_whitelist_fail_open": True,
+        "mobile_whitelist_timeout_sec": 20.0,
+        "mobile_whitelist_retries": 3,
+        "mobile_whitelist_retry_sleep_sec": 2.0,
+        "mobile_whitelist_domains_url": DEFAULT_MOBILE_WHITELIST["domains_url"],
+        "mobile_whitelist_ips_url": DEFAULT_MOBILE_WHITELIST["ips_url"],
+        "mobile_whitelist_cidrs_url": DEFAULT_MOBILE_WHITELIST["cidrs_url"],
     }
     if os.path.exists(PROFILE_FILE):
         try:
@@ -225,12 +386,18 @@ def load_stress_config():
             config["torture_cycle_sleep"] = int(data.get("torture_cycle_sleep", config["torture_cycle_sleep"]))
             config["l7_min_success"] = int(data.get("l7_min_success", config["l7_min_success"]))
             config["l7_max_candidates"] = int(data.get("l7_max_candidates", config["l7_max_candidates"]))
-            if isinstance(data.get("mobile_user_agents"), list) and data.get("mobile_user_agents"):
-                config["user_agents"] = [str(x) for x in data["mobile_user_agents"] if str(x).strip()]
-            elif isinstance(data.get("user_agents"), list) and data.get("user_agents"):
-                config["user_agents"] = [str(x) for x in data["user_agents"] if str(x).strip()]
             if isinstance(data.get("probe_paths"), list) and data.get("probe_paths"):
                 config["probe_paths"] = [str(x) for x in data["probe_paths"] if str(x).strip()]
+            if isinstance(data.get("mobile_header_profiles"), list) and data.get("mobile_header_profiles"):
+                config["mobile_header_profiles"] = data.get("mobile_header_profiles")
+            config["mobile_whitelist_enabled"] = bool(data.get("mobile_whitelist_enabled", config["mobile_whitelist_enabled"]))
+            config["mobile_whitelist_fail_open"] = bool(data.get("mobile_whitelist_fail_open", config["mobile_whitelist_fail_open"]))
+            config["mobile_whitelist_timeout_sec"] = float(data.get("mobile_whitelist_timeout_sec", config["mobile_whitelist_timeout_sec"]))
+            config["mobile_whitelist_retries"] = int(data.get("mobile_whitelist_retries", config["mobile_whitelist_retries"]))
+            config["mobile_whitelist_retry_sleep_sec"] = float(data.get("mobile_whitelist_retry_sleep_sec", config["mobile_whitelist_retry_sleep_sec"]))
+            config["mobile_whitelist_domains_url"] = str(data.get("mobile_whitelist_domains_url", config["mobile_whitelist_domains_url"])).strip() or config["mobile_whitelist_domains_url"]
+            config["mobile_whitelist_ips_url"] = str(data.get("mobile_whitelist_ips_url", config["mobile_whitelist_ips_url"])).strip() or config["mobile_whitelist_ips_url"]
+            config["mobile_whitelist_cidrs_url"] = str(data.get("mobile_whitelist_cidrs_url", config["mobile_whitelist_cidrs_url"])).strip() or config["mobile_whitelist_cidrs_url"]
         except Exception:
             pass
     return config
@@ -290,8 +457,11 @@ def torture_check(link, stress_config, resolved_ip):
     sni = re.search(r"sni=([^&?#]+)", link)
     server_hostname = sni.group(1) if sni else host
 
-    # Юзер-агенты для имитации реального трафика
-    user_agents = stress_config.get("user_agents") or DEFAULT_MOBILE_USER_AGENTS
+    # Юзер-агенты из профилей заголовков (единый источник правды).
+    header_profiles = stress_config.get("mobile_header_profiles") or DEFAULT_MOBILE_HEADER_PROFILES
+    user_agents = [str(p.get("user_agent", "")).strip() for p in header_profiles if isinstance(p, dict) and str(p.get("user_agent", "")).strip()]
+    if not user_agents:
+        user_agents = [p["user_agent"] for p in DEFAULT_MOBILE_HEADER_PROFILES]
     probe_paths = stress_config.get("probe_paths") or DEFAULT_PROBE_PATHS
 
     total_attempts = max(1, int(stress_config.get("torture_total_attempts", 20)))
@@ -389,6 +559,10 @@ def main_torturer():
         except Exception: continue
 
     stress_config = load_stress_config()
+    configure_go_probe_profiles(stress_config)
+    mobile_whitelist = None
+    if stress_config.get("mobile_whitelist_enabled", True):
+        mobile_whitelist = get_mobile_whitelist(stress_config)
 
     working_for_base = list(ranking_db.keys())
 
@@ -446,6 +620,13 @@ def main_torturer():
             # ----------------------------------------
             
             try:
+                if stress_config.get("mobile_whitelist_enabled", True):
+                    if mobile_whitelist and mobile_whitelist.get("ok"):
+                        if not is_link_in_mobile_whitelist(base, mobile_whitelist):
+                            return base, full_link, False, "WL", 0, 0
+                    elif not stress_config.get("mobile_whitelist_fail_open", False):
+                        return base, full_link, False, "WL_UNAVAILABLE", 0, 0
+
                 infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
                 resolved_ip = infos[0][4][0] if infos else None
                 if not resolved_ip:
@@ -484,7 +665,7 @@ def main_torturer():
             else:
                 if status == "OK":
                     decrease_rank(ranking_db, base, delta=30, note=f"FAIL {success_hits}/{total_hits}")
-                elif status in {"IPv6_BAN", "ERROR"}:
+                elif status in {"IPv6_BAN", "ERROR", "WL", "WL_UNAVAILABLE"}:
                     if base in ranking_db:
                         del ranking_db[base]
                     if status == "IPv6_BAN":
