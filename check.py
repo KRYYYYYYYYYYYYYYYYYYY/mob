@@ -113,6 +113,7 @@ def init_checker_lib() -> None:
         ctypes.c_char_p,  # sni
         ctypes.c_char_p,  # pbk      (только reality)
         ctypes.c_char_p,  # sid      (только reality)
+        ctypes.c_char_p,  # fp       (fingerprint для reality/tls)
         ctypes.c_char_p,  # flow     (только vless+reality)
         ctypes.c_char_p,  # netType  ("tcp"/"ws")
         ctypes.c_char_p,  # path     (для ws)
@@ -128,28 +129,31 @@ def probe_vless_l7(link, target_sni, timeout=5):
     if go_lib is None:
         return 0
     try:
-        parsed = urllib.parse.urlparse(link)
-        params = urllib.parse.parse_qs(parsed.query)
-        
-        _, host, port = extract_host_port(link)
-        
-        uuid = parsed.username if parsed.username else ""
-        pbk = params.get('pbk', [''])[0]
-        sid = params.get('sid', [''])[0]
-        flow = params.get('flow', [''])[0]
-        
-        # Вызов Go (теперь возвращает int с миллисекундами)
-        latency = go_lib.CheckVlessL7(
-            host.encode('utf-8'),
-            int(port),
-            uuid.encode('utf-8'),
-            target_sni.encode('utf-8'),
-            pbk.encode('utf-8'),
-            sid.encode('utf-8'),
-            flow.encode('utf-8'),
+        pc = parse_vless_link(link)
+        if not pc or not pc["addr"] or pc["port"] <= 0:
+            return 0
+
+        # Для vless-ветки передаем выбранный SNI-кандидат явно,
+        # но используем универсальный CheckAnyL7 (с поддержкой fp).
+        latency = go_lib.CheckAnyL7(
+            b"vless",
+            pc["addr"].encode("utf-8"),
+            int(pc["port"]),
+            pc["id"].encode("utf-8"),
+            pc["security"].encode("utf-8"),
+            (target_sni or pc.get("sni", "")).encode("utf-8"),
+            pc.get("pbk", "").encode("utf-8"),
+            pc.get("sid", "").encode("utf-8"),
+            pc.get("fp", "").encode("utf-8"),
+            pc.get("flow", "").encode("utf-8"),
+            pc.get("net_type", "tcp").encode("utf-8"),
+            pc.get("path", "").encode("utf-8"),
+            pc.get("host_hdr", "").encode("utf-8"),
+            b"",
+            b"",
             int(timeout)
         )
-        return latency # Вернет 0 или время в мс
+        return int(latency) # Вернет 0 или время в мс
     except Exception as e:
         print(f"⚠️ Ошибка L7 чекера: {e}")
         return 0
@@ -210,6 +214,7 @@ def parse_vmess_link(link: str) -> dict | None:
             "sni":      sni,
             "pbk":      "",
             "sid":      "",
+            "fp":       "",
             "flow":     "",
             "net_type": net_type,
             "path":     str(m.get("path", "")),
@@ -242,6 +247,7 @@ def parse_trojan_link(link: str) -> dict | None:
             "sni":      sni,
             "pbk":      "",
             "sid":      "",
+            "fp":       "",
             "flow":     "",
             "net_type": net_type,
             "path":     params.get("path", [""])[0],
@@ -280,6 +286,7 @@ def parse_ss_link(link: str) -> dict | None:
             "sni":      "",
             "pbk":      "",
             "sid":      "",
+            "fp":       "",
             "flow":     "",
             "net_type": "tcp",
             "path":     "",
@@ -311,6 +318,7 @@ def parse_vless_link(link: str) -> dict | None:
             "sni":      params.get("sni", [""])[0],
             "pbk":      params.get("pbk", [""])[0],
             "sid":      params.get("sid", [""])[0],
+            "fp":       params.get("fp", [""])[0],
             "flow":     params.get("flow", [""])[0],
             "net_type": net_type,
             "path":     params.get("path", [""])[0],
@@ -351,6 +359,7 @@ def probe_any_l7(link: str, timeout: int = 5) -> int:
             pc["sni"].encode(),
             pc["pbk"].encode(),
             pc["sid"].encode(),
+            pc.get("fp", "").encode(),
             pc["flow"].encode(),
             pc["net_type"].encode(),
             pc["path"].encode(),
