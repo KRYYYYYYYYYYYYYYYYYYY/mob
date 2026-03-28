@@ -21,6 +21,19 @@ import (
 	_ "github.com/xtls/xray-core/main/distro/all"
 )
 
+func waitSocksReady(port, timeoutSec int) bool {
+	deadline := time.Now().Add(time.Duration(timeoutSec) * time.Second)
+	for time.Now().Before(deadline) {
+		conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 120*time.Millisecond)
+		if err == nil {
+			conn.Close()
+			return true
+		}
+		time.Sleep(40 * time.Millisecond)
+	}
+	return false
+}
+
 func pickFreeLocalPort() (int, error) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -226,7 +239,9 @@ func startXrayAndProbe(configJSON []byte, socksPort, timeoutSec int) int {
 	}
 	defer instance.Close()
 
-	time.Sleep(500 * time.Millisecond)
+	if !waitSocksReady(socksPort, timeoutSec) {
+		return -1
+	}
 
 	socksDialer, err := proxy.SOCKS5("tcp", fmt.Sprintf("127.0.0.1:%d", socksPort), nil, &net.Dialer{
 		Timeout:   time.Duration(timeoutSec) * time.Second,
@@ -270,12 +285,16 @@ func startXrayAndProbe(configJSON []byte, socksPort, timeoutSec int) int {
 
 	successHits := 0
 	firstSuccessLatency := 0
+	successHosts := map[string]struct{}{}
+	minSuccessHits := 2
 	maxAcceptedLatencyMs := 12000
 
 	for idx, probeURL := range probeURLs {
 		for attempt := 0; attempt < 2; attempt++ {
-			req, err := http.NewRequest(http.MethodGet, probeURL, nil)
+			reqCtx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSec)*time.Second)
+			req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, probeURL, nil)
 			if err != nil {
+				cancel()
 				continue
 			}
 			reqStart := time.Now()
@@ -289,6 +308,7 @@ func startXrayAndProbe(configJSON []byte, socksPort, timeoutSec int) int {
 			req.Header.Set("User-Agent", probeUAs[idx%len(probeUAs)])
 
 			resp, err := client.Do(req)
+			cancel()
 			if err != nil {
 				if attempt == 0 {
 					time.Sleep(200 * time.Millisecond)
@@ -305,8 +325,15 @@ func startXrayAndProbe(configJSON []byte, socksPort, timeoutSec int) int {
 					continue
 				}
 				successHits++
+				if req.URL != nil {
+					successHosts[req.URL.Hostname()] = struct{}{}
+				}
 				if firstSuccessLatency == 0 {
 					firstSuccessLatency = latencyMs
+				}
+				// Mobile-строгость: нужно минимум 2 успешных ответа с разных endpoint'ов.
+				if successHits >= minSuccessHits && len(successHosts) >= 2 {
+					return firstSuccessLatency
 				}
 				break
 			}
@@ -316,9 +343,9 @@ func startXrayAndProbe(configJSON []byte, socksPort, timeoutSec int) int {
 		}
 	}
 
-	// Для практической проверки достаточно хотя бы одного уверенного L7-успеха
-	// на одном из нескольких разнотипных endpoint'ов.
-	if successHits >= 1 {
+	// Для mobile-only отбора просим минимум 2 успешных ответа
+	// и минимум с 2 разных endpoint'ов.
+	if successHits >= minSuccessHits && len(successHosts) >= 2 {
 		return firstSuccessLatency
 	}
 	return -1
