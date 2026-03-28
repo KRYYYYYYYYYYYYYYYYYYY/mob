@@ -6,13 +6,21 @@ concurrency:
 
 on:
   schedule:
-    - cron: '0 */2 * * *'
+    - cron: '0 */1 * * *'
   workflow_dispatch:
     inputs:
       rerun_once:
-        description: 'Internal flag: this run was auto-dispatched as a follow-up rerun'
+        description: 'Внутренний флаг: этот запуск был автоматически отправлен для последующего повторного запуска'
         required: false
         default: 'false'
+      force_run:
+        description: 'Время восстановления при обходе администратора для этого ручного запуска'
+        required: false
+        default: 'false'
+      cooldown_hours:
+        description: 'Время восстановления после последнего успешного запуска (часы)'
+        required: false
+        default: '1'
 
 jobs:
   update:
@@ -25,14 +33,92 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # --- GATE: запускать не чаще чем раз в cooldown_hours после УСПЕШНОГО завершения ---
+      - name: Gate by last successful run (+cooldown)
+        id: gate
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+
+            // workflow file name from workflow_ref:
+            // owner/repo/.github/workflows/main.yml@refs/heads/main
+            const wfRef = context.workflowRef || '';
+            const m = wfRef.match(/\.github\/workflows\/([^@]+)@/);
+            const workflow_id = m ? m[1] : 'main.yml';
+
+            const isDispatch = context.eventName === 'workflow_dispatch';
+            const inputs = (context.payload && context.payload.inputs) || {};
+            const forceRun = isDispatch && String(inputs.force_run || 'false') === 'true';
+
+            // Для ручного запуска можно менять кулдаун, по умолчанию 1 час.
+            // Для schedule всегда 1 час.
+            const parsedCooldownHours = Number(inputs.cooldown_hours ?? '1');
+            const cooldownHours = Number.isFinite(parsedCooldownHours) && parsedCooldownHours > 0
+              ? parsedCooldownHours
+              : 1;
+            const cooldownMs = cooldownHours * 60 * 60 * 1000;
+
+            core.info(`Event: ${context.eventName}`);
+            core.info(`force_run input: ${String(inputs.force_run || 'false')}`);
+            core.info(`cooldown_hours input: ${String(inputs.cooldown_hours || '1')}`);
+            core.info(`Effective cooldown (hours): ${cooldownHours}`);
+
+            if (forceRun) {
+              core.info('force_run=true -> bypass cooldown for this run.');
+              core.setOutput('should_run', 'true');
+              core.setOutput('reason', 'forced');
+              return;
+            }
+
+            const res = await github.rest.actions.listWorkflowRuns({
+              owner,
+              repo,
+              workflow_id,
+              status: 'completed',
+              per_page: 50
+            });
+
+            // последний success НЕ текущий run
+            const nowRunId = context.runId;
+            const lastSuccess = res.data.workflow_runs.find(
+              r => r.conclusion === 'success' && r.id !== nowRunId
+            );
+
+            if (!lastSuccess) {
+              core.info('No previous successful runs found -> allow run.');
+              core.setOutput('should_run', 'true');
+              core.setOutput('reason', 'no_previous_success');
+              return;
+            }
+
+            const last = new Date(lastSuccess.updated_at).getTime(); // время завершения
+            const now = Date.now();
+            const diffMs = now - last;
+
+            core.info(`Last success at: ${lastSuccess.updated_at}`);
+            core.info(`Minutes since last success: ${Math.floor(diffMs / 60000)}`);
+
+            if (diffMs >= cooldownMs) {
+              core.setOutput('should_run', 'true');
+              core.setOutput('reason', 'cooldown_reached');
+            } else {
+              core.setOutput('should_run', 'false');
+              core.setOutput('reason', 'cooldown_not_reached');
+            }
+
       # --- УСТАНОВКА И СБОРКА XRAY L7 ЧЕКЕРА ---
       - name: Set up Go
+        if: steps.gate.outputs.should_run == 'true'
         uses: actions/setup-go@v5
         with:
           go-version: '1.21' # Рекомендуется 1.21 для стабильной работы xray-core
           cache: false
 
       - name: Build Go L7 Library
+        if: steps.gate.outputs.should_run == 'true'
         run: |
           rm -f go.mod go.sum
           go mod init proxy_checker
@@ -44,21 +130,25 @@ jobs:
           go build -buildmode=c-shared -ldflags="-s -w" -o libchecker.so checker.go
           
       - name: Set up Python
+        if: steps.gate.outputs.should_run == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
       - name: Install dependencies
+        if: steps.gate.outputs.should_run == 'true'
         run: |
           python -m pip install --upgrade pip
           pip install requests cryptography certifi
 
       - name: 🌪️ Setup "Censorship" Environment
+        if: steps.gate.outputs.should_run == 'true'
         run: |
           sudo tc qdisc replace dev eth0 root netem delay 150ms 20ms loss 5%
           sudo ifconfig eth0 mtu 1280
       
       - name: Run checker (round 1)
+        if: steps.gate.outputs.should_run == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }} 
           GH_PROMPT_DISABLED: 1
@@ -70,6 +160,7 @@ jobs:
 
       - name: Decide rerun from run_result.json
         id: decide_rerun
+        if: steps.gate.outputs.should_run == 'true'
         run: |
           python - <<'PY'
           import json, os
@@ -91,6 +182,7 @@ jobs:
           PY
 
       - name: Commit and Push changes
+        if: steps.gate.outputs.should_run == 'true'
         run: |
           git config --global user.name "Checker-Bot"
           git config --global user.email "bot@github.com"
@@ -107,6 +199,7 @@ jobs:
 
       - name: Queue follow-up workflow run (if needed)
         if: |
+          steps.gate.outputs.should_run == 'true' &&
           steps.decide_rerun.outputs.should_rerun == 'true' &&
           (github.event_name != 'workflow_dispatch' || github.event.inputs.rerun_once != 'true')
         env:
