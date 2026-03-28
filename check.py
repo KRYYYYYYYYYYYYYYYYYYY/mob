@@ -812,8 +812,10 @@ def l7_multi_probe(link: str, stress_config: dict):
 
     scheme = get_link_scheme(link)
 
-    # --- vmess / trojan / shadowsocks: CheckAnyL7 (SNI-перебор внутри Go) ---
-    if scheme in ("vmess", "trojan", "shadowsocks"):
+    # --- Унифицированный путь через CheckAnyL7 ---
+    # Для vless тоже используем только Go-логику, чтобы не конфликтовали
+    # Python-кандидаты SNI и Go-кандидаты (двойной перебор давал флаппинг).
+    if scheme in ("vless", "vmess", "trojan", "shadowsocks"):
         hits = 0
         best_latency = 0
         latencies = []
@@ -853,7 +855,7 @@ def l7_multi_probe(link: str, stress_config: dict):
                 time.sleep(between_attempts_sleep)
         return False, 0
 
-    # --- vless: оригинальный путь с перебором SNI-кандидатов в Python ---
+    # --- legacy vless path (оставлен как fallback, фактически не используется) ---
     candidates = extract_sni_candidates(link)
     if not candidates:
         native_sni = extract_sni(link)
