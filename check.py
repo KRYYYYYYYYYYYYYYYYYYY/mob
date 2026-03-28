@@ -804,6 +804,7 @@ def l7_multi_probe(link: str, stress_config: dict):
         return False
 
     l7_reject_threshold = max(1, int(stress_config.get("l7_reject_threshold", 2)))
+    l7_max_reject_after_success = max(0, int(stress_config.get("l7_max_reject_after_success", 0)))
     hits = 0
     best_latency = 0
     latencies = []
@@ -815,9 +816,13 @@ def l7_multi_probe(link: str, stress_config: dict):
         latency = probe_any_l7(link, timeout=timeout_sec)
         if latency < 0:
             l7_reject_hits += 1
+            na_count += 1
             # Для REALITY на загруженных/медленных линках один отказ не считаем фатальным.
             if l7_reject_hits >= l7_reject_threshold:
                 return False, -1
+            # Если уже были успешные L7 хиты, последующие reject считаем признаком флапа.
+            if hits > 0 and l7_reject_hits > l7_max_reject_after_success:
+                return False, -2
         elif 0 < latency <= max_latency_ms:
             l7_reject_hits = 0
             hits += 1
@@ -991,7 +996,6 @@ def main():
         "probe_attempts": 4, "min_success": 2, "recv_timeout": 1.7,
         "between_attempts_sleep": 0.35,
         "l7_min_success": 2,
-        "l7_max_candidates": 3,
         "workers": 32,
         "max_latency_ms": 6000,
         "max_check_duration_sec": 5 * 60 * 60,
@@ -1016,7 +1020,6 @@ def main():
                 stress_config["probe_attempts"] = int(data.get("probe_attempts", stress_config["probe_attempts"]))
                 stress_config["min_success"] = int(data.get("min_success", stress_config["min_success"]))
                 stress_config["l7_min_success"] = int(data.get("l7_min_success", stress_config["l7_min_success"]))
-                stress_config["l7_max_candidates"] = int(data.get("l7_max_candidates", stress_config["l7_max_candidates"]))
                 stress_config["workers"] = int(data.get("workers", stress_config["workers"]))
                 stress_config["max_latency_ms"] = int(data.get("max_latency_ms", stress_config["max_latency_ms"]))
                 stress_config["max_check_duration_sec"] = int(data.get("max_check_duration_sec", stress_config["max_check_duration_sec"]))
