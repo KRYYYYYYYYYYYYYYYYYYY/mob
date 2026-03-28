@@ -1,4 +1,3 @@
-
 package main
 
 import "C"
@@ -227,7 +226,7 @@ func startXrayAndProbe(configJSON []byte, socksPort, timeoutSec int) int {
 	}
 	defer instance.Close()
 
-	time.Sleep(150 * time.Millisecond)
+	time.Sleep(500 * time.Millisecond)
 
 	socksDialer, err := proxy.SOCKS5("tcp", fmt.Sprintf("127.0.0.1:%d", socksPort), nil, &net.Dialer{
 		Timeout:   time.Duration(timeoutSec) * time.Second,
@@ -332,39 +331,39 @@ func startXrayAndProbe(configJSON []byte, socksPort, timeoutSec int) int {
 //
 //export CheckAnyL7
 func CheckAnyL7(
-	cScheme   *C.char,
-	cAddr     *C.char,
-	cPort     C.int,
-	cID       *C.char,
+	cScheme *C.char,
+	cAddr *C.char,
+	cPort C.int,
+	cID *C.char,
 	cSecurity *C.char,
-	cSni      *C.char,
-	cPbk      *C.char,
-	cSid      *C.char,
-	cFp       *C.char,
-	cFlow     *C.char,
-	cNetType  *C.char,
-	cPath     *C.char,
-	cHostHdr  *C.char,
-	cMethod   *C.char,
+	cSni *C.char,
+	cPbk *C.char,
+	cSid *C.char,
+	cFp *C.char,
+	cFlow *C.char,
+	cNetType *C.char,
+	cPath *C.char,
+	cHostHdr *C.char,
+	cMethod *C.char,
 	cPassword *C.char,
-	cTimeout  C.int,
+	cTimeout C.int,
 ) C.int {
-	scheme   := strings.ToLower(strings.TrimSpace(C.GoString(cScheme)))
-	addr     := strings.TrimSpace(C.GoString(cAddr))
-	port     := int(cPort)
-	id       := strings.TrimSpace(C.GoString(cID))
+	scheme := strings.ToLower(strings.TrimSpace(C.GoString(cScheme)))
+	addr := strings.TrimSpace(C.GoString(cAddr))
+	port := int(cPort)
+	id := strings.TrimSpace(C.GoString(cID))
 	security := strings.ToLower(strings.TrimSpace(C.GoString(cSecurity)))
-	sni      := strings.TrimSpace(C.GoString(cSni))
-	pbk      := strings.TrimSpace(C.GoString(cPbk))
-	sid      := strings.TrimSpace(C.GoString(cSid))
-	fp       := strings.TrimSpace(C.GoString(cFp))
-	flow     := strings.TrimSpace(C.GoString(cFlow))
-	netType  := strings.TrimSpace(C.GoString(cNetType))
-	path     := strings.TrimSpace(C.GoString(cPath))
-	hostHdr  := strings.TrimSpace(C.GoString(cHostHdr))
-	method   := strings.TrimSpace(C.GoString(cMethod))
+	sni := strings.TrimSpace(C.GoString(cSni))
+	pbk := strings.TrimSpace(C.GoString(cPbk))
+	sid := strings.TrimSpace(C.GoString(cSid))
+	fp := strings.TrimSpace(C.GoString(cFp))
+	flow := strings.TrimSpace(C.GoString(cFlow))
+	netType := strings.TrimSpace(C.GoString(cNetType))
+	path := strings.TrimSpace(C.GoString(cPath))
+	hostHdr := strings.TrimSpace(C.GoString(cHostHdr))
+	method := strings.TrimSpace(C.GoString(cMethod))
 	password := strings.TrimSpace(C.GoString(cPassword))
-	timeout  := int(cTimeout)
+	timeout := int(cTimeout)
 
 	if addr == "" || port <= 0 {
 		return 0
@@ -514,7 +513,7 @@ func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C
 	}
 	defer instance.Close()
 
-	time.Sleep(150 * time.Millisecond)
+	time.Sleep(500 * time.Millisecond)
 
 	socksDialer, err := proxy.SOCKS5("tcp", fmt.Sprintf("127.0.0.1:%d", socksPort), nil, &net.Dialer{
 		Timeout:   time.Duration(timeout) * time.Second,
