@@ -8,11 +8,17 @@ on:
   schedule:
     - cron: '0 */2 * * *'
   workflow_dispatch:
+    inputs:
+      rerun_once:
+        description: 'Internal flag: this run was auto-dispatched as a follow-up rerun'
+        required: false
+        default: 'false'
 
 jobs:
   update:
     runs-on: ubuntu-latest
     permissions:
+      actions: write
       contents: write
       issues: write 
     steps:
@@ -84,16 +90,6 @@ jobs:
               out.write(f"should_rerun={should}\n")
           PY
 
-      - name: Run checker (round 2 if needed)
-        if: steps.decide_rerun.outputs.should_rerun == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_PROMPT_DISABLED: 1
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          LD_LIBRARY_PATH: .
-          CHECK_FAIL_ON_ZERO_ALIVE: 0
-        run: python check.py
-
       - name: Commit and Push changes
         run: |
           git config --global user.name "Checker-Bot"
@@ -108,3 +104,14 @@ jobs:
           git commit -m "Auto-update: DB and Subscription" || echo "No changes to commit"
           git pull --rebase -X theirs origin main
           git push origin main
+
+      - name: Queue follow-up workflow run (if needed)
+        if: |
+          steps.decide_rerun.outputs.should_rerun == 'true' &&
+          (github.event_name != 'workflow_dispatch' || github.event.inputs.rerun_once != 'true')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_PROMPT_DISABLED: 1
+        run: |
+          echo "Scheduling follow-up run: checked>0 and alive_today=0"
+          gh workflow run main.yml --repo "${{ github.repository }}" -f rerun_once=true
