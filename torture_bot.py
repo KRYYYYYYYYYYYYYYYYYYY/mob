@@ -34,7 +34,6 @@ DEFAULT_MOBILE_USER_AGENTS = [
     "okhttp/4.12.0 v2rayNG/1.12.28",
 ]
 DEFAULT_PROBE_PATHS = ["/", "/generate_204", "/favicon.ico"]
-BAD_SNI_KEYWORDS = ['google', 'apple', 'microsoft', 'facebook', 'netflix', 'youtube']
 
 file_lock = threading.Lock()
 go_lib = None
@@ -70,10 +69,7 @@ def l7_multi_probe(link: str, stress_config: dict, fallback_sni: str) -> bool:
     sni_candidates = extract_sni_candidates(link)
     if fallback_sni and fallback_sni not in sni_candidates:
         sni_candidates.append(fallback_sni)
-    sni_candidates = [
-        c for c in sni_candidates
-        if c and not any(word in c.lower() for word in BAD_SNI_KEYWORDS)
-    ]
+    sni_candidates = [c for c in sni_candidates if c]
     sni_candidates = sni_candidates[:max_candidates]
     hits = 0
     for candidate_sni in sni_candidates:
