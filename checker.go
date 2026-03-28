@@ -227,7 +227,7 @@ func startXrayAndProbe(configJSON []byte, socksPort, timeoutSec int) int {
 	}
 	defer instance.Close()
 
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(150 * time.Millisecond)
 
 	socksDialer, err := proxy.SOCKS5("tcp", fmt.Sprintf("127.0.0.1:%d", socksPort), nil, &net.Dialer{
 		Timeout:   time.Duration(timeoutSec) * time.Second,
@@ -446,7 +446,7 @@ func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C
 		timeout = 5
 	}
 
-	d := net.Dialer{Timeout: 3 * time.Second}
+	d := net.Dialer{Timeout: 500 * time.Millisecond}
 	conn, err := d.Dial("tcp", net.JoinHostPort(addr, fmt.Sprintf("%d", cPort)))
 	if err != nil {
 		return 0
@@ -514,7 +514,7 @@ func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C
 	}
 	defer instance.Close()
 
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(150 * time.Millisecond)
 
 	socksDialer, err := proxy.SOCKS5("tcp", fmt.Sprintf("127.0.0.1:%d", socksPort), nil, &net.Dialer{
 		Timeout:   time.Duration(timeout) * time.Second,
