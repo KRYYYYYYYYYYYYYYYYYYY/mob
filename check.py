@@ -448,7 +448,12 @@ def validate_protocol_auth(link: str, link_scheme: str):
         return False, "skip_bad_parsed_link"
 
     if link_scheme == "vless":
-        if not is_valid_vless_id(pc.get("id", "")):
+        # Для VLESS+REALITY не дублируем "жесткую" UUID-валидацию в Python:
+        # финальная проверка достоверности должна идти через Go/xray L7.
+        vless_id = str(pc.get("id", ""))
+        if not vless_id.strip():
+            return False, "skip_missing_vless_id"
+        if len(vless_id.encode("utf-8", errors="ignore")) > 96:
             return False, "skip_bad_uuid_vless"
     elif link_scheme == "vmess":
         if not is_uuid_like(pc.get("id", "")):
@@ -492,7 +497,8 @@ def build_recheck_stress_config(stress_config: dict) -> dict:
     Нужен, чтобы уменьшить ложные fail_l7_reject из-за кратковременных сетевых сбоев.
     """
     cfg = dict(stress_config)
-    cfg["timeout"] = max(float(stress_config.get("timeout", 2.5)), 4.0)
+    base_timeout = float(stress_config.get("timeout", 5.0))
+    cfg["timeout"] = max(base_timeout * 1.8, 6.0)
     cfg["probe_attempts"] = max(int(stress_config.get("probe_attempts", 4)), 3)
     cfg["l7_min_success"] = 1
     cfg["min_success"] = 1
@@ -752,7 +758,7 @@ def l7_multi_probe(link: str, stress_config: dict):
     max_candidates = max(1, int(stress_config.get("l7_max_candidates", 3)))
     probe_attempts = max(1, int(stress_config.get("probe_attempts", 4)))
     between_attempts_sleep = max(0.0, float(stress_config.get("between_attempts_sleep", 0.35)))
-    timeout_sec = int(max(1, stress_config.get("timeout", 5)))
+    timeout_sec = max(1, int(math.ceil(float(stress_config.get("timeout", 5)))))
     max_latency_ms = max(1, int(stress_config.get("max_latency_ms", 6000)))
     stability_max_spread_ms = max(1, int(stress_config.get("stability_max_spread_ms", 1200)))
     stability_max_ratio = max(1.0, float(stress_config.get("stability_max_ratio", 4.0)))
@@ -1033,7 +1039,7 @@ def main():
 
     # Настройки стресс-теста (твой блок 1-в-1)
     stress_config = {
-        "timeout": 2.5, "dpi_sleep": 0.5, "target_mtu": 1280,
+        "timeout": 5.0, "dpi_sleep": 0.5, "target_mtu": 1280,
         "probe_attempts": 4, "min_success": 2, "recv_timeout": 1.7,
         "between_attempts_sleep": 0.35,
         "l7_min_success": 2,
@@ -1056,7 +1062,7 @@ def main():
         try:
             with open('test1/stress_profile.json', 'r') as f:
                 data = json.load(f)
-                stress_config["timeout"] = data.get("max_handshake_ms", 2500) / 1000
+                stress_config["timeout"] = max(4.5, data.get("max_handshake_ms", 2500) / 1000)
                 stress_config["dpi_sleep"] = 0.5 if data.get("mimic_dpi_delay") else 0
                 stress_config["target_mtu"] = data.get("target_mtu", 1280)
                 stress_config["probe_attempts"] = int(data.get("probe_attempts", stress_config["probe_attempts"]))
