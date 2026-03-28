@@ -745,11 +745,10 @@ def ranking_sort_key(link: str, ranking_db: dict):
 def l7_multi_probe(link: str, stress_config: dict):
     """
     Многократный L7-пробник. Поддерживает все протоколы.
-    - vless: перебор SNI-кандидатов в Python + CheckVlessL7
-    - vmess/trojan/shadowsocks: CheckAnyL7 (SNI-перебор внутри Go)
+    - Все протоколы: CheckAnyL7 (SNI-перебор и транспортная логика внутри Go)
+    Python здесь делает только оркестрацию повторов и фильтрацию стабильности.
     """
     min_hits = max(1, int(stress_config.get("l7_min_success", 2)))
-    max_candidates = max(1, int(stress_config.get("l7_max_candidates", 3)))
     probe_attempts = max(1, int(stress_config.get("probe_attempts", 4)))
     between_attempts_sleep = max(0.0, float(stress_config.get("between_attempts_sleep", 0.35)))
     timeout_sec = int(max(1, stress_config.get("timeout", 5)))
@@ -804,94 +803,54 @@ def l7_multi_probe(link: str, stress_config: dict):
                     return True
         return False
 
-    scheme = get_link_scheme(link)
-
-    # --- vmess / trojan / shadowsocks: CheckAnyL7 (SNI-перебор внутри Go) ---
-    if scheme in ("vmess", "trojan", "shadowsocks"):
-        hits = 0
-        best_latency = 0
-        latencies = []
-        na_count = 0
-        total_attempts = 0
-        for attempt_idx in range(probe_attempts):
-            total_attempts += 1
-            latency = probe_any_l7(link, timeout=timeout_sec)
-            if latency < 0:
-                return False, -1
-            if 0 < latency <= max_latency_ms:
-                hits += 1
-                latencies.append(latency)
-                if best_latency == 0 or latency < best_latency:
-                    best_latency = latency
-                if is_unstable_extended(latencies, hits, total_attempts, na_count):
-                    return False, -2
-                if hits >= min_hits and attempt_idx == probe_attempts - 1:
-                    if is_unstable_extended(latencies, hits, total_attempts, na_count):
-                        return False, -2
-                    return True, best_latency
-            else:
-                na_count += 1
-                if hits > 0 and na_count > stability_max_na:
-                    return False, -2
-
-            remaining_attempts = probe_attempts - attempt_idx - 1
-            if hits + remaining_attempts < min_hits:
-                return False, 0
-
-            # Даем шанс собрать min_hits, но на последней попытке требуем стабильность.
-            if hits >= min_hits and remaining_attempts == 0:
-                if is_unstable_extended(latencies, hits, total_attempts, na_count):
-                    return False, -2
-                return True, best_latency
-            if between_attempts_sleep > 0:
-                time.sleep(between_attempts_sleep)
-        return False, 0
-
-    # --- vless: оригинальный путь с перебором SNI-кандидатов в Python ---
-    candidates = extract_sni_candidates(link)
-    if not candidates:
-        native_sni = extract_sni(link)
-        if native_sni:
-            candidates = [native_sni]
-    candidates = [c for c in candidates if c and not any(w in c.lower() for w in BAD_SNI_KEYWORDS)]
-    candidates = candidates[:max_candidates]
-
+    l7_reject_threshold = max(1, int(stress_config.get("l7_reject_threshold", 2)))
+    l7_max_reject_after_success = max(0, int(stress_config.get("l7_max_reject_after_success", 0)))
     hits = 0
     best_latency = 0
     latencies = []
     na_count = 0
     total_attempts = 0
-    for candidate_sni in candidates:
-        for attempt_idx in range(probe_attempts):
-            total_attempts += 1
-            latency = probe_vless_l7(link, candidate_sni, timeout=timeout_sec)
-            if latency < 0:
-                # Жесткий отказ L7 при доступном TCP (например, отключенный UUID)
+    l7_reject_hits = 0
+    for attempt_idx in range(probe_attempts):
+        total_attempts += 1
+        latency = probe_any_l7(link, timeout=timeout_sec)
+        if latency < 0:
+            l7_reject_hits += 1
+            na_count += 1
+            # Для REALITY на загруженных/медленных линках один отказ не считаем фатальным.
+            if l7_reject_hits >= l7_reject_threshold:
                 return False, -1
-            if latency > 0 and latency <= max_latency_ms:
-                hits += 1
-                latencies.append(latency)
-                if best_latency == 0 or latency < best_latency:
-                    best_latency = latency
-                if is_unstable_extended(latencies, hits, total_attempts, na_count):
-                    return False, -2
-            else:
-                na_count += 1
-                if hits > 0 and na_count > stability_max_na:
-                    return False, -2
-
-            remaining_attempts = probe_attempts - attempt_idx - 1
-            if hits + remaining_attempts < min_hits:
-                break
-
-            if hits >= min_hits and remaining_attempts == 0:
+            # Если уже были успешные L7 хиты, последующие reject считаем признаком флапа.
+            if hits > 0 and l7_reject_hits > l7_max_reject_after_success:
+                return False, -2
+        elif 0 < latency <= max_latency_ms:
+            l7_reject_hits = 0
+            hits += 1
+            latencies.append(latency)
+            if best_latency == 0 or latency < best_latency:
+                best_latency = latency
+            if is_unstable_extended(latencies, hits, total_attempts, na_count):
+                return False, -2
+            if hits >= min_hits and attempt_idx == probe_attempts - 1:
                 if is_unstable_extended(latencies, hits, total_attempts, na_count):
                     return False, -2
                 return True, best_latency
-            if between_attempts_sleep > 0:
-                time.sleep(between_attempts_sleep)
-        if hits >= min_hits and not is_unstable_extended(latencies, hits, total_attempts, na_count):
+        else:
+            na_count += 1
+            if hits > 0 and na_count > stability_max_na:
+                return False, -2
+
+        remaining_attempts = probe_attempts - attempt_idx - 1
+        if hits + remaining_attempts < min_hits:
+            return False, 0
+
+        # Даем шанс собрать min_hits, но на последней попытке требуем стабильность.
+        if hits >= min_hits and remaining_attempts == 0:
+            if is_unstable_extended(latencies, hits, total_attempts, na_count):
+                return False, -2
             return True, best_latency
+        if between_attempts_sleep > 0:
+            time.sleep(between_attempts_sleep)
     return False, 0
 
 def main():
@@ -1037,7 +996,6 @@ def main():
         "probe_attempts": 4, "min_success": 2, "recv_timeout": 1.7,
         "between_attempts_sleep": 0.35,
         "l7_min_success": 2,
-        "l7_max_candidates": 3,
         "workers": 32,
         "max_latency_ms": 6000,
         "max_check_duration_sec": 5 * 60 * 60,
@@ -1062,7 +1020,6 @@ def main():
                 stress_config["probe_attempts"] = int(data.get("probe_attempts", stress_config["probe_attempts"]))
                 stress_config["min_success"] = int(data.get("min_success", stress_config["min_success"]))
                 stress_config["l7_min_success"] = int(data.get("l7_min_success", stress_config["l7_min_success"]))
-                stress_config["l7_max_candidates"] = int(data.get("l7_max_candidates", stress_config["l7_max_candidates"]))
                 stress_config["workers"] = int(data.get("workers", stress_config["workers"]))
                 stress_config["max_latency_ms"] = int(data.get("max_latency_ms", stress_config["max_latency_ms"]))
                 stress_config["max_check_duration_sec"] = int(data.get("max_check_duration_sec", stress_config["max_check_duration_sec"]))
