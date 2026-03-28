@@ -71,7 +71,7 @@ func extractSNICandidates(sni, hostHdr, fallbackHost string) []string {
 // Вдохновлено build.go из crazy_xray_checker.
 func buildProxyConfig(
 	scheme, addr string, port int,
-	id, security, sni, pbk, sid, flow, netType, path, hostHdr, method, password string,
+	id, security, sni, pbk, sid, fp, flow, netType, path, hostHdr, method, password string,
 	socksPort int,
 ) ([]byte, error) {
 	type Obj = map[string]any
@@ -102,9 +102,13 @@ func buildProxyConfig(
 		stream["tlsSettings"] = tlsSettings
 	case "reality":
 		stream["security"] = "reality"
+		fingerprint := strings.TrimSpace(fp)
+		if fingerprint == "" {
+			fingerprint = "chrome"
+		}
 		stream["realitySettings"] = Obj{
 			"show":        false,
-			"fingerprint": "chrome",
+			"fingerprint": fingerprint,
 			"serverName":  sni,
 			"publicKey":   pbk,
 			"shortId":     sid,
@@ -252,9 +256,13 @@ func startXrayAndProbe(configJSON []byte, socksPort, timeoutSec int) int {
 	}
 
 	probeURLs := []string{
+		// Набор разнопровайдерных целей, чтобы не заваливаться из-за блокировок одного CDN/домена.
 		"https://www.gstatic.com/generate_204",
 		"https://connectivitycheck.gstatic.com/generate_204",
 		"http://cp.cloudflare.com/generate_204",
+		"http://www.msftconnecttest.com/connecttest.txt",
+		"https://detectportal.firefox.com/success.txt",
+		"http://example.com/",
 	}
 	probeUAs := []string{
 		"Happ/3.15.1 (com.happproxy; Android 16; Samsung SM-A336B)",
@@ -263,7 +271,7 @@ func startXrayAndProbe(configJSON []byte, socksPort, timeoutSec int) int {
 
 	successHits := 0
 	firstSuccessLatency := 0
-	maxAcceptedLatencyMs := 6000
+	maxAcceptedLatencyMs := 12000
 
 	for idx, probeURL := range probeURLs {
 		for attempt := 0; attempt < 2; attempt++ {
@@ -291,7 +299,8 @@ func startXrayAndProbe(configJSON []byte, socksPort, timeoutSec int) int {
 			_, _ = io.Copy(io.Discard, resp.Body)
 			resp.Body.Close()
 
-			if resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusOK {
+			// 2xx/3xx считаем рабочим признаком L7-доступа.
+			if (resp.StatusCode >= 200 && resp.StatusCode < 400) || resp.StatusCode == http.StatusNoContent {
 				latencyMs := int(time.Since(reqStart).Milliseconds())
 				if !gotFirstByte || latencyMs <= 0 || latencyMs > maxAcceptedLatencyMs {
 					continue
@@ -308,7 +317,9 @@ func startXrayAndProbe(configJSON []byte, socksPort, timeoutSec int) int {
 		}
 	}
 
-	if successHits >= 2 {
+	// Для практической проверки достаточно хотя бы одного уверенного L7-успеха
+	// на одном из нескольких разнотипных endpoint'ов.
+	if successHits >= 1 {
 		return firstSuccessLatency
 	}
 	return -1
@@ -329,6 +340,7 @@ func CheckAnyL7(
 	cSni      *C.char,
 	cPbk      *C.char,
 	cSid      *C.char,
+	cFp       *C.char,
 	cFlow     *C.char,
 	cNetType  *C.char,
 	cPath     *C.char,
@@ -345,6 +357,7 @@ func CheckAnyL7(
 	sni      := strings.TrimSpace(C.GoString(cSni))
 	pbk      := strings.TrimSpace(C.GoString(cPbk))
 	sid      := strings.TrimSpace(C.GoString(cSid))
+	fp       := strings.TrimSpace(C.GoString(cFp))
 	flow     := strings.TrimSpace(C.GoString(cFlow))
 	netType  := strings.TrimSpace(C.GoString(cNetType))
 	path     := strings.TrimSpace(C.GoString(cPath))
@@ -361,7 +374,11 @@ func CheckAnyL7(
 	}
 
 	// Быстрый TCP-проб (из crazy_xray_checker)
-	d := net.Dialer{Timeout: 800 * time.Millisecond}
+	precheckTimeout := time.Duration(timeout) * time.Second
+	if precheckTimeout < 3*time.Second {
+		precheckTimeout = 3 * time.Second
+	}
+	d := net.Dialer{Timeout: precheckTimeout}
 	conn, err := d.Dial("tcp", net.JoinHostPort(addr, fmt.Sprintf("%d", port)))
 	if err != nil {
 		return 0
@@ -391,7 +408,7 @@ func CheckAnyL7(
 
 		cfgJSON, err := buildProxyConfig(
 			scheme, addr, port,
-			id, security, candidateSNI, pbk, sid, flow,
+			id, security, candidateSNI, pbk, sid, fp, flow,
 			netType, path, hostHdr, method, password,
 			socksPort,
 		)
@@ -528,6 +545,9 @@ func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C
 		"https://www.gstatic.com/generate_204",
 		"https://connectivitycheck.gstatic.com/generate_204",
 		"http://cp.cloudflare.com/generate_204",
+		"http://www.msftconnecttest.com/connecttest.txt",
+		"https://detectportal.firefox.com/success.txt",
+		"http://example.com/",
 	}
 	probeUAs := []string{
 		"Happ/3.15.1 (com.happproxy; Android 16; Samsung SM-A336B)",
@@ -535,7 +555,7 @@ func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C
 	}
 	successHits := 0
 	firstSuccessLatency := 0
-	maxAcceptedLatencyMs := 6000
+	maxAcceptedLatencyMs := 12000
 
 	for idx, probeURL := range probeURLs {
 		for attempt := 0; attempt < 2; attempt++ {
@@ -563,7 +583,7 @@ func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C
 			_, _ = io.Copy(io.Discard, resp.Body)
 			resp.Body.Close()
 
-			if resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusOK {
+			if (resp.StatusCode >= 200 && resp.StatusCode < 400) || resp.StatusCode == http.StatusNoContent {
 				latencyMs := int(time.Since(reqStart).Milliseconds())
 				if !gotFirstByte || latencyMs <= 0 || latencyMs > maxAcceptedLatencyMs {
 					continue
@@ -579,7 +599,7 @@ func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C
 			}
 		}
 	}
-	if successHits >= 2 {
+	if successHits >= 1 {
 		return firstSuccessLatency
 	}
 	return -1

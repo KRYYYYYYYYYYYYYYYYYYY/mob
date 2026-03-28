@@ -13,6 +13,7 @@ import ipaddress
 import ctypes
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from threading import Lock
 
 
 
@@ -56,6 +57,26 @@ DEFAULT_PROBE_PATHS = ["/", "/generate_204", "/favicon.ico"]
 
 # Подключаем новую библиотеку
 go_lib = None
+HOST_LOCKS = {}
+HOST_LOCKS_GUARD = Lock()
+
+def get_host_lock(host: str) -> Lock:
+    with HOST_LOCKS_GUARD:
+        lk = HOST_LOCKS.get(host)
+        if lk is None:
+            lk = Lock()
+            HOST_LOCKS[host] = lk
+        return lk
+
+def l7_multi_probe_host_serialized(link: str, host: str, stress_config: dict):
+    """
+    Сериализует проверки в рамках одного host/IP.
+    Это снижает ложные reject при параллельной долбежке одного сервера
+    разными UUID в одном батче.
+    """
+    lock = get_host_lock(host)
+    with lock:
+        return l7_multi_probe(link, stress_config)
 
 
 def init_checker_lib() -> None:
@@ -92,6 +113,7 @@ def init_checker_lib() -> None:
         ctypes.c_char_p,  # sni
         ctypes.c_char_p,  # pbk      (только reality)
         ctypes.c_char_p,  # sid      (только reality)
+        ctypes.c_char_p,  # fp       (fingerprint для reality/tls)
         ctypes.c_char_p,  # flow     (только vless+reality)
         ctypes.c_char_p,  # netType  ("tcp"/"ws")
         ctypes.c_char_p,  # path     (для ws)
@@ -107,28 +129,31 @@ def probe_vless_l7(link, target_sni, timeout=5):
     if go_lib is None:
         return 0
     try:
-        parsed = urllib.parse.urlparse(link)
-        params = urllib.parse.parse_qs(parsed.query)
-        
-        _, host, port = extract_host_port(link)
-        
-        uuid = parsed.username if parsed.username else ""
-        pbk = params.get('pbk', [''])[0]
-        sid = params.get('sid', [''])[0]
-        flow = params.get('flow', [''])[0]
-        
-        # Вызов Go (теперь возвращает int с миллисекундами)
-        latency = go_lib.CheckVlessL7(
-            host.encode('utf-8'),
-            int(port),
-            uuid.encode('utf-8'),
-            target_sni.encode('utf-8'),
-            pbk.encode('utf-8'),
-            sid.encode('utf-8'),
-            flow.encode('utf-8'),
+        pc = parse_vless_link(link)
+        if not pc or not pc["addr"] or pc["port"] <= 0:
+            return 0
+
+        # Для vless-ветки передаем выбранный SNI-кандидат явно,
+        # но используем универсальный CheckAnyL7 (с поддержкой fp).
+        latency = go_lib.CheckAnyL7(
+            b"vless",
+            pc["addr"].encode("utf-8"),
+            int(pc["port"]),
+            pc["id"].encode("utf-8"),
+            pc["security"].encode("utf-8"),
+            (target_sni or pc.get("sni", "")).encode("utf-8"),
+            pc.get("pbk", "").encode("utf-8"),
+            pc.get("sid", "").encode("utf-8"),
+            pc.get("fp", "").encode("utf-8"),
+            pc.get("flow", "").encode("utf-8"),
+            pc.get("net_type", "tcp").encode("utf-8"),
+            pc.get("path", "").encode("utf-8"),
+            pc.get("host_hdr", "").encode("utf-8"),
+            b"",
+            b"",
             int(timeout)
         )
-        return latency # Вернет 0 или время в мс
+        return int(latency) # Вернет 0 или время в мс
     except Exception as e:
         print(f"⚠️ Ошибка L7 чекера: {e}")
         return 0
@@ -189,6 +214,7 @@ def parse_vmess_link(link: str) -> dict | None:
             "sni":      sni,
             "pbk":      "",
             "sid":      "",
+            "fp":       "",
             "flow":     "",
             "net_type": net_type,
             "path":     str(m.get("path", "")),
@@ -221,6 +247,7 @@ def parse_trojan_link(link: str) -> dict | None:
             "sni":      sni,
             "pbk":      "",
             "sid":      "",
+            "fp":       "",
             "flow":     "",
             "net_type": net_type,
             "path":     params.get("path", [""])[0],
@@ -259,6 +286,7 @@ def parse_ss_link(link: str) -> dict | None:
             "sni":      "",
             "pbk":      "",
             "sid":      "",
+            "fp":       "",
             "flow":     "",
             "net_type": "tcp",
             "path":     "",
@@ -290,6 +318,7 @@ def parse_vless_link(link: str) -> dict | None:
             "sni":      params.get("sni", [""])[0],
             "pbk":      params.get("pbk", [""])[0],
             "sid":      params.get("sid", [""])[0],
+            "fp":       params.get("fp", [""])[0],
             "flow":     params.get("flow", [""])[0],
             "net_type": net_type,
             "path":     params.get("path", [""])[0],
@@ -330,6 +359,7 @@ def probe_any_l7(link: str, timeout: int = 5) -> int:
             pc["sni"].encode(),
             pc["pbk"].encode(),
             pc["sid"].encode(),
+            pc.get("fp", "").encode(),
             pc["flow"].encode(),
             pc["net_type"].encode(),
             pc["path"].encode(),
@@ -380,15 +410,33 @@ def extract_sni_candidates(link):
     return candidates
 # ------------------------------------------
 
-def is_uuid_like(value: str) -> bool:
-    """Проверяет, что строка похожа на UUID."""
+def is_valid_vless_id(value: str) -> bool:
+    """
+    VLESS user-id:
+    - обычный UUID
+    - или непустая кастомная строка до 30 байт (legacy-режим)
+    """
     if not value:
         return False
     try:
         uuid.UUID(value)
         return True
     except Exception:
+        pass
+    try:
+        raw = value.encode("utf-8")
+    except Exception:
         return False
+    if not (0 < len(raw) <= 30):
+        return False
+    # Отсекаем совсем мусорные ID: пробелы по краям и управляющие символы.
+    if value != value.strip():
+        return False
+    return all(ch.isprintable() and ch not in "\r\n\t" for ch in value)
+
+def is_uuid_like(value: str) -> bool:
+    """Совместимость со старым именем."""
+    return is_valid_vless_id(value)
 
 def validate_protocol_auth(link: str, link_scheme: str):
     """
@@ -400,7 +448,7 @@ def validate_protocol_auth(link: str, link_scheme: str):
         return False, "skip_bad_parsed_link"
 
     if link_scheme == "vless":
-        if not is_uuid_like(pc.get("id", "")):
+        if not is_valid_vless_id(pc.get("id", "")):
             return False, "skip_bad_uuid_vless"
     elif link_scheme == "vmess":
         if not is_uuid_like(pc.get("id", "")):
@@ -437,6 +485,19 @@ def validate_transport_requirements(link: str):
     if net_type == "ws" and not str(pc.get("path", "")).strip():
         return False, "skip_missing_ws_path"
     return True, ""
+
+def build_recheck_stress_config(stress_config: dict) -> dict:
+    """
+    Более мягкий профиль повторной L7-проверки для спорных отказов.
+    Нужен, чтобы уменьшить ложные fail_l7_reject из-за кратковременных сетевых сбоев.
+    """
+    cfg = dict(stress_config)
+    cfg["timeout"] = max(float(stress_config.get("timeout", 2.5)), 4.0)
+    cfg["probe_attempts"] = max(int(stress_config.get("probe_attempts", 4)), 3)
+    cfg["l7_min_success"] = 1
+    cfg["min_success"] = 1
+    cfg["between_attempts_sleep"] = max(float(stress_config.get("between_attempts_sleep", 0.35)), 0.45)
+    return cfg
 
 
 def download_raw_data(urls):
@@ -968,6 +1029,7 @@ def main():
     seen_parts = set()
     runtime_blocked_hosts = {}
     host_precheck_counts = {}
+    host_l7_reject_counts = {}
 
     # Настройки стресс-теста (твой блок 1-в-1)
     stress_config = {
@@ -1076,11 +1138,6 @@ def main():
                     note_reason(reason_stats, "skip_sni_suspicious", base_part)
                     continue
 
-                # UUID-паттерн — только для vless/vmess
-                if link_scheme in ("vless",) and not re.search(r'[a-f0-9\-]{36}@', base_part):
-                    note_reason(reason_stats, "skip_bad_uuid_pattern", base_part)
-                    continue
-
                 # Извлекаем хост/порт: для vmess из base64, иначе из URL
                 if link_scheme == "vmess":
                     pc = parse_vmess_link(base_part)
@@ -1127,7 +1184,7 @@ def main():
                 continue
 
             futures = {
-                pool.submit(l7_multi_probe, link, stress_config): (base_part, host)
+                pool.submit(l7_multi_probe_host_serialized, link, host, stress_config): (base_part, host)
                 for link, base_part, host in batch
             }
             for fut in as_completed(futures):
@@ -1143,6 +1200,7 @@ def main():
                     is_alive, current_latency = False, 0
 
                 if is_alive:
+                    host_l7_reject_counts[host] = 0
                     ip_counts[host] = ip_counts.get(host, 0) + 1
                     if ip_counts[host] > 5:
                         print(f"♻️ Скип IP {host} (лимит)")
@@ -1171,9 +1229,50 @@ def main():
                     counter += 1
                 else:
                     if current_latency < 0:
-                        print("⛔ UUID/доступ отклонен провайдером")
-                        note_reason(reason_stats, "fail_l7_reject", base_part)
-                        runtime_blocked_hosts[host] = "l7_reject"
+                        # Подтверждаем L7-отказ повторной проверкой с более мягкими параметрами,
+                        # чтобы убрать ложные "reject" на пиках нагрузки/потерях.
+                        recheck_alive, recheck_latency = l7_multi_probe_host_serialized(
+                            base_part,
+                            host,
+                            build_recheck_stress_config(stress_config),
+                        )
+                        if recheck_alive:
+                            host_l7_reject_counts[host] = 0
+                            ip_counts[host] = ip_counts.get(host, 0) + 1
+                            if ip_counts[host] > 5:
+                                print(f"♻️ Скип IP {host} (лимит)")
+                                note_reason(reason_stats, "skip_ip_limit", base_part, host)
+                                continue
+
+                            country = get_country_code(host, countries_cache)
+                            if country not in ALLOWED_COUNTRIES:
+                                print(f"🌍 Мимо ({country})")
+                                note_reason(reason_stats, "skip_country", base_part, country)
+                                continue
+
+                            working_for_base.append(base_part)
+                            seen_parts.add(base_part)
+
+                            sub_link = base_part
+                            if "sni=" not in sub_link.lower() and not is_ipv6(host):
+                                sep = "&" if "?" in sub_link else "?"
+                                sub_link += f"{sep}sni={host}"
+
+                            ping_label = f"{recheck_latency}ms"
+                            final_link = rebuild_link_name(sub_link, f"mob {counter} [{ping_label}]")
+                            working_for_sub.append(final_link)
+                            print(f"🟡 RECOVERED {len(working_for_sub)}/200 ({country}): {recheck_latency}ms")
+                            note_reason(reason_stats, "ok_after_recheck", base_part, f"{country},{recheck_latency}ms")
+                            counter += 1
+                            continue
+
+                        print("⛔ UUID/L7-доступ отклонен (подтверждено повторной проверкой)")
+                        note_reason(reason_stats, "fail_l7_reject_confirmed", base_part)
+                        host_l7_reject_counts[host] = host_l7_reject_counts.get(host, 0) + 1
+                        # Не блочим хост после единичного L7-отказа:
+                        # на одном IP могут жить как битые, так и рабочие UUID.
+                        if host_l7_reject_counts[host] >= 3:
+                            runtime_blocked_hosts[host] = "l7_reject_threshold"
                     elif current_latency == -2:
                         print("📉 Нестабильный сервер (сильный разброс/недоступность)")
                         note_reason(reason_stats, "fail_unstable_latency", base_part)
