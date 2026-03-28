@@ -60,6 +60,77 @@ DEFAULT_PROBE_PATHS = ["/", "/generate_204", "/favicon.ico"]
 go_lib = None
 HOST_GATES = {}
 HOST_LOCKS_GUARD = Lock()
+REASON_LOG_BUFFER = []
+REASON_LOG_LOCK = Lock()
+REASON_LOG_FLUSH_EVERY = 500
+REASON_LOG_FLUSH_INTERVAL_SEC = 10.0
+REASON_LOG_LAST_FLUSH_TS = time.time()
+_GEOIP_READER = None
+_GEOIP_READER_READY = False
+
+@lru_cache(maxsize=50000)
+def resolve_ipv4_cached(host: str) -> str:
+    if not host:
+        return host
+    return socket.gethostbyname(host)
+
+def _flush_reason_log_locked(force: bool = False) -> None:
+    global REASON_LOG_LAST_FLUSH_TS
+    now = time.time()
+    if not REASON_LOG_BUFFER:
+        REASON_LOG_LAST_FLUSH_TS = now
+        return
+    if not force:
+        if len(REASON_LOG_BUFFER) < REASON_LOG_FLUSH_EVERY and (now - REASON_LOG_LAST_FLUSH_TS) < REASON_LOG_FLUSH_INTERVAL_SEC:
+            return
+    with open(CHECK_LOG_FILE, "a", encoding="utf-8") as f:
+        f.write("\n".join(REASON_LOG_BUFFER) + "\n")
+    REASON_LOG_BUFFER.clear()
+    REASON_LOG_LAST_FLUSH_TS = now
+
+def flush_reason_log(force: bool = False) -> None:
+    with REASON_LOG_LOCK:
+        _flush_reason_log_locked(force=force)
+
+def get_geoip_country_code(ip: str) -> str | None:
+    """
+    Пытается определить страну через локальную MMDB-базу.
+    База опциональна: если недоступна, вернет None (далее fallback к API).
+    """
+    global _GEOIP_READER, _GEOIP_READER_READY
+    if _GEOIP_READER_READY and _GEOIP_READER is None:
+        return None
+    if not _GEOIP_READER_READY:
+        mmdb_candidates = [
+            os.getenv("GEOIP_MMDB_PATH", "").strip(),
+            "test1/GeoLite2-Country.mmdb",
+            "GeoLite2-Country.mmdb",
+        ]
+        mmdb_path = next((p for p in mmdb_candidates if p and os.path.exists(p)), "")
+        if not mmdb_path:
+            _GEOIP_READER_READY = True
+            _GEOIP_READER = None
+            return None
+        try:
+            import geoip2.database
+            _GEOIP_READER = geoip2.database.Reader(mmdb_path)
+            print(f"🌍 GeoIP MMDB загружена: {mmdb_path}")
+        except Exception as e:
+            print(f"⚠️ GeoIP MMDB недоступна ({mmdb_path}): {e}")
+            _GEOIP_READER = None
+        finally:
+            _GEOIP_READER_READY = True
+
+    if _GEOIP_READER is None:
+        return None
+    try:
+        record = _GEOIP_READER.country(ip)
+        code = getattr(getattr(record, "country", None), "iso_code", None)
+        if code:
+            return str(code)
+    except Exception:
+        return None
+    return None
 
 def get_host_gate(host: str, max_parallel_per_host: int) -> BoundedSemaphore:
     permits = max(1, int(max_parallel_per_host))
@@ -892,19 +963,22 @@ def get_country_code(host, cache):
     if not is_ipv6(host):
         try:
             if not re.match(r"^\d{1,3}(\.\d{1,3}){3}$", host):
-                ip = socket.gethostbyname(host)
-        except:
+                ip = resolve_ipv4_cached(host)
+        except Exception:
             ip = host
 
     # 2. МГНОВЕННЫЙ ОТВЕТ: Если IP уже в кэше, выдаем результат БЕЗ пауз
     if ip in cache:
         return cache[ip]
 
-    # 3. ЗАПРОС К API: Только если IP новый
+    # 3. ПЫТАЕМСЯ ЛОКАЛЬНЫЙ GeoIP (MMDB), если доступен
+    local_code = get_geoip_country_code(ip.replace("[", "").replace("]", ""))
+    if local_code:
+        cache[ip] = local_code
+        return local_code
+
+    # 4. FALLBACK: запрос к API, только если IP новый и MMDB недоступна
     try:
-        # Паузу делаем ТОЛЬКО перед реальным сетевым запросом
-        time.sleep(0.5) 
-        
         clean_ip = ip.replace("[", "").replace("]", "")
         url = f"http://ip-api.com/json/{clean_ip}?fields=status,countryCode"
         
@@ -916,7 +990,7 @@ def get_country_code(host, cache):
                 # Сразу сохраняем в кэш
                 cache[ip] = code 
                 return code
-    except:
+    except Exception:
         pass
         
     return "Unknown"
@@ -967,8 +1041,9 @@ def note_reason(reason_stats: dict, reason: str, base_part: str = "", extra: str
         line += f" | {base_part}"
     if extra:
         line += f" | {extra}"
-    with open(CHECK_LOG_FILE, "a", encoding="utf-8") as f:
-        f.write(line + "\n")
+    with REASON_LOG_LOCK:
+        REASON_LOG_BUFFER.append(line)
+        _flush_reason_log_locked(force=False)
 
 def normalize_rank_entry(base_part: str, entry):
     """Приводит запись ranking.json к единому виду."""
@@ -1101,12 +1176,16 @@ def l7_multi_probe(link: str, stress_config: dict):
 
 def main():
     import subprocess
+    global REASON_LOG_LAST_FLUSH_TS
     token = os.getenv("GH_TOKEN")
     repo = os.getenv("GITHUB_REPOSITORY")
     reason_stats = {}
     # сбрасываем лог текущего прогона
     with open(CHECK_LOG_FILE, "w", encoding="utf-8") as f:
         f.write("")
+    with REASON_LOG_LOCK:
+        REASON_LOG_BUFFER.clear()
+        REASON_LOG_LAST_FLUSH_TS = time.time()
 
     # --- ЗАГРУЗКА КЭША СТРАН ---
     countries_cache = {}
@@ -1573,6 +1652,7 @@ def main():
         json.dump(ranking_db, f, ensure_ascii=False, indent=4)
     with open(REASONS_FILE, "w", encoding="utf-8") as f:
         json.dump(reason_stats, f, ensure_ascii=False, indent=4)
+    flush_reason_log(force=True)
 
     print(f"🏁 Завершено. Подписка: {len(working_for_sub)}, Очередь: {len(new_deferred)}")
     print(f"🧾 Reasons: {json.dumps(reason_stats, ensure_ascii=False)}")
