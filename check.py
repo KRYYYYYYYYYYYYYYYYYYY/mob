@@ -11,9 +11,10 @@ import time
 import subprocess
 import ipaddress
 import ctypes
+from functools import lru_cache
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from threading import Lock
+from threading import Lock, BoundedSemaphore
 
 
 
@@ -57,16 +58,17 @@ DEFAULT_PROBE_PATHS = ["/", "/generate_204", "/favicon.ico"]
 
 # Подключаем новую библиотеку
 go_lib = None
-HOST_LOCKS = {}
+HOST_GATES = {}
 HOST_LOCKS_GUARD = Lock()
 
-def get_host_lock(host: str) -> Lock:
+def get_host_gate(host: str, max_parallel_per_host: int) -> BoundedSemaphore:
+    permits = max(1, int(max_parallel_per_host))
     with HOST_LOCKS_GUARD:
-        lk = HOST_LOCKS.get(host)
-        if lk is None:
-            lk = Lock()
-            HOST_LOCKS[host] = lk
-        return lk
+        gate = HOST_GATES.get(host)
+        if gate is None:
+            gate = BoundedSemaphore(permits)
+            HOST_GATES[host] = gate
+        return gate
 
 def l7_multi_probe_host_serialized(link: str, host: str, stress_config: dict):
     """
@@ -74,8 +76,9 @@ def l7_multi_probe_host_serialized(link: str, host: str, stress_config: dict):
     Это снижает ложные reject при параллельной долбежке одного сервера
     разными UUID в одном батче.
     """
-    lock = get_host_lock(host)
-    with lock:
+    max_parallel_per_host = int(stress_config.get("max_parallel_per_host", 2))
+    gate = get_host_gate(host, max_parallel_per_host)
+    with gate:
         tuned_cfg = tuned_probe_settings(link, stress_config)
         return l7_multi_probe(link, tuned_cfg)
 
@@ -339,6 +342,10 @@ def parse_any_link(link: str) -> dict | None:
     if scheme == "shadowsocks":  return parse_ss_link(link)
     return None
 
+@lru_cache(maxsize=20000)
+def parse_any_link_cached(link: str):
+    return parse_any_link(link)
+
 def probe_any_l7(link: str, timeout: int = 5) -> int:
     """
     Универсальный L7-пробник для любого протокола через CheckAnyL7.
@@ -517,8 +524,8 @@ def is_sni_suspicious(link):
             return True
     return False
 
-def is_link_in_mobile_whitelist(link: str, whitelist: dict) -> tuple[bool, str]:
-    pc = parse_any_link(link)
+def is_link_in_mobile_whitelist(link: str, whitelist: dict, pc: dict | None = None) -> tuple[bool, str]:
+    pc = pc or parse_any_link_cached(link)
     if not pc:
         return False, "skip_bad_parsed_link"
     security = str(pc.get("security", "")).strip().lower()
@@ -595,12 +602,12 @@ def is_uuid_like(value: str) -> bool:
     """Совместимость со старым именем."""
     return is_valid_vless_id(value)
 
-def validate_protocol_auth(link: str, link_scheme: str):
+def validate_protocol_auth(link: str, link_scheme: str, pc: dict | None = None):
     """
     Лёгкая валидация учетки до L7-чека, чтобы не тратить пробы на заведомый мусор.
     Возвращает: (ok, reason)
     """
-    pc = parse_any_link(link)
+    pc = pc or parse_any_link_cached(link)
     if not pc:
         return False, "skip_bad_parsed_link"
 
@@ -621,12 +628,12 @@ def validate_protocol_auth(link: str, link_scheme: str):
             return False, "skip_bad_ss_auth"
     return True, ""
 
-def validate_transport_requirements(link: str):
+def validate_transport_requirements(link: str, pc: dict | None = None):
     """
     Валидация transport/TLS/REALITY параметров перед запуском Go-чекера.
     Возвращает: (ok, reason)
     """
-    pc = parse_any_link(link)
+    pc = pc or parse_any_link_cached(link)
     if not pc:
         return False, "skip_bad_transport_parsed_link"
 
@@ -693,14 +700,14 @@ def apply_profile_preset(stress_config: dict, profile_name: str) -> None:
         stress_config["stability_max_loss_rate"] = min(0.35, float(stress_config.get("stability_max_loss_rate", 0.5)))
         stress_config["stability_max_jitter_ms"] = min(650, int(stress_config.get("stability_max_jitter_ms", 800)))
 
-def is_mobile_only_candidate(link: str) -> tuple[bool, str]:
+def is_mobile_only_candidate(link: str, pc: dict | None = None) -> tuple[bool, str]:
     """
     Жесткий фильтр для mobile-only отбора:
     - отсекаем SS;
     - принимаем только TLS/REALITY;
     - для TLS/REALITY обязателен SNI;
     """
-    pc = parse_any_link(link)
+    pc = pc or parse_any_link_cached(link)
     if not pc:
         return False, "skip_mobile_bad_parsed_link"
     scheme = str(pc.get("scheme", "")).lower()
@@ -1236,6 +1243,8 @@ def main():
         "between_attempts_sleep": 0.35,
         "l7_min_success": 2,
         "workers": 32,
+        "batch_multiplier": 4,
+        "max_parallel_per_host": 2,
         "profile_preset": "mobile_strict",
         "max_latency_ms": 6000,
         "max_check_duration_sec": 2 * 60 * 60,
@@ -1270,6 +1279,8 @@ def main():
                 stress_config["min_success"] = int(data.get("min_success", stress_config["min_success"]))
                 stress_config["l7_min_success"] = int(data.get("l7_min_success", stress_config["l7_min_success"]))
                 stress_config["workers"] = int(data.get("workers", stress_config["workers"]))
+                stress_config["batch_multiplier"] = int(data.get("batch_multiplier", stress_config["batch_multiplier"]))
+                stress_config["max_parallel_per_host"] = int(data.get("max_parallel_per_host", stress_config["max_parallel_per_host"]))
                 stress_config["max_latency_ms"] = int(data.get("max_latency_ms", stress_config["max_latency_ms"]))
                 stress_config["max_check_duration_sec"] = int(data.get("max_check_duration_sec", stress_config["max_check_duration_sec"]))
                 stress_config["stability_max_spread_ms"] = int(data.get("stability_max_spread_ms", stress_config["stability_max_spread_ms"]))
@@ -1316,7 +1327,8 @@ def main():
 
     # --- [ШАГ 4: ЦИКЛ ПРОВЕРКИ] ---
     workers = max(1, int(stress_config.get("workers", 32)))
-    batch_size = max(20, workers * 2)
+    batch_multiplier = max(2, int(stress_config.get("batch_multiplier", 4)))
+    batch_size = max(20, workers * batch_multiplier)
     max_check_duration_sec = max(60, int(stress_config.get("max_check_duration_sec", 2 * 60 * 60)))
     print(f"⚙️ Параллельная проверка: workers={workers}, batch={batch_size}")
 
@@ -1361,10 +1373,13 @@ def main():
                 if not link_scheme:
                     note_reason(reason_stats, "skip_unknown_scheme", base_part)
                     continue
+                pc = parse_any_link_cached(base_part)
+                if not pc:
+                    note_reason(reason_stats, "skip_bad_parsed_link", base_part)
+                    continue
 
                 # Извлекаем хост/порт: для vmess из base64, иначе из URL
                 if link_scheme == "vmess":
-                    pc = parse_vmess_link(base_part)
                     if not pc or not pc["addr"] or not pc["port"]:
                         note_reason(reason_stats, "skip_bad_endpoint", base_part)
                         continue
@@ -1389,19 +1404,19 @@ def main():
                     add_to_blacklist(base_part)
                     continue
 
-                auth_ok, auth_reason = validate_protocol_auth(base_part, link_scheme)
+                auth_ok, auth_reason = validate_protocol_auth(base_part, link_scheme, pc=pc)
                 if not auth_ok:
                     note_reason(reason_stats, auth_reason, base_part)
                     add_to_blacklist(base_part)
                     continue
 
-                transport_ok, transport_reason = validate_transport_requirements(base_part)
+                transport_ok, transport_reason = validate_transport_requirements(base_part, pc=pc)
                 if not transport_ok:
                     note_reason(reason_stats, transport_reason, base_part)
                     add_to_blacklist(base_part)
                     continue
 
-                mobile_ok, mobile_reason = is_mobile_only_candidate(base_part)
+                mobile_ok, mobile_reason = is_mobile_only_candidate(base_part, pc=pc)
                 if not mobile_ok:
                     note_reason(reason_stats, mobile_reason, base_part)
                     add_to_blacklist(base_part)
@@ -1409,7 +1424,7 @@ def main():
 
                 if link_scheme == "vless":
                     if mobile_whitelist and mobile_whitelist.get("ok"):
-                        wl_ok, wl_reason = is_link_in_mobile_whitelist(base_part, mobile_whitelist)
+                        wl_ok, wl_reason = is_link_in_mobile_whitelist(base_part, mobile_whitelist, pc=pc)
                         if not wl_ok:
                             note_reason(reason_stats, wl_reason, base_part)
                             add_to_blacklist(base_part)
