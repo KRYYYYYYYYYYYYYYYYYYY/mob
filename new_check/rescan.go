@@ -73,18 +73,14 @@ func RunScanOnce(max int) {
 	if reserveCapacity < 0 {
 		reserveCapacity = 0
 	}
-	if max > 0 && reserveCapacity > max {
-		reserveCapacity = max
+	scanTarget := maxWorkCfg
+	if max > 0 {
+		scanTarget = max
 	}
-	fmt.Printf("reserve capacity=%d (normal=%d)\n", reserveCapacity, normalCount)
-	if reserveCapacity == 0 {
-		_ = os.WriteFile(timeWifiFile, []byte(""), 0o644)
-		if err := appendReservesToWifi(wifiFile, nil, 0); err != nil {
-			fmt.Println("wifi cleanup:", err)
-		}
-		fmt.Println("done: no reserve slots")
-		return
+	if scanTarget <= 0 {
+		scanTarget = 200
 	}
+	fmt.Printf("reserve capacity=%d (normal=%d), scanTarget=%d\n", reserveCapacity, normalCount, scanTarget)
 
 	var seeds []string
 	// 1) сначала уже существующие резервы из wifi (если есть)
@@ -154,9 +150,9 @@ func RunScanOnce(max int) {
 			appendLine(timeWifiFile, r.Line)
 
 			okCount++
-			if okCount >= reserveCapacity {
+			if okCount >= scanTarget {
 				atomic.StoreInt32(&stopEarly, 1)
-				fmt.Printf("reserve target reached: %d, stopping...\n", reserveCapacity)
+				fmt.Printf("scan target reached: %d, stopping...\n", scanTarget)
 				break
 			}
 		}
@@ -184,7 +180,7 @@ func RunScanOnce(max int) {
 		return li < lj
 	})
 	seenFinal := map[string]struct{}{}
-	finalReserves := make([]string, 0, reserveCapacity)
+	finalReserves := make([]string, 0, scanTarget)
 	for _, rr := range okResults {
 		link := rr.Line
 		base := strings.TrimSpace(strings.SplitN(link, "#", 2)[0])
@@ -198,7 +194,7 @@ func RunScanOnce(max int) {
 			tuned = upsertQueryParam(tuned, "mtu", mtuVal)
 		}
 		finalReserves = append(finalReserves, reserveRename(tuned, len(finalReserves)+1))
-		if len(finalReserves) >= reserveCapacity {
+		if len(finalReserves) >= scanTarget {
 			break
 		}
 	}
@@ -211,7 +207,7 @@ func RunScanOnce(max int) {
 		}
 		fmt.Println("wrote:", workingFile)
 		fmt.Println("wrote:", firstOKFile)
-		fmt.Printf("stats: selected=%d target=%d checked_existing_reserves=%d\n", len(finalReserves), reserveCapacity, len(reservesFromWifi))
+		fmt.Printf("stats: selected=%d reserveCapacity=%d scanTarget=%d checked_existing_reserves=%d\n", len(finalReserves), reserveCapacity, scanTarget, len(reservesFromWifi))
 		if err := appendReservesToWifi(wifiFile, finalReserves, reserveCapacity); err != nil {
 			fmt.Println("wifi update:", err)
 		} else {
@@ -340,7 +336,8 @@ func appendReservesToWifi(path string, reserves []string, maxReserves int) error
 }
 
 func isReserveLine(ln string) bool {
-	return strings.Contains(strings.ToUpper(ln), "RESERVE")
+	up := strings.ToUpper(ln)
+	return strings.Contains(up, "RESERVE") || strings.Contains(up, "РЕЗЕРВ")
 }
 
 func appendLine(path, line string) {
