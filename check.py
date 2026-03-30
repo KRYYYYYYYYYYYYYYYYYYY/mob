@@ -66,6 +66,10 @@ HEADER = """# profile-title: 🏳️Мобильный инет🏳️
 #mtu:1500
 # mtu: 1500
 # mtu:1500
+#v6:0
+#v6: 0
+# v6:0
+# v6: 0
 """
 
 ALLOWED_COUNTRIES = {"US", "DE", "NL", "GB", "FR", "FI", "SG", "JP", "PL", "TR", "RU"}
