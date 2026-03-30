@@ -28,16 +28,22 @@ jobs:
           go-version: '1.21'
           cache: true
 
-      - name: 📦 Build reserve checker
+      - name: 📥 Install Xray core
         run: |
-          cd new_check
+          set -euo pipefail
+          bash new_check/install-go-xray.sh
+
+      - name: 📦 Build reserve checker
+        working-directory: new_check
+        run: |
           go build -o crazy_checker .
 
       - name: ▶️ Run reserve checker
+        working-directory: new_check
         env:
           RESERVE_MTU_VALUE: "1400"
-          XRAY_BIN: xray
-        run: ./new_check/crazy_checker -workers 24 -maxworkcfg 200
+          XRAY_BIN: /usr/local/bin/xray
+        run: ./crazy_checker -workers 24 -maxworkcfg 200
 
       - name: 💾 Commit reserve updates
         run: |
@@ -45,5 +51,5 @@ jobs:
           git config --local user.name "github-actions[bot]"
           git add kr/mob/wifi.txt new_check/result/working.txt new_check/result/first_working.txt new_check/result/result.txt new_check/result/time_wifi.txt
           git commit -m "🧩 Update reserve tail in wifi [skip ci]" || echo "No changes to commit"
-          git pull --rebase -X theirs origin main
+          git pull --rebase --autostash -X theirs origin main
           git push origin main
