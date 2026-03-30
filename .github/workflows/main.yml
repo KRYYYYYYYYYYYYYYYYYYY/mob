@@ -1,222 +1,160 @@
-name: Auto Update VPN
+package main
 
-concurrency:
-  group: vpn-manager-lock
-  cancel-in-progress: false
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+)
 
-on:
-  schedule:
-    - cron: '0 */1 * * *'
-  workflow_dispatch:
-    inputs:
-      rerun_once:
-        description: 'Внутренний флаг: этот запуск был автоматически отправлен для последующего повторного запуска'
-        required: false
-        default: 'false'
-      force_run:
-        description: 'Админ пропуск'
-        required: false
-        default: 'false'
-      cooldown_hours:
-        description: 'Время восстановления после последнего успешного запуска (часы)'
-        required: false
-        default: '1'
+type httpServer struct{ s *http.Server }
 
-jobs:
-  update:
-    runs-on: ubuntu-latest
-    permissions:
-      actions: write
-      contents: write
-      issues: write 
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+func (hs *httpServer) Shutdown() error {
+	if hs == nil || hs.s == nil { return nil }
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second); defer cancel()
+	return hs.s.Shutdown(ctx)
+}
 
-      # --- GATE: запускать не чаще чем раз в cooldown_hours после УСПЕШНОГО завершения ---
-      - name: Gate by last successful run (+cooldown)
-        id: gate
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const owner = context.repo.owner;
-            const repo = context.repo.repo;
+type rescanReq struct {
+	Max int `json:"max"` // скольких рабочих собрать (0 => по умолчанию, возьмём 25 на фронте)
+}
 
-            // workflow file name from workflow_ref:
-            // owner/repo/.github/workflows/main.yml@refs/heads/main
-            const wfRef = context.workflowRef || '';
-            const m = wfRef.match(/\.github\/workflows\/([^@]+)@/);
-            const workflow_id = m ? m[1] : 'main.yml';
+var rescanMu sync.Mutex
 
-            const isDispatch = context.eventName === 'workflow_dispatch';
-            const inputs = (context.payload && context.payload.inputs) || {};
-            const forceRun = isDispatch && String(inputs.force_run || 'false') === 'true';
+func LoadAppConfig(path string) (AppConfig, error) {
+	var cfg AppConfig
+	cfg.APIKey = ""; cfg.Bind = ":8080"; cfg.Title = "V2/Xray Checker"
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			_ = writeDefaultConfig(path, cfg.Bind)
+			return cfg, fmt.Errorf("config.json not found; created template with empty api_key")
+		}
+		return cfg, err
+	}
+	defer f.Close()
+	if err := json.NewDecoder(f).Decode(&cfg); err != nil { return cfg, err }
+	if cfg.Bind == "" { cfg.Bind = ":8080" }
+	return cfg, nil
+}
 
-            // Для ручного запуска можно менять кулдаун, по умолчанию 1 час.
-            // Для schedule всегда 1 час.
-            const parsedCooldownHours = Number(inputs.cooldown_hours ?? '1');
-            const cooldownHours = Number.isFinite(parsedCooldownHours) && parsedCooldownHours > 0
-              ? parsedCooldownHours
-              : 1;
-            const cooldownMs = cooldownHours * 60 * 60 * 1000;
+func writeDefaultConfig(path, bind string) error {
+	_ = os.MkdirAll(filepath.Dir(path), 0o755)
+	tmp := AppConfig{ APIKey: "", Bind: bind, Title: "V2/Xray Checker" }
+	b, _ := json.MarshalIndent(tmp, "", "  ")
+	return os.WriteFile(path, b, 0o600)
+}
 
-            core.info(`Event: ${context.eventName}`);
-            core.info(`force_run input: ${String(inputs.force_run || 'false')}`);
-            core.info(`cooldown_hours input: ${String(inputs.cooldown_hours || '1')}`);
-            core.info(`Effective cooldown (hours): ${cooldownHours}`);
+func StartWebServer(cfg AppConfig) *httpServer {
+	mux := http.NewServeMux()
 
-            if (forceRun) {
-              core.info('force_run=true -> bypass cooldown for this run.');
-              core.setOutput('should_run', 'true');
-              core.setOutput('reason', 'forced');
-              return;
-            }
+	// статика из ./html
+	fs := http.FileServer(http.Dir("html"))
+	mux.Handle("/static/", http.StripPrefix("/static/", fs))
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, filepath.Join("html", "index.html"))
+	})
 
-            const res = await github.rest.actions.listWorkflowRuns({
-              owner,
-              repo,
-              workflow_id,
-              status: 'completed',
-              per_page: 50
-            });
+	// ping
+	mux.HandleFunc("/api/ping", func(w http.ResponseWriter, r *http.Request) {
+		if !checkAuth(cfg.APIKey, r) { unauthorized(w); return }
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"ok":true,"running":%v}`, IsScanRunning())
+	})
 
-            // последний success НЕ текущий run
-            const nowRunId = context.runId;
-            const lastSuccess = res.data.workflow_runs.find(
-              r => r.conclusion === 'success' && r.id !== nowRunId
-            );
+	// список рабочих (JSON)
+	mux.HandleFunc("/api/working", func(w http.ResponseWriter, r *http.Request) {
+		if !checkAuth(cfg.APIKey, r) { unauthorized(w); return }
+		lines, err := readLinesSafe(workingFile)
+		if err != nil { http.Error(w, "not found", http.StatusNotFound); return }
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_ = json.NewEncoder(w).Encode(struct {
+			Count   int      `json:"count"`
+			Items   []string `json:"items"`
+			Running bool     `json:"running"`
+			Updated int64    `json:"updated"`
+		}{Count: len(lines), Items: lines, Running: IsScanRunning(), Updated: time.Now().Unix()})
+	})
 
-            if (!lastSuccess) {
-              core.info('No previous successful runs found -> allow run.');
-              core.setOutput('should_run', 'true');
-              core.setOutput('reason', 'no_previous_success');
-              return;
-            }
+	// рескан: POST /api/rescan  { "max": 25 }
+	mux.HandleFunc("/api/rescan", func(w http.ResponseWriter, r *http.Request) {
+		if !checkAuth(cfg.APIKey, r) { unauthorized(w); return }
+		if r.Method != http.MethodPost { http.Error(w, "method not allowed", http.StatusMethodNotAllowed); return }
 
-            const last = new Date(lastSuccess.updated_at).getTime(); // время завершения
-            const now = Date.now();
-            const diffMs = now - last;
+		var req rescanReq
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req.Max < 0 { req.Max = 0 }
 
-            core.info(`Last success at: ${lastSuccess.updated_at}`);
-            core.info(`Minutes since last success: ${Math.floor(diffMs / 60000)}`);
+		if !TriggerRescan(req.Max) {
+			http.Error(w, "already running", http.StatusConflict)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"started":true,"max":%d}`, req.Max)
+	})
 
-            if (diffMs >= cooldownMs) {
-              core.setOutput('should_run', 'true');
-              core.setOutput('reason', 'cooldown_reached');
-            } else {
-              core.setOutput('should_run', 'false');
-              core.setOutput('reason', 'cooldown_not_reached');
-            }
+	// RAW файлы
+	mux.HandleFunc("/raw/working", func(w http.ResponseWriter, r *http.Request) {
+		if !checkAuth(cfg.APIKey, r) { unauthorized(w); return }
+		serveRawFile(w, workingFile)
+	})
+	mux.HandleFunc("/raw/result", func(w http.ResponseWriter, r *http.Request) {
+		if !checkAuth(cfg.APIKey, r) { unauthorized(w); return }
+		serveRawFile(w, allOutFile)
+	})
+	mux.HandleFunc("/raw/first", func(w http.ResponseWriter, r *http.Request) {
+		if !checkAuth(cfg.APIKey, r) { unauthorized(w); return }
+		serveRawFile(w, firstOKFile)
+	})
 
-      - name: Cancel run (cooldown not reached)
-        if: steps.gate.outputs.should_run != 'true'
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const owner = context.repo.owner;
-            const repo = context.repo.repo;
-            const run_id = context.runId;
-            core.notice(`Cooldown not reached -> cancelling run ${run_id}`);
-            await github.rest.actions.cancelWorkflowRun({ owner, repo, run_id });
+	s := &http.Server{ Addr: cfg.Bind, Handler: mux }
+	fmt.Println("web server listening on", cfg.Bind)
+	go func() {
+		if err := s.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			fmt.Println("web server:", err)
+		}
+	}()
+	return &httpServer{s: s}
+}
 
-      # --- УСТАНОВКА И СБОРКА XRAY L7 ЧЕКЕРА ---
-      - name: Set up Go
-        if: steps.gate.outputs.should_run == 'true'
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.21' # Рекомендуется 1.21 для стабильной работы xray-core
-          cache: false
+func readLinesSafe(path string) ([]string, error) {
+	b, err := os.ReadFile(path)
+	if err != nil { return nil, err }
+	raw := strings.Split(strings.ReplaceAll(string(b), "\r\n", "\n"), "\n")
+	out := make([]string, 0, len(raw))
+	for _, l := range raw {
+		if s := strings.TrimSpace(l); s != "" { out = append(out, s) }
+	}
+	return out, nil
+}
 
-      - name: Build Go L7 Library
-        if: steps.gate.outputs.should_run == 'true'
-        run: |
-          rm -f go.mod go.sum
-          go mod init proxy_checker
-          # Тянем основное ядро и парсер JSON
-          go get github.com/xtls/xray-core@v1.8.24
-          go get github.com/xtls/xray-core/infra/conf/serial@v1.8.24
-          go mod tidy
-          # Компиляция с флагами для уменьшения веса
-          go build -buildmode=c-shared -ldflags="-s -w" -o libchecker.so checker.go
-          
-      - name: Set up Python
-        if: steps.gate.outputs.should_run == 'true'
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
+func serveRawFile(w http.ResponseWriter, path string) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	f, err := os.Open(path)
+	if err != nil { http.Error(w, "not found", http.StatusNotFound); return }
+	defer f.Close()
+	_, _ = io.Copy(w, f)
+}
 
-      - name: Install dependencies
-        if: steps.gate.outputs.should_run == 'true'
-        run: |
-          python -m pip install --upgrade pip
-          pip install requests cryptography certifi
+func unauthorized(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusUnauthorized)
+	io.WriteString(w, "401 unauthorized\npass ?key=... or Authorization: Bearer <key>\n")
+}
 
-      - name: 🌪️ Setup "Censorship" Environment
-        if: steps.gate.outputs.should_run == 'true'
-        run: |
-          sudo tc qdisc replace dev eth0 root netem delay 150ms 20ms loss 5%
-          sudo ifconfig eth0 mtu 1280
-      
-      - name: Run checker (round 1)
-        if: steps.gate.outputs.should_run == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }} 
-          GH_PROMPT_DISABLED: 1
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          # Указываем системе искать .so файл в текущей директории
-          LD_LIBRARY_PATH: .
-          CHECK_FAIL_ON_ZERO_ALIVE: 0
-        run: python check.py
-
-      - name: Decide rerun from run_result.json
-        id: decide_rerun
-        if: steps.gate.outputs.should_run == 'true'
-        run: |
-          python - <<'PY'
-          import json, os
-          path = "test1/run_result.json"
-          should = "false"
-          if os.path.exists(path):
-              with open(path, "r", encoding="utf-8") as f:
-                  data = json.load(f)
-              checked = int(data.get("checked_today", 0) or 0)
-              alive = int(data.get("alive_today", 0) or 0)
-              # Перезапускаем только если проверки были, но ни одного нового живого не нашли.
-              if checked > 0 and alive == 0:
-                  should = "true"
-              print(f"run_result: checked_today={checked}, alive_today={alive}, should_rerun={should}")
-          else:
-              print("run_result.json not found, skip rerun")
-          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
-              out.write(f"should_rerun={should}\n")
-          PY
-
-      - name: Commit and Push changes
-        if: steps.gate.outputs.should_run == 'true'
-        run: |
-          git config --global user.name "Checker-Bot"
-          git config --global user.email "bot@github.com"
-          
-          # Мы не хотим пушить тяжелую библиотеку .so в репозиторий
-          # Добавим её в игнор перед коммитом на всякий случай
-          echo "libchecker.so" >> .gitignore
-          echo "libchecker.h" >> .gitignore
-          
-          git add .
-          git commit -m "Auto-update: DB and Subscription" || echo "No changes to commit"
-          git pull --rebase -X theirs origin main
-          git push origin main
-
-      - name: Queue follow-up workflow run (if needed)
-        if: |
-          steps.gate.outputs.should_run == 'true' &&
-          steps.decide_rerun.outputs.should_rerun == 'true' &&
-          (github.event_name != 'workflow_dispatch' || github.event.inputs.rerun_once != 'true')
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_PROMPT_DISABLED: 1
-        run: |
-          echo "Scheduling follow-up run: checked>0 and alive_today=0"
-          gh workflow run main.yml --repo "${{ github.repository }}" -f rerun_once=true
+func checkAuth(apiKey string, r *http.Request) bool {
+	if strings.TrimSpace(apiKey) == "" { return false }
+	if auth := r.Header.Get("Authorization"); auth != "" {
+		const p = "bearer "
+		if len(auth) >= len(p) && strings.EqualFold(auth[:len(p)], p) {
+			if strings.TrimSpace(auth[len(p):]) == apiKey { return true }
+		}
+	}
+	return r.URL.Query().Get("key") == apiKey
+}
