@@ -18,10 +18,14 @@ import (
 )
 
 func quickTCPProbe(host, port string, timeout time.Duration) bool {
-	if host == "" || port == "" { return true }
-	d := net.Dialer{ Timeout: timeout }
+	if host == "" || port == "" {
+		return true
+	}
+	d := net.Dialer{Timeout: timeout}
 	c, err := d.Dial("tcp", net.JoinHostPort(host, port))
-	if err != nil { return false }
+	if err != nil {
+		return false
+	}
 	_ = c.Close()
 	return true
 }
@@ -32,33 +36,47 @@ func extractSNICandidates(sni, hostHdr, fallbackHost string) []string {
 	var cand []string
 	push := func(v string) {
 		v = strings.ToLower(strings.TrimSpace(v))
-		if v == "" { return }
-		for _, x := range cand { if x == v { return } }
+		if v == "" {
+			return
+		}
+		for _, x := range cand {
+			if x == v {
+				return
+			}
+		}
 		cand = append(cand, v)
 	}
 	push(hostHdr)
-	for _, m := range domainRe.FindAllString(sni, -1) { push(m) }
-	if fallbackHost != "" && net.ParseIP(fallbackHost) == nil { push(fallbackHost) }
-	if len(cand) == 0 && sni != "" { push(sni) }
-	if len(cand) > 5 { cand = cand[:5] }
+	for _, m := range domainRe.FindAllString(sni, -1) {
+		push(m)
+	}
+	if fallbackHost != "" && net.ParseIP(fallbackHost) == nil {
+		push(fallbackHost)
+	}
+	if len(cand) == 0 && sni != "" {
+		push(sni)
+	}
+	if len(cand) > 5 {
+		cand = cand[:5]
+	}
 	return cand
 }
 
-func checkViaXray(pc *ParsedConfig) (string, bool) {
+func checkViaXray(pc *ParsedConfig) (string, bool, int) {
 	if pc.Scheme != "vmess" && pc.Scheme != "vless" && pc.Scheme != "trojan" && pc.Scheme != "shadowsocks" {
-		return "unsupported-scheme", false
+		return "unsupported-scheme", false, 0
 	}
 	if pc.Note != "" && strings.Contains(pc.Note, "unsupported") {
-		return pc.Note, false
+		return pc.Note, false, 0
 	}
 	if strings.Contains(strings.ToLower(pc.Net), "grpc") {
-		return "unsupported: grpc", false
+		return "unsupported: grpc", false, 0
 	}
 
 	// быстрый TCP-проб
 	if enableTCPProbe {
 		if !quickTCPProbe(pc.Host, firstNonEmpty(pc.Port, "443"), 800*time.Millisecond) {
-			return "tcp-dead", false
+			return "tcp-dead", false, 0
 		}
 	}
 
@@ -79,7 +97,9 @@ func checkViaXray(pc *ParsedConfig) (string, bool) {
 
 		// free socks port
 		socksPort, l, err := pickFreePort()
-		if err != nil { return "no-free-port", false }
+		if err != nil {
+			return "no-free-port", false, 0
+		}
 		l.Close()
 
 		// подмена SNI на попытку
@@ -93,16 +113,22 @@ func checkViaXray(pc *ParsedConfig) (string, bool) {
 		}
 
 		tmp, err := os.CreateTemp("", "xraycheck-*.json")
-		if err != nil { return "tempfile-fail: " + err.Error(), false }
-		_, _ = tmp.Write(cfgJSON); tmp.Close()
+		if err != nil {
+			return "tempfile-fail: " + err.Error(), false, 0
+		}
+		_, _ = tmp.Write(cfgJSON)
+		tmp.Close()
 		defer os.Remove(tmp.Name())
 
 		xrayBin := os.Getenv("XRAY_BIN")
-		if xrayBin == "" { xrayBin = "xray" }
+		if xrayBin == "" {
+			xrayBin = "xray"
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), xrayRunBudget)
 		cmd := exec.CommandContext(ctx, xrayBin, "-c", tmp.Name())
 		var outBuf, errBuf bytes.Buffer
-		cmd.Stdout = &outBuf; cmd.Stderr = &errBuf
+		cmd.Stdout = &outBuf
+		cmd.Stderr = &errBuf
 
 		if err := cmd.Start(); err != nil {
 			cancel()
@@ -112,30 +138,36 @@ func checkViaXray(pc *ParsedConfig) (string, bool) {
 
 		time.Sleep(bootWait)
 
-		ok := doHTTPViaSocks(socksPort)
+		ok, latencyMs := doHTTPViaSocks(socksPort)
 		if !ok {
 			time.Sleep(300 * time.Millisecond)
-			ok = doHTTPViaSocks(socksPort)
+			ok, latencyMs = doHTTPViaSocks(socksPort)
 		}
 
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
 		cancel()
 
-		if ok { return "xray-ok", true }
+		if ok {
+			return "xray-ok", true, latencyMs
+		}
 		if tail := tailString(errBuf.String(), 180); tail != "" {
 			lastReason = "xray-handshake-fail: " + tail
 		} else {
 			lastReason = "xray-handshake-fail"
 		}
-		if attempts >= retrySNI { break }
+		if attempts >= retrySNI {
+			break
+		}
 	}
 
-	if lastReason == "" { lastReason = "xray-handshake-fail" }
-	return lastReason, false
+	if lastReason == "" {
+		lastReason = "xray-handshake-fail"
+	}
+	return lastReason, false, 0
 }
 
-func doHTTPViaSocks(port int) bool {
+func doHTTPViaSocks(port int) (bool, int) {
 	tb := &http.Transport{
 		Proxy: nil,
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -143,26 +175,52 @@ func doHTTPViaSocks(port int) bool {
 				Timeout:   testTimeout,
 				KeepAlive: 0,
 			})
-			if err != nil { return nil, err }
+			if err != nil {
+				return nil, err
+			}
 			return d.(proxy.ContextDialer).DialContext(ctx, network, addr)
 		},
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 	}
 	client := &http.Client{Transport: tb, Timeout: testTimeout}
-	resp, err := client.Get(testURL)
-	if err != nil { return false }
-	io.Copy(io.Discard, resp.Body); resp.Body.Close()
-	return true
+	best := 0
+	for _, u := range testURLs {
+		start := time.Now()
+		resp, err := client.Get(u)
+		if err != nil {
+			continue
+		}
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		lat := int(time.Since(start).Milliseconds())
+		if lat <= 0 {
+			lat = 1
+		}
+		if best == 0 || lat < best {
+			best = lat
+		}
+	}
+	if best == 0 {
+		return false, 0
+	}
+	return true, best
 }
 
 func pickFreePort() (int, net.Listener, error) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil { return 0, nil, err }
+	if err != nil {
+		return 0, nil, err
+	}
 	return l.Addr().(*net.TCPAddr).Port, l, nil
 }
 
 func tailString(s string, n int) string {
-	s = strings.TrimSpace(s); if s == "" { return "" }
-	if len(s) <= n { return s }
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	if len(s) <= n {
+		return s
+	}
 	return s[len(s)-n:]
 }
