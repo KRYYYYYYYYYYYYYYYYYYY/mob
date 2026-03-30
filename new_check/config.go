@@ -4,12 +4,13 @@ import "time"
 
 // пути/файлы
 var (
-	inputFile   = "new_check/input.txt"
-	wifiFile    = "kr/mob/wifi.txt"
-	outputDir   = "new_check/result"
-	allOutFile  = outputDir + "/result.txt"
-	workingFile = outputDir + "/working.txt"
-	firstOKFile = outputDir + "/first_working.txt"
+	inputFile    = "new_check/input.txt"
+	wifiFile     = "kr/mob/wifi.txt"
+	outputDir    = "new_check/result"
+	allOutFile   = outputDir + "/result.txt"
+	workingFile  = outputDir + "/working.txt"
+	firstOKFile  = outputDir + "/first_working.txt"
+	timeWifiFile = outputDir + "/time_wifi.txt"
 
 	configJSONPath = "new_check/config.json"
 )
@@ -36,7 +37,11 @@ const (
 var (
 	httpFetchTimeout = 15 * time.Second
 	maxRemoteSize    = int64(5 * 1024 * 1024)
-	testURL          = "http://example.com/"
+	testURLs         = []string{
+		"http://example.com/",
+		"http://cp.cloudflare.com/generate_204",
+		"https://www.gstatic.com/generate_204",
+	}
 )
 
 type AppConfig struct {
