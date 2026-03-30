@@ -73,6 +73,7 @@ HEADER = """# profile-title: 🏳️Мобильный инет🏳️
 """
 
 ALLOWED_COUNTRIES = {"US", "DE", "NL", "GB", "FR", "FI", "SG", "JP", "PL", "TR", "RU"}
+TARGET_SUB_SIZE = 100
 
 DEFAULT_PROBE_PATHS = ["/", "/generate_204", "/favicon.ico"]
 DEFAULT_MOBILE_HEADER_PROFILES = [
@@ -1322,7 +1323,7 @@ def main():
     extend_check_queue(sorted(deferred_base, key=lambda l: ranking_sort_key(l, ranking_db)))
 
     # --- [ШАГ 3: ПОДГОТОВКА К ЦИКЛУ] ---
-    working_for_sub = immortals[:200] # Сразу забиваем подписку бессмертными
+    working_for_sub = immortals[:TARGET_SUB_SIZE] # Сразу забиваем подписку бессмертными
     working_for_base = []            # Сюда пойдут те, кто реально ответил
     
     now = time.time()
@@ -1428,7 +1429,7 @@ def main():
         mobile_whitelist = get_mobile_whitelist(stress_config)
 
     raw_external_loaded = False
-    print(f"📡 Начинаю добор до 200. В очереди (текущие+отложенные): {len(check_queue)}")
+    print(f"📡 Начинаю добор до {TARGET_SUB_SIZE}. В очереди (текущие+отложенные): {len(check_queue)}")
 
     # --- [ШАГ 4: ЦИКЛ ПРОВЕРКИ] ---
     workers = max(1, int(stress_config.get("workers", 32)))
@@ -1438,7 +1439,7 @@ def main():
     print(f"⚙️ Параллельная проверка: workers={workers}, batch={batch_size}")
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        while len(working_for_sub) < 200:
+        while len(working_for_sub) < TARGET_SUB_SIZE:
             if stress_config.get("mobile_whitelist_enabled", True):
                 mobile_whitelist = get_mobile_whitelist(stress_config)
             if time.time() - start_time >= max_check_duration_sec:
@@ -1550,13 +1551,13 @@ def main():
                 continue
 
             futures = {
-                pool.submit(l7_multi_probe_host_serialized, link, host, stress_config): (base_part, host)
+                pool.submit(l7_multi_probe_host_serialized, link, host, stress_config): (link, base_part, host)
                 for link, base_part, host in batch
             }
             for fut in as_completed(futures):
-                if len(working_for_sub) >= 200 or checked_today >= MAX_TO_CHECK:
+                if len(working_for_sub) >= TARGET_SUB_SIZE or checked_today >= MAX_TO_CHECK:
                     break
-                base_part, host = futures[fut]
+                source_link, base_part, host = futures[fut]
                 checked_today += 1
                 print(f"🔍 Тестирую: {host}...", end=" ", flush=True)
                 try:
@@ -1581,16 +1582,15 @@ def main():
                     working_for_base.append(base_part)
                     seen_parts.add(base_part)
 
-                    sub_link = base_part
-                    if "sni=" not in sub_link.lower() and not is_ipv6(host):
-                        sep = "&" if "?" in sub_link else "?"
-                        sub_link += f"{sep}sni={host}"
-                    sub_link = upsert_query_param(sub_link, link_tune_param_key, link_tune_param_value)
+                    tuned_link = source_link
+                    if "sni=" not in tuned_link.lower() and not is_ipv6(host):
+                        tuned_link = upsert_query_param(tuned_link, "sni", host)
 
                     ping_label = f"{current_latency}ms"
-                    final_link = rebuild_link_name(sub_link, f"mob {counter} [{ping_label}]")
+                    final_link = rebuild_link_name(tuned_link, f"mob {counter} [{ping_label}]")
+                    final_link = upsert_query_param(final_link, link_tune_param_key, link_tune_param_value)
                     working_for_sub.append(final_link)
-                    print(f"✅ ОК {len(working_for_sub)}/200 ({country}): {current_latency}ms")
+                    print(f"✅ ОК {len(working_for_sub)}/{TARGET_SUB_SIZE} ({country}): {current_latency}ms")
                     note_reason(reason_stats, "ok", base_part, f"{country},{current_latency}ms")
                     counter += 1
                 else:
@@ -1619,16 +1619,15 @@ def main():
                             working_for_base.append(base_part)
                             seen_parts.add(base_part)
 
-                            sub_link = base_part
-                            if "sni=" not in sub_link.lower() and not is_ipv6(host):
-                                sep = "&" if "?" in sub_link else "?"
-                                sub_link += f"{sep}sni={host}"
-                            sub_link = upsert_query_param(sub_link, link_tune_param_key, link_tune_param_value)
+                            tuned_link = source_link
+                            if "sni=" not in tuned_link.lower() and not is_ipv6(host):
+                                tuned_link = upsert_query_param(tuned_link, "sni", host)
 
                             ping_label = f"{recheck_latency}ms"
-                            final_link = rebuild_link_name(sub_link, f"mob {counter} [{ping_label}]")
+                            final_link = rebuild_link_name(tuned_link, f"mob {counter} [{ping_label}]")
+                            final_link = upsert_query_param(final_link, link_tune_param_key, link_tune_param_value)
                             working_for_sub.append(final_link)
-                            print(f"🟡 RECOVERED {len(working_for_sub)}/200 ({country}): {recheck_latency}ms")
+                            print(f"🟡 RECOVERED {len(working_for_sub)}/{TARGET_SUB_SIZE} ({country}): {recheck_latency}ms")
                             note_reason(reason_stats, "ok_after_recheck", base_part, f"{country},{recheck_latency}ms")
                             counter += 1
                             continue
@@ -1656,7 +1655,7 @@ def main():
 
     # --- [ШАГ 5: ФИНАЛЬНОЕ СОХРАНЕНИЕ] ---
     
-    # 1. Подписка (всегда до 200, закрепы в начале)
+    # 1. Подписка (до TARGET_SUB_SIZE, закрепы в начале)
     os.makedirs(os.path.dirname(OUTPUT_FILE), exist_ok=True)
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
         f.write(HEADER.strip() + "\n\n" + "\n".join(working_for_sub))
