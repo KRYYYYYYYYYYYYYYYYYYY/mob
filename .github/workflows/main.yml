@@ -109,6 +109,18 @@ jobs:
               core.setOutput('reason', 'cooldown_not_reached');
             }
 
+      - name: Cancel run (cooldown not reached)
+        if: steps.gate.outputs.should_run != 'true'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const run_id = context.runId;
+            core.notice(`Cooldown not reached -> cancelling run ${run_id}`);
+            await github.rest.actions.cancelWorkflowRun({ owner, repo, run_id });
+
       # --- УСТАНОВКА И СБОРКА XRAY L7 ЧЕКЕРА ---
       - name: Set up Go
         if: steps.gate.outputs.should_run == 'true'

@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     permissions:
-      actions: read
+      actions: write
       contents: write
       # issues permissions intentionally omitted: issue-control moved to control-bot.yml
 
@@ -68,9 +68,17 @@ jobs:
             core.info(`Minutes since: ${Math.floor(diffMs / 60000)}`);
             core.setOutput('should_run', diffMs >= cooldownMs ? 'true' : 'false');
 
-      - name: ⏭️ Skip (cooldown not reached)
+      - name: 🛑 Cancel run (cooldown not reached)
         if: steps.gate.outputs.should_run != 'true'
-        run: echo "Cooldown < 2h since last successful run. Skipping."
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const run_id = context.runId;
+            core.notice(`Cooldown < 2h -> cancelling run ${run_id}`);
+            await github.rest.actions.cancelWorkflowRun({ owner, repo, run_id });
 
       - name: 🛠️ Setup Go
         if: steps.gate.outputs.should_run == 'true'
