@@ -73,6 +73,7 @@ HEADER = """# profile-title: 🏳️Мобильный инет🏳️
 """
 
 ALLOWED_COUNTRIES = {"US", "DE", "NL", "GB", "FR", "FI", "SG", "JP", "PL", "TR", "RU"}
+TARGET_SUB_SIZE = 100
 
 DEFAULT_PROBE_PATHS = ["/", "/generate_204", "/favicon.ico"]
 DEFAULT_MOBILE_HEADER_PROFILES = [
@@ -898,6 +899,30 @@ def rebuild_link_name(link: str, new_name: str) -> str:
 
     return f"{base}#{urllib.parse.quote(new_name)}"
 
+def upsert_query_param(link: str, key: str, value: str) -> str:
+    """
+    Добавляет/обновляет query-параметр в ссылке ДО #fragment.
+    Пример: ...?security=reality -> ...?security=reality&mtu=1400
+    """
+    key = (key or "").strip()
+    value = (value or "").strip()
+    if not key or not value:
+        return link
+    parsed = urllib.parse.urlsplit(link)
+    pairs = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+    out_pairs = []
+    replaced = False
+    for k, v in pairs:
+        if k == key:
+            out_pairs.append((k, value))
+            replaced = True
+        else:
+            out_pairs.append((k, v))
+    if not replaced:
+        out_pairs.append((key, value))
+    new_query = urllib.parse.urlencode(out_pairs, doseq=True)
+    return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, new_query, parsed.fragment))
+
 def remove_from_all(base_part: str):
     """Удаляет сервер по base_part из основных рабочих файлов."""
     for path in [INPUT_FILE, OUTPUT_FILE]:
@@ -1260,22 +1285,18 @@ def main():
         except: history = {}
 
     # --- [ШАГ 1: ФОРМИРУЕМ СПИСОК БЕССМЕРТНЫХ] ---
-    immortals = [] 
-    seen_immortals = set()
+    immortals = []
+    immortal_bases = set()
 
-    # Сначала закрепы (самый высокий приоритет)
+    # Закрепы и фавориты считаем "неприкасаемыми":
+    # не отсекаем дубли внутри их списков и сохраняем как есть.
+    # Для технических фильтров держим отдельный set баз.
     for p in pinned_list:
-        base = p.split("#")[0].strip()
-        if base not in seen_immortals:
-            immortals.append(p)
-            seen_immortals.add(base)
-
-    # Потом фавориты
+        immortals.append(p)
+        immortal_bases.add(p.split("#")[0].strip())
     for f_link in fav_full_links:
-        base = f_link.split("#")[0].strip()
-        if base not in seen_immortals:
-            immortals.append(f_link)
-            seen_immortals.add(base)
+        immortals.append(f_link)
+        immortal_bases.add(f_link.split("#")[0].strip())
 
     print(f"🛡️ Итого бессмертных в начале списка: {len(immortals)}")
     note_reason(reason_stats, "immortals_loaded", extra=str(len(immortals)))
@@ -1288,7 +1309,7 @@ def main():
         for link in links:
             base = link.split('#')[0].strip()
             # Проверяем, что ссылки нет в бессмертных, она не дубликат в очереди и не в блэклисте
-            if base not in seen_immortals and base not in seen_in_queue and (ignore_blacklist or base not in blacklist):
+            if base not in immortal_bases and base not in seen_in_queue and (ignore_blacklist or base not in blacklist):
                 check_queue.append(link)
                 seen_in_queue.add(base)
                 added += 1
@@ -1302,7 +1323,7 @@ def main():
     extend_check_queue(sorted(deferred_base, key=lambda l: ranking_sort_key(l, ranking_db)))
 
     # --- [ШАГ 3: ПОДГОТОВКА К ЦИКЛУ] ---
-    working_for_sub = immortals[:200] # Сразу забиваем подписку бессмертными
+    working_for_sub = immortals[:TARGET_SUB_SIZE] # Сразу забиваем подписку бессмертными
     working_for_base = []            # Сюда пойдут те, кто реально ответил
     
     now = time.time()
@@ -1317,6 +1338,8 @@ def main():
     runtime_blocked_hosts = {}
     host_precheck_counts = {}
     host_l7_reject_counts = {}
+    link_tune_param_key = os.getenv("LINK_TUNE_PARAM_KEY", "mtu").strip()
+    link_tune_param_value = os.getenv("LINK_TUNE_PARAM_VALUE", "1400").strip()
 
     # Настройки стресс-теста (твой блок 1-в-1)
     stress_config = {
@@ -1406,7 +1429,7 @@ def main():
         mobile_whitelist = get_mobile_whitelist(stress_config)
 
     raw_external_loaded = False
-    print(f"📡 Начинаю добор до 200. В очереди (текущие+отложенные): {len(check_queue)}")
+    print(f"📡 Начинаю добор до {TARGET_SUB_SIZE}. В очереди (текущие+отложенные): {len(check_queue)}")
 
     # --- [ШАГ 4: ЦИКЛ ПРОВЕРКИ] ---
     workers = max(1, int(stress_config.get("workers", 32)))
@@ -1416,7 +1439,7 @@ def main():
     print(f"⚙️ Параллельная проверка: workers={workers}, batch={batch_size}")
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        while len(working_for_sub) < 200:
+        while len(working_for_sub) < TARGET_SUB_SIZE:
             if stress_config.get("mobile_whitelist_enabled", True):
                 mobile_whitelist = get_mobile_whitelist(stress_config)
             if time.time() - start_time >= max_check_duration_sec:
@@ -1528,13 +1551,13 @@ def main():
                 continue
 
             futures = {
-                pool.submit(l7_multi_probe_host_serialized, link, host, stress_config): (base_part, host)
+                pool.submit(l7_multi_probe_host_serialized, link, host, stress_config): (link, base_part, host)
                 for link, base_part, host in batch
             }
             for fut in as_completed(futures):
-                if len(working_for_sub) >= 200 or checked_today >= MAX_TO_CHECK:
+                if len(working_for_sub) >= TARGET_SUB_SIZE or checked_today >= MAX_TO_CHECK:
                     break
-                base_part, host = futures[fut]
+                source_link, base_part, host = futures[fut]
                 checked_today += 1
                 print(f"🔍 Тестирую: {host}...", end=" ", flush=True)
                 try:
@@ -1559,15 +1582,15 @@ def main():
                     working_for_base.append(base_part)
                     seen_parts.add(base_part)
 
-                    sub_link = base_part
-                    if "sni=" not in sub_link.lower() and not is_ipv6(host):
-                        sep = "&" if "?" in sub_link else "?"
-                        sub_link += f"{sep}sni={host}"
+                    tuned_link = source_link
+                    if "sni=" not in tuned_link.lower() and not is_ipv6(host):
+                        tuned_link = upsert_query_param(tuned_link, "sni", host)
 
                     ping_label = f"{current_latency}ms"
-                    final_link = rebuild_link_name(sub_link, f"mob {counter} [{ping_label}]")
+                    final_link = rebuild_link_name(tuned_link, f"mob {counter} [{ping_label}]")
+                    final_link = upsert_query_param(final_link, link_tune_param_key, link_tune_param_value)
                     working_for_sub.append(final_link)
-                    print(f"✅ ОК {len(working_for_sub)}/200 ({country}): {current_latency}ms")
+                    print(f"✅ ОК {len(working_for_sub)}/{TARGET_SUB_SIZE} ({country}): {current_latency}ms")
                     note_reason(reason_stats, "ok", base_part, f"{country},{current_latency}ms")
                     counter += 1
                 else:
@@ -1596,15 +1619,15 @@ def main():
                             working_for_base.append(base_part)
                             seen_parts.add(base_part)
 
-                            sub_link = base_part
-                            if "sni=" not in sub_link.lower() and not is_ipv6(host):
-                                sep = "&" if "?" in sub_link else "?"
-                                sub_link += f"{sep}sni={host}"
+                            tuned_link = source_link
+                            if "sni=" not in tuned_link.lower() and not is_ipv6(host):
+                                tuned_link = upsert_query_param(tuned_link, "sni", host)
 
                             ping_label = f"{recheck_latency}ms"
-                            final_link = rebuild_link_name(sub_link, f"mob {counter} [{ping_label}]")
+                            final_link = rebuild_link_name(tuned_link, f"mob {counter} [{ping_label}]")
+                            final_link = upsert_query_param(final_link, link_tune_param_key, link_tune_param_value)
                             working_for_sub.append(final_link)
-                            print(f"🟡 RECOVERED {len(working_for_sub)}/200 ({country}): {recheck_latency}ms")
+                            print(f"🟡 RECOVERED {len(working_for_sub)}/{TARGET_SUB_SIZE} ({country}): {recheck_latency}ms")
                             note_reason(reason_stats, "ok_after_recheck", base_part, f"{country},{recheck_latency}ms")
                             counter += 1
                             continue
@@ -1632,7 +1655,7 @@ def main():
 
     # --- [ШАГ 5: ФИНАЛЬНОЕ СОХРАНЕНИЕ] ---
     
-    # 1. Подписка (всегда до 200, закрепы в начале)
+    # 1. Подписка (до TARGET_SUB_SIZE, закрепы в начале)
     os.makedirs(os.path.dirname(OUTPUT_FILE), exist_ok=True)
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
         f.write(HEADER.strip() + "\n\n" + "\n".join(working_for_sub))
@@ -1643,7 +1666,10 @@ def main():
         f.write("\n".join(new_deferred))
 
     # 3. База 1.txt (Бессмертные + те, кто прошел проверку сегодня)
-    final_base_to_save = list(seen_immortals | set(working_for_base))
+    final_base_to_save = [link.split("#")[0].strip() for link in immortals]
+    for base in working_for_base:
+        if base not in immortal_bases:
+            final_base_to_save.append(base)
     with open(INPUT_FILE, "w", encoding="utf-8") as f:
         f.write("\n".join(final_base_to_save))
 
