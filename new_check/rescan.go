@@ -3,9 +3,11 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"net/url"
 	"os"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -67,25 +69,22 @@ func RunScanOnce(max int) {
 	}
 	defer stream.Close()
 
-	// читаем input.txt
-	file, err := os.Open(inputFile)
+	var seeds []string
+	// 1) сначала уже существующие резервы из wifi (если есть)
+	reserves, err := readReserveLinksFromWifi(wifiFile)
+	if err != nil {
+		fmt.Println("read reserves:", err)
+	}
+	seeds = append(seeds, reserves...)
+
+	// 2) затем основной input
+	inputSeeds, err := readLines(inputFile)
 	if err != nil {
 		fmt.Println("open input:", err)
 		return
 	}
-	defer file.Close()
-
-	var seeds []string
-	sc := bufio.NewScanner(file)
-	for sc.Scan() {
-		if ln := strings.TrimSpace(sc.Text()); ln != "" {
-			seeds = append(seeds, ln)
-		}
-	}
-	if err := sc.Err(); err != nil {
-		fmt.Println("scan:", err)
-		return
-	}
+	seeds = append(seeds, inputSeeds...)
+	seeds = dedupKeepOrder(seeds)
 
 	// раскрываем URL-ы
 	var all []string
@@ -153,6 +152,14 @@ func RunScanOnce(max int) {
 
 	// финализация файлов
 	okList = dedup(okList)
+	for i, link := range okList {
+		tuned := link
+		mtuVal := strings.TrimSpace(os.Getenv("RESERVE_MTU_VALUE"))
+		if mtuVal != "" {
+			tuned = upsertQueryParam(tuned, "mtu", mtuVal)
+		}
+		okList[i] = reserveRename(tuned, i+1)
+	}
 	sort.Strings(okList)
 	if len(okList) > 0 {
 		_ = os.WriteFile(workingFile, []byte(strings.Join(okList, "\n")+"\n"), 0o644)
@@ -161,8 +168,121 @@ func RunScanOnce(max int) {
 		}
 		fmt.Println("wrote:", workingFile)
 		fmt.Println("wrote:", firstOKFile)
+		if err := appendReservesToWifi(wifiFile, okList); err != nil {
+			fmt.Println("wifi update:", err)
+		} else {
+			fmt.Println("wrote reserves to wifi tail:", wifiFile)
+		}
 	} else {
 		fmt.Println("no working configs found")
 	}
 	fmt.Println("done. full log:", allOutFile)
+}
+
+func readLines(path string) ([]string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	var out []string
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		if ln := strings.TrimSpace(sc.Text()); ln != "" {
+			out = append(out, ln)
+		}
+	}
+	return out, sc.Err()
+}
+
+func readReserveLinksFromWifi(path string) ([]string, error) {
+	lines, err := readLines(path)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(lines))
+	for _, ln := range lines {
+		lw := strings.ToLower(ln)
+		if !(strings.Contains(lw, "vless://") || strings.Contains(lw, "vmess://") || strings.Contains(lw, "trojan://") || strings.Contains(lw, "ss://")) {
+			continue
+		}
+		if strings.Contains(strings.ToUpper(ln), "RESERVE") {
+			out = append(out, ln)
+		}
+	}
+	return out, nil
+}
+
+func dedupKeepOrder(in []string) []string {
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	return out
+}
+
+func reserveRename(link string, idx int) string {
+	base, frag, _ := strings.Cut(link, "#")
+	name := "reserve " + strconv.Itoa(idx) + " [RESERVE]"
+	if frag != "" {
+		decoded, _ := url.QueryUnescape(frag)
+		if strings.Contains(strings.ToUpper(decoded), "PINNED") {
+			return link
+		}
+	}
+	return base + "#" + url.QueryEscape(name)
+}
+
+func upsertQueryParam(link, key, value string) string {
+	if strings.TrimSpace(key) == "" || strings.TrimSpace(value) == "" {
+		return link
+	}
+	u, err := url.Parse(link)
+	if err != nil {
+		return link
+	}
+	q := u.Query()
+	q.Set(key, value)
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+func appendReservesToWifi(path string, reserves []string) error {
+	lines, err := readLines(path)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	normal := make([]string, 0, len(lines))
+	seen := map[string]struct{}{}
+	for _, ln := range lines {
+		if isReserveLine(ln) {
+			continue
+		}
+		normal = append(normal, ln)
+		base := strings.SplitN(ln, "#", 2)[0]
+		seen[strings.TrimSpace(base)] = struct{}{}
+	}
+	out := append([]string{}, normal...)
+	for _, r := range reserves {
+		base := strings.TrimSpace(strings.SplitN(r, "#", 2)[0])
+		if _, ok := seen[base]; ok {
+			continue
+		}
+		out = append(out, r)
+		seen[base] = struct{}{}
+	}
+	content := strings.Join(out, "\n")
+	if content != "" {
+		content += "\n"
+	}
+	return os.WriteFile(path, []byte(content), 0o644)
+}
+
+func isReserveLine(ln string) bool {
+	return strings.Contains(strings.ToUpper(ln), "RESERVE")
 }
