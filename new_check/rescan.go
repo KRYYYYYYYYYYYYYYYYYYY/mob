@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"unicode"
 )
 
 // ---------- состояние и воркер ----------
@@ -30,8 +31,8 @@ func worker(jobs <-chan string, results chan<- Result, wg *sync.WaitGroup) {
 		}
 		pc, _ := parseLine(line)
 		r := Result{Line: line, Parsed: pc}
-		reason, ok := checkViaXray(pc)
-		r.OK, r.Reason = ok, reason
+		reason, ok, latency := checkViaXray(pc)
+		r.OK, r.Reason, r.LatencyMs = ok, reason, latency
 		results <- r
 	}
 }
@@ -57,11 +58,6 @@ func RunScanOnce(max int) {
 	scanMu.Lock()
 	defer scanMu.Unlock()
 
-	// локальный лимит
-	if max > 0 {
-		maxWorkCfg = max
-	}
-
 	stream, err := newStreamer()
 	if err != nil {
 		fmt.Println("prepare output:", err)
@@ -69,13 +65,30 @@ func RunScanOnce(max int) {
 	}
 	defer stream.Close()
 
+	normalCount, reservesFromWifi, err := getWifiLayout(wifiFile)
+	if err != nil {
+		fmt.Println("read wifi:", err)
+	}
+	reserveCapacity := 200 - normalCount
+	if reserveCapacity < 0 {
+		reserveCapacity = 0
+	}
+	if max > 0 && reserveCapacity > max {
+		reserveCapacity = max
+	}
+	fmt.Printf("reserve capacity=%d (normal=%d)\n", reserveCapacity, normalCount)
+	if reserveCapacity == 0 {
+		_ = os.WriteFile(timeWifiFile, []byte(""), 0o644)
+		if err := appendReservesToWifi(wifiFile, nil, 0); err != nil {
+			fmt.Println("wifi cleanup:", err)
+		}
+		fmt.Println("done: no reserve slots")
+		return
+	}
+
 	var seeds []string
 	// 1) сначала уже существующие резервы из wifi (если есть)
-	reserves, err := readReserveLinksFromWifi(wifiFile)
-	if err != nil {
-		fmt.Println("read reserves:", err)
-	}
-	seeds = append(seeds, reserves...)
+	seeds = append(seeds, reservesFromWifi...)
 
 	// 2) затем основной input
 	inputSeeds, err := readLines(inputFile)
@@ -129,19 +142,21 @@ func RunScanOnce(max int) {
 	}()
 
 	// сбор результатов
+	_ = os.WriteFile(timeWifiFile, []byte(""), 0o644)
 	okCount := 0
-	var okList []string
+	var okResults []Result
 	for r := range results {
 		state := "FAIL"
 		if r.OK {
 			state = "OK"
-			okList = append(okList, r.Line)
+			okResults = append(okResults, r)
 			stream.WriteWorkLine(r.Line)
+			appendLine(timeWifiFile, r.Line)
 
 			okCount++
-			if maxWorkCfg > 0 && okCount >= maxWorkCfg {
+			if okCount >= reserveCapacity {
 				atomic.StoreInt32(&stopEarly, 1)
-				fmt.Printf("limit reached: %d working configs, stopping...\n", maxWorkCfg)
+				fmt.Printf("reserve target reached: %d, stopping...\n", reserveCapacity)
 				break
 			}
 		}
@@ -151,29 +166,59 @@ func RunScanOnce(max int) {
 	}
 
 	// финализация файлов
-	okList = dedup(okList)
-	for i, link := range okList {
+	sort.SliceStable(okResults, func(i, j int) bool {
+		li := okResults[i].LatencyMs
+		lj := okResults[j].LatencyMs
+		if li <= 0 && lj <= 0 {
+			return okResults[i].Line < okResults[j].Line
+		}
+		if li <= 0 {
+			return false
+		}
+		if lj <= 0 {
+			return true
+		}
+		if li == lj {
+			return okResults[i].Line < okResults[j].Line
+		}
+		return li < lj
+	})
+	seenFinal := map[string]struct{}{}
+	finalReserves := make([]string, 0, reserveCapacity)
+	for _, rr := range okResults {
+		link := rr.Line
+		base := strings.TrimSpace(strings.SplitN(link, "#", 2)[0])
+		if _, ok := seenFinal[base]; ok {
+			continue
+		}
+		seenFinal[base] = struct{}{}
 		tuned := link
 		mtuVal := strings.TrimSpace(os.Getenv("RESERVE_MTU_VALUE"))
 		if mtuVal != "" {
 			tuned = upsertQueryParam(tuned, "mtu", mtuVal)
 		}
-		okList[i] = reserveRename(tuned, i+1)
+		finalReserves = append(finalReserves, reserveRename(tuned, len(finalReserves)+1))
+		if len(finalReserves) >= reserveCapacity {
+			break
+		}
 	}
-	sort.Strings(okList)
-	if len(okList) > 0 {
-		_ = os.WriteFile(workingFile, []byte(strings.Join(okList, "\n")+"\n"), 0o644)
+	if len(finalReserves) > 0 {
+		payload := strings.Join(finalReserves, "\n") + "\n"
+		_ = os.WriteFile(workingFile, []byte(payload), 0o644)
+		_ = os.WriteFile(timeWifiFile, []byte(payload), 0o644)
 		if _, err := os.Stat(firstOKFile); os.IsNotExist(err) {
-			_ = os.WriteFile(firstOKFile, []byte(okList[0]+"\n"), 0o644)
+			_ = os.WriteFile(firstOKFile, []byte(finalReserves[0]+"\n"), 0o644)
 		}
 		fmt.Println("wrote:", workingFile)
 		fmt.Println("wrote:", firstOKFile)
-		if err := appendReservesToWifi(wifiFile, okList); err != nil {
+		fmt.Printf("stats: selected=%d target=%d checked_existing_reserves=%d\n", len(finalReserves), reserveCapacity, len(reservesFromWifi))
+		if err := appendReservesToWifi(wifiFile, finalReserves, reserveCapacity); err != nil {
 			fmt.Println("wifi update:", err)
 		} else {
 			fmt.Println("wrote reserves to wifi tail:", wifiFile)
 		}
 	} else {
+		_ = os.WriteFile(timeWifiFile, []byte(""), 0o644)
 		fmt.Println("no working configs found")
 	}
 	fmt.Println("done. full log:", allOutFile)
@@ -228,7 +273,11 @@ func dedupKeepOrder(in []string) []string {
 
 func reserveRename(link string, idx int) string {
 	base, frag, _ := strings.Cut(link, "#")
+	prefix := extractFlagPrefix(frag)
 	name := "reserve " + strconv.Itoa(idx) + " [RESERVE]"
+	if prefix != "" {
+		name = prefix + " " + name
+	}
 	if frag != "" {
 		decoded, _ := url.QueryUnescape(frag)
 		if strings.Contains(strings.ToUpper(decoded), "PINNED") {
@@ -252,7 +301,7 @@ func upsertQueryParam(link, key, value string) string {
 	return u.String()
 }
 
-func appendReservesToWifi(path string, reserves []string) error {
+func appendReservesToWifi(path string, reserves []string, maxReserves int) error {
 	lines, err := readLines(path)
 	if err != nil && !os.IsNotExist(err) {
 		return err
@@ -268,7 +317,14 @@ func appendReservesToWifi(path string, reserves []string) error {
 		seen[strings.TrimSpace(base)] = struct{}{}
 	}
 	out := append([]string{}, normal...)
-	for _, r := range reserves {
+	limit := len(reserves)
+	if maxReserves >= 0 && limit > maxReserves {
+		limit = maxReserves
+	}
+	for i, r := range reserves {
+		if i >= limit {
+			break
+		}
 		base := strings.TrimSpace(strings.SplitN(r, "#", 2)[0])
 		if _, ok := seen[base]; ok {
 			continue
@@ -285,4 +341,54 @@ func appendReservesToWifi(path string, reserves []string) error {
 
 func isReserveLine(ln string) bool {
 	return strings.Contains(strings.ToUpper(ln), "RESERVE")
+}
+
+func appendLine(path, line string) {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	_, _ = f.WriteString(strings.TrimSpace(line) + "\n")
+}
+
+func getWifiLayout(path string) (int, []string, error) {
+	lines, err := readLines(path)
+	if err != nil && !os.IsNotExist(err) {
+		return 0, nil, err
+	}
+	normal := 0
+	reserves := make([]string, 0)
+	for _, ln := range lines {
+		lw := strings.ToLower(ln)
+		isProxy := strings.Contains(lw, "vless://") || strings.Contains(lw, "vmess://") || strings.Contains(lw, "trojan://") || strings.Contains(lw, "ss://")
+		if !isProxy {
+			continue
+		}
+		if isReserveLine(ln) {
+			reserves = append(reserves, ln)
+		} else {
+			normal++
+		}
+	}
+	return normal, reserves, nil
+}
+
+func extractFlagPrefix(fragment string) string {
+	if fragment == "" {
+		return ""
+	}
+	decoded, _ := url.QueryUnescape(fragment)
+	decoded = strings.TrimSpace(decoded)
+	if decoded == "" {
+		return ""
+	}
+	var out []rune
+	for _, r := range []rune(decoded) {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			break
+		}
+		out = append(out, r)
+	}
+	return strings.TrimSpace(string(out))
 }
