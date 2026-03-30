@@ -31,8 +31,7 @@ jobs:
       - name: 📥 Install Xray core
         run: |
           set -euo pipefail
-          chmod +x new_check/install-go-xray.sh
-          ./new_check/install-go-xray.sh
+          bash new_check/install-go-xray.sh
 
       - name: 📦 Build reserve checker
         working-directory: new_check
@@ -52,5 +51,5 @@ jobs:
           git config --local user.name "github-actions[bot]"
           git add kr/mob/wifi.txt new_check/result/working.txt new_check/result/first_working.txt new_check/result/result.txt new_check/result/time_wifi.txt
           git commit -m "🧩 Update reserve tail in wifi [skip ci]" || echo "No changes to commit"
-          git pull --rebase -X theirs origin main
+          git pull --rebase --autostash -X theirs origin main
           git push origin main
