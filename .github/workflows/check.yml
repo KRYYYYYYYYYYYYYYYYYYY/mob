@@ -31,19 +31,20 @@ jobs:
       - name: 📥 Install Xray core
         run: |
           set -euo pipefail
-          sudo bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install --version latest
-          xray version
+          chmod +x new_check/install-go-xray.sh
+          ./new_check/install-go-xray.sh
 
       - name: 📦 Build reserve checker
+        working-directory: new_check
         run: |
-          cd new_check
           go build -o crazy_checker .
 
       - name: ▶️ Run reserve checker
+        working-directory: new_check
         env:
           RESERVE_MTU_VALUE: "1400"
           XRAY_BIN: /usr/local/bin/xray
-        run: ./new_check/crazy_checker -workers 24 -maxworkcfg 200
+        run: ./crazy_checker -workers 24 -maxworkcfg 200
 
       - name: 💾 Commit reserve updates
         run: |
