@@ -39,8 +39,6 @@ var (
 	maxRemoteSize    = int64(5 * 1024 * 1024)
 	testURLs         = []string{
 		"http://example.com/",
-		"http://cp.cloudflare.com/generate_204",
-		"https://www.gstatic.com/generate_204",
 	}
 )
 
