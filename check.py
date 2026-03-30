@@ -898,6 +898,30 @@ def rebuild_link_name(link: str, new_name: str) -> str:
 
     return f"{base}#{urllib.parse.quote(new_name)}"
 
+def upsert_query_param(link: str, key: str, value: str) -> str:
+    """
+    Добавляет/обновляет query-параметр в ссылке ДО #fragment.
+    Пример: ...?security=reality -> ...?security=reality&mtu=1400
+    """
+    key = (key or "").strip()
+    value = (value or "").strip()
+    if not key or not value:
+        return link
+    parsed = urllib.parse.urlsplit(link)
+    pairs = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+    out_pairs = []
+    replaced = False
+    for k, v in pairs:
+        if k == key:
+            out_pairs.append((k, value))
+            replaced = True
+        else:
+            out_pairs.append((k, v))
+    if not replaced:
+        out_pairs.append((key, value))
+    new_query = urllib.parse.urlencode(out_pairs, doseq=True)
+    return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, new_query, parsed.fragment))
+
 def remove_from_all(base_part: str):
     """Удаляет сервер по base_part из основных рабочих файлов."""
     for path in [INPUT_FILE, OUTPUT_FILE]:
@@ -1260,22 +1284,18 @@ def main():
         except: history = {}
 
     # --- [ШАГ 1: ФОРМИРУЕМ СПИСОК БЕССМЕРТНЫХ] ---
-    immortals = [] 
-    seen_immortals = set()
+    immortals = []
+    immortal_bases = set()
 
-    # Сначала закрепы (самый высокий приоритет)
+    # Закрепы и фавориты считаем "неприкасаемыми":
+    # не отсекаем дубли внутри их списков и сохраняем как есть.
+    # Для технических фильтров держим отдельный set баз.
     for p in pinned_list:
-        base = p.split("#")[0].strip()
-        if base not in seen_immortals:
-            immortals.append(p)
-            seen_immortals.add(base)
-
-    # Потом фавориты
+        immortals.append(p)
+        immortal_bases.add(p.split("#")[0].strip())
     for f_link in fav_full_links:
-        base = f_link.split("#")[0].strip()
-        if base not in seen_immortals:
-            immortals.append(f_link)
-            seen_immortals.add(base)
+        immortals.append(f_link)
+        immortal_bases.add(f_link.split("#")[0].strip())
 
     print(f"🛡️ Итого бессмертных в начале списка: {len(immortals)}")
     note_reason(reason_stats, "immortals_loaded", extra=str(len(immortals)))
@@ -1288,7 +1308,7 @@ def main():
         for link in links:
             base = link.split('#')[0].strip()
             # Проверяем, что ссылки нет в бессмертных, она не дубликат в очереди и не в блэклисте
-            if base not in seen_immortals and base not in seen_in_queue and (ignore_blacklist or base not in blacklist):
+            if base not in immortal_bases and base not in seen_in_queue and (ignore_blacklist or base not in blacklist):
                 check_queue.append(link)
                 seen_in_queue.add(base)
                 added += 1
@@ -1317,6 +1337,8 @@ def main():
     runtime_blocked_hosts = {}
     host_precheck_counts = {}
     host_l7_reject_counts = {}
+    link_tune_param_key = os.getenv("LINK_TUNE_PARAM_KEY", "mtu").strip()
+    link_tune_param_value = os.getenv("LINK_TUNE_PARAM_VALUE", "1400").strip()
 
     # Настройки стресс-теста (твой блок 1-в-1)
     stress_config = {
@@ -1563,6 +1585,7 @@ def main():
                     if "sni=" not in sub_link.lower() and not is_ipv6(host):
                         sep = "&" if "?" in sub_link else "?"
                         sub_link += f"{sep}sni={host}"
+                    sub_link = upsert_query_param(sub_link, link_tune_param_key, link_tune_param_value)
 
                     ping_label = f"{current_latency}ms"
                     final_link = rebuild_link_name(sub_link, f"mob {counter} [{ping_label}]")
@@ -1600,6 +1623,7 @@ def main():
                             if "sni=" not in sub_link.lower() and not is_ipv6(host):
                                 sep = "&" if "?" in sub_link else "?"
                                 sub_link += f"{sep}sni={host}"
+                            sub_link = upsert_query_param(sub_link, link_tune_param_key, link_tune_param_value)
 
                             ping_label = f"{recheck_latency}ms"
                             final_link = rebuild_link_name(sub_link, f"mob {counter} [{ping_label}]")
@@ -1643,7 +1667,10 @@ def main():
         f.write("\n".join(new_deferred))
 
     # 3. База 1.txt (Бессмертные + те, кто прошел проверку сегодня)
-    final_base_to_save = list(seen_immortals | set(working_for_base))
+    final_base_to_save = [link.split("#")[0].strip() for link in immortals]
+    for base in working_for_base:
+        if base not in immortal_bases:
+            final_base_to_save.append(base)
     with open(INPUT_FILE, "w", encoding="utf-8") as f:
         f.write("\n".join(final_base_to_save))
 
