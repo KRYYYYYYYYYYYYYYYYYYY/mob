@@ -170,6 +170,18 @@ jobs:
           CHECK_FAIL_ON_ZERO_ALIVE: 0
         run: python check.py
 
+      - name: Run reserve checker (crazy_xray_checker)
+        if: steps.gate.outputs.should_run == 'true'
+        env:
+          XRAY_BIN: xray
+          RESERVE_MTU_VALUE: "1400"
+        run: |
+          cd new_check
+          go mod tidy
+          go build -o crazy_checker .
+          cd ..
+          ./new_check/crazy_checker -workers 24 -maxworkcfg 200
+
       - name: Decide rerun from run_result.json
         id: decide_rerun
         if: steps.gate.outputs.should_run == 'true'

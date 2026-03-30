@@ -73,7 +73,10 @@ HEADER = """# profile-title: 🏳️Мобильный инет🏳️
 """
 
 ALLOWED_COUNTRIES = {"US", "DE", "NL", "GB", "FR", "FI", "SG", "JP", "PL", "TR", "RU"}
-TARGET_SUB_SIZE = 100
+MAIN_TARGET_SIZE = 100
+FINAL_TARGET_SIZE = 200
+RESERVE_MARKER = "RESERVE"
+RESERVE_FILE = "new_check/result/working.txt"
 
 DEFAULT_PROBE_PATHS = ["/", "/generate_204", "/favicon.ico"]
 DEFAULT_MOBILE_HEADER_PROFILES = [
@@ -923,6 +926,34 @@ def upsert_query_param(link: str, key: str, value: str) -> str:
     new_query = urllib.parse.urlencode(out_pairs, doseq=True)
     return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, new_query, parsed.fragment))
 
+def is_reserve_link(link: str) -> bool:
+    if "#" not in link:
+        return False
+    fragment = urllib.parse.unquote(link.split("#", 1)[1]).upper()
+    return RESERVE_MARKER in fragment
+
+def load_reserve_links(max_needed: int, used_bases: set[str]) -> list[str]:
+    if max_needed <= 0 or not os.path.exists(RESERVE_FILE):
+        return []
+    picked = []
+    try:
+        with open(RESERVE_FILE, "r", encoding="utf-8") as f:
+            for line in f:
+                link = line.strip()
+                if not link or not any(p in link.lower() for p in ("vless://", "vmess://", "trojan://", "ss://")):
+                    continue
+                base = link.split("#", 1)[0].strip()
+                if base in used_bases:
+                    continue
+                picked.append(link)
+                used_bases.add(base)
+                if len(picked) >= max_needed:
+                    break
+    except Exception as e:
+        print(f"⚠️ Не удалось загрузить резервы из {RESERVE_FILE}: {e}")
+        return []
+    return picked
+
 def remove_from_all(base_part: str):
     """Удаляет сервер по base_part из основных рабочих файлов."""
     for path in [INPUT_FILE, OUTPUT_FILE]:
@@ -1308,6 +1339,9 @@ def main():
         added = 0
         for link in links:
             base = link.split('#')[0].strip()
+            if is_reserve_link(link):
+                note_reason(reason_stats, "skip_reserve_in_main_queue", base)
+                continue
             # Проверяем, что ссылки нет в бессмертных, она не дубликат в очереди и не в блэклисте
             if base not in immortal_bases and base not in seen_in_queue and (ignore_blacklist or base not in blacklist):
                 check_queue.append(link)
@@ -1323,7 +1357,7 @@ def main():
     extend_check_queue(sorted(deferred_base, key=lambda l: ranking_sort_key(l, ranking_db)))
 
     # --- [ШАГ 3: ПОДГОТОВКА К ЦИКЛУ] ---
-    working_for_sub = immortals[:TARGET_SUB_SIZE] # Сразу забиваем подписку бессмертными
+    working_for_sub = immortals[:MAIN_TARGET_SIZE] # Сразу забиваем подписку бессмертными
     working_for_base = []            # Сюда пойдут те, кто реально ответил
     
     now = time.time()
@@ -1429,7 +1463,7 @@ def main():
         mobile_whitelist = get_mobile_whitelist(stress_config)
 
     raw_external_loaded = False
-    print(f"📡 Начинаю добор до {TARGET_SUB_SIZE}. В очереди (текущие+отложенные): {len(check_queue)}")
+    print(f"📡 Начинаю добор до {MAIN_TARGET_SIZE}. В очереди (текущие+отложенные): {len(check_queue)}")
 
     # --- [ШАГ 4: ЦИКЛ ПРОВЕРКИ] ---
     workers = max(1, int(stress_config.get("workers", 32)))
@@ -1439,7 +1473,7 @@ def main():
     print(f"⚙️ Параллельная проверка: workers={workers}, batch={batch_size}")
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        while len(working_for_sub) < TARGET_SUB_SIZE:
+        while len(working_for_sub) < MAIN_TARGET_SIZE:
             if stress_config.get("mobile_whitelist_enabled", True):
                 mobile_whitelist = get_mobile_whitelist(stress_config)
             if time.time() - start_time >= max_check_duration_sec:
@@ -1555,7 +1589,7 @@ def main():
                 for link, base_part, host in batch
             }
             for fut in as_completed(futures):
-                if len(working_for_sub) >= TARGET_SUB_SIZE or checked_today >= MAX_TO_CHECK:
+                if len(working_for_sub) >= MAIN_TARGET_SIZE or checked_today >= MAX_TO_CHECK:
                     break
                 source_link, base_part, host = futures[fut]
                 checked_today += 1
@@ -1590,7 +1624,7 @@ def main():
                     final_link = rebuild_link_name(tuned_link, f"mob {counter} [{ping_label}]")
                     final_link = upsert_query_param(final_link, link_tune_param_key, link_tune_param_value)
                     working_for_sub.append(final_link)
-                    print(f"✅ ОК {len(working_for_sub)}/{TARGET_SUB_SIZE} ({country}): {current_latency}ms")
+                    print(f"✅ ОК {len(working_for_sub)}/{MAIN_TARGET_SIZE} ({country}): {current_latency}ms")
                     note_reason(reason_stats, "ok", base_part, f"{country},{current_latency}ms")
                     counter += 1
                 else:
@@ -1627,7 +1661,7 @@ def main():
                             final_link = rebuild_link_name(tuned_link, f"mob {counter} [{ping_label}]")
                             final_link = upsert_query_param(final_link, link_tune_param_key, link_tune_param_value)
                             working_for_sub.append(final_link)
-                            print(f"🟡 RECOVERED {len(working_for_sub)}/{TARGET_SUB_SIZE} ({country}): {recheck_latency}ms")
+                            print(f"🟡 RECOVERED {len(working_for_sub)}/{MAIN_TARGET_SIZE} ({country}): {recheck_latency}ms")
                             note_reason(reason_stats, "ok_after_recheck", base_part, f"{country},{recheck_latency}ms")
                             counter += 1
                             continue
@@ -1653,9 +1687,21 @@ def main():
                     if base_part in ranking_db:
                         del ranking_db[base_part]
 
-    # --- [ШАГ 5: ФИНАЛЬНОЕ СОХРАНЕНИЕ] ---
+    # --- [ШАГ 5: ДОБИВАЕМ РЕЗЕРВАМИ ДО FINAL_TARGET_SIZE] ---
+    sub_bases = {l.split("#", 1)[0].strip() for l in working_for_sub}
+    reserve_needed = max(0, FINAL_TARGET_SIZE - len(working_for_sub))
+    reserve_links = load_reserve_links(reserve_needed, sub_bases)
+    if reserve_links:
+        working_for_sub.extend(reserve_links)
+        print(f"🧩 Добавлено резервов: {len(reserve_links)} (подписка теперь {len(working_for_sub)}/{FINAL_TARGET_SIZE})")
+        note_reason(reason_stats, "reserve_added", extra=str(len(reserve_links)))
+    elif reserve_needed > 0:
+        print(f"⚠️ Резервов не хватило: нужно {reserve_needed}, добавлено 0")
+        note_reason(reason_stats, "reserve_missing", extra=str(reserve_needed))
+
+    # --- [ШАГ 6: ФИНАЛЬНОЕ СОХРАНЕНИЕ] ---
     
-    # 1. Подписка (до TARGET_SUB_SIZE, закрепы в начале)
+    # 1. Подписка (до FINAL_TARGET_SIZE, закрепы в начале)
     os.makedirs(os.path.dirname(OUTPUT_FILE), exist_ok=True)
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
         f.write(HEADER.strip() + "\n\n" + "\n".join(working_for_sub))

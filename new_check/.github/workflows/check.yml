@@ -1,0 +1,45 @@
+name: Xray Proxy Checker
+
+on:
+  schedule:
+    - cron: '0 * * * *' # Запуск каждый час
+  workflow_dispatch:      # Позволяет запустить вручную кнопкой
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.21'
+
+      - name: Install Dependencies
+        run: |
+          chmod +x install-go-xray.sh
+          ./install-go-xray.sh
+
+      - name: Run Checker
+        run: |
+          go mod tidy
+          go run .
+
+      - name: Commit and Push results
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          
+          # 1. Удаляем из индекса большой файл, если он туда случайно попал
+          git rm --cached result/result.txt || true
+          
+          # 2. Добавляем ТОЛЬКО полезный файл
+          git add result/working.txt || true
+          
+          # 3. Если есть другие важные файлы, добавь их отдельно, 
+          # либо используй git add ., но тогда обязательно создай .gitignore
+          
+          git commit -m "Update working nodes" || exit 0
+          git push
