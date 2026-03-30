@@ -33,22 +33,22 @@ func main() {
 	flag.Parse()
 
 	// конфиг веба + старт сервера
-	cfg, err := LoadAppConfig("config.json")
+	cfg, err := LoadAppConfig(configJSONPath)
 	if err != nil {
 		// не фатально: создадим шаблон и продолжим
 		fmt.Println("web config:", err)
 	}
 	srv := StartWebServer(cfg)
 
-	// 3. САМОЕ ГЛАВНОЕ: Просто запускаем скан напрямую. 
+	// 3. САМОЕ ГЛАВНОЕ: Просто запускаем скан напрямую.
 	// Никаких 'go', никаких фонов. Программа будет работать, пока не закончит.
 	fmt.Println("--- STARTING SCAN ---")
-	RunScanOnce(maxWorkCfg) 
+	RunScanOnce(maxWorkCfg)
 	fmt.Println("--- SCAN FINISHED, SAVING RESULTS ---")
 
 	// 4. Принудительно закрываем сервер и выходим
 	_ = srv.Shutdown()
 	_ = os.Stdout.Sync()
-	
+
 	// Программа завершится сама здесь
 }
