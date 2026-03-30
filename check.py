@@ -1294,6 +1294,15 @@ def main():
                     continue
                 if is_reserve_link(link):
                     existing_reserves.append(link)
+    # Фолбэк-страховка: если в wifi резервов нет, пробуем аварийный кэш от reserve-checker.
+    if not existing_reserves and os.path.exists("new_check/result/time_wifi.txt"):
+        with open("new_check/result/time_wifi.txt", "r", encoding="utf-8") as f:
+            for line in f:
+                link = line.strip()
+                if not link or not any(p in link.lower() for p in ("vless://", "vmess://", "trojan://", "ss://")):
+                    continue
+                if is_reserve_link(link):
+                    existing_reserves.append(link)
 
     # 5. Загружаем историю статусов
     history = {}
