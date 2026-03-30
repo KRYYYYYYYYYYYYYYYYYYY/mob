@@ -73,7 +73,8 @@ HEADER = """# profile-title: 🏳️Мобильный инет🏳️
 """
 
 ALLOWED_COUNTRIES = {"US", "DE", "NL", "GB", "FR", "FI", "SG", "JP", "PL", "TR", "RU"}
-TARGET_SUB_SIZE = 100
+MAIN_TARGET_SIZE = 100
+RESERVE_MARKER = "RESERVE"
 
 DEFAULT_PROBE_PATHS = ["/", "/generate_204", "/favicon.ico"]
 DEFAULT_MOBILE_HEADER_PROFILES = [
@@ -923,6 +924,12 @@ def upsert_query_param(link: str, key: str, value: str) -> str:
     new_query = urllib.parse.urlencode(out_pairs, doseq=True)
     return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, new_query, parsed.fragment))
 
+def is_reserve_link(link: str) -> bool:
+    if "#" not in link:
+        return False
+    fragment = urllib.parse.unquote(link.split("#", 1)[1]).upper()
+    return RESERVE_MARKER in fragment
+
 def remove_from_all(base_part: str):
     """Удаляет сервер по base_part из основных рабочих файлов."""
     for path in [INPUT_FILE, OUTPUT_FILE]:
@@ -1277,6 +1284,17 @@ def main():
         with open(INPUT_FILE, "r", encoding="utf-8") as f:
             current_base = f.read().splitlines()
 
+    # 4.1. Загружаем уже существующие резервы из wifi.txt (держим их в хвосте подписки)
+    existing_reserves = []
+    if os.path.exists(OUTPUT_FILE):
+        with open(OUTPUT_FILE, "r", encoding="utf-8") as f:
+            for line in f:
+                link = line.strip()
+                if not link or not any(p in link.lower() for p in ("vless://", "vmess://", "trojan://", "ss://")):
+                    continue
+                if is_reserve_link(link):
+                    existing_reserves.append(link)
+
     # 5. Загружаем историю статусов
     history = {}
     if os.path.exists(STATUS_FILE):
@@ -1308,6 +1326,9 @@ def main():
         added = 0
         for link in links:
             base = link.split('#')[0].strip()
+            if is_reserve_link(link):
+                note_reason(reason_stats, "skip_reserve_in_main_queue", base)
+                continue
             # Проверяем, что ссылки нет в бессмертных, она не дубликат в очереди и не в блэклисте
             if base not in immortal_bases and base not in seen_in_queue and (ignore_blacklist or base not in blacklist):
                 check_queue.append(link)
@@ -1323,7 +1344,7 @@ def main():
     extend_check_queue(sorted(deferred_base, key=lambda l: ranking_sort_key(l, ranking_db)))
 
     # --- [ШАГ 3: ПОДГОТОВКА К ЦИКЛУ] ---
-    working_for_sub = immortals[:TARGET_SUB_SIZE] # Сразу забиваем подписку бессмертными
+    working_for_sub = immortals[:MAIN_TARGET_SIZE] # Сразу забиваем подписку бессмертными
     working_for_base = []            # Сюда пойдут те, кто реально ответил
     
     now = time.time()
@@ -1429,7 +1450,7 @@ def main():
         mobile_whitelist = get_mobile_whitelist(stress_config)
 
     raw_external_loaded = False
-    print(f"📡 Начинаю добор до {TARGET_SUB_SIZE}. В очереди (текущие+отложенные): {len(check_queue)}")
+    print(f"📡 Начинаю добор до {MAIN_TARGET_SIZE}. В очереди (текущие+отложенные): {len(check_queue)}")
 
     # --- [ШАГ 4: ЦИКЛ ПРОВЕРКИ] ---
     workers = max(1, int(stress_config.get("workers", 32)))
@@ -1439,7 +1460,7 @@ def main():
     print(f"⚙️ Параллельная проверка: workers={workers}, batch={batch_size}")
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        while len(working_for_sub) < TARGET_SUB_SIZE:
+        while len(working_for_sub) < MAIN_TARGET_SIZE:
             if stress_config.get("mobile_whitelist_enabled", True):
                 mobile_whitelist = get_mobile_whitelist(stress_config)
             if time.time() - start_time >= max_check_duration_sec:
@@ -1555,7 +1576,7 @@ def main():
                 for link, base_part, host in batch
             }
             for fut in as_completed(futures):
-                if len(working_for_sub) >= TARGET_SUB_SIZE or checked_today >= MAX_TO_CHECK:
+                if len(working_for_sub) >= MAIN_TARGET_SIZE or checked_today >= MAX_TO_CHECK:
                     break
                 source_link, base_part, host = futures[fut]
                 checked_today += 1
@@ -1590,7 +1611,7 @@ def main():
                     final_link = rebuild_link_name(tuned_link, f"mob {counter} [{ping_label}]")
                     final_link = upsert_query_param(final_link, link_tune_param_key, link_tune_param_value)
                     working_for_sub.append(final_link)
-                    print(f"✅ ОК {len(working_for_sub)}/{TARGET_SUB_SIZE} ({country}): {current_latency}ms")
+                    print(f"✅ ОК {len(working_for_sub)}/{MAIN_TARGET_SIZE} ({country}): {current_latency}ms")
                     note_reason(reason_stats, "ok", base_part, f"{country},{current_latency}ms")
                     counter += 1
                 else:
@@ -1627,7 +1648,7 @@ def main():
                             final_link = rebuild_link_name(tuned_link, f"mob {counter} [{ping_label}]")
                             final_link = upsert_query_param(final_link, link_tune_param_key, link_tune_param_value)
                             working_for_sub.append(final_link)
-                            print(f"🟡 RECOVERED {len(working_for_sub)}/{TARGET_SUB_SIZE} ({country}): {recheck_latency}ms")
+                            print(f"🟡 RECOVERED {len(working_for_sub)}/{MAIN_TARGET_SIZE} ({country}): {recheck_latency}ms")
                             note_reason(reason_stats, "ok_after_recheck", base_part, f"{country},{recheck_latency}ms")
                             counter += 1
                             continue
@@ -1653,9 +1674,23 @@ def main():
                     if base_part in ranking_db:
                         del ranking_db[base_part]
 
-    # --- [ШАГ 5: ФИНАЛЬНОЕ СОХРАНЕНИЕ] ---
+    # --- [ШАГ 5: ПРИЦЕПЛЯЕМ УЖЕ ИМЕЮЩИЕСЯ РЕЗЕРВЫ В КОНЕЦ] ---
+    sub_bases = {l.split("#", 1)[0].strip() for l in working_for_sub}
+    preserved_reserves = []
+    for link in existing_reserves:
+        base = link.split("#", 1)[0].strip()
+        if base in sub_bases:
+            continue
+        preserved_reserves.append(link)
+        sub_bases.add(base)
+    if preserved_reserves:
+        working_for_sub.extend(preserved_reserves)
+        print(f"🧩 Сохранено резервов в конце: {len(preserved_reserves)}")
+        note_reason(reason_stats, "reserve_preserved", extra=str(len(preserved_reserves)))
+
+    # --- [ШАГ 6: ФИНАЛЬНОЕ СОХРАНЕНИЕ] ---
     
-    # 1. Подписка (до TARGET_SUB_SIZE, закрепы в начале)
+    # 1. Подписка (основа до MAIN_TARGET_SIZE + сохраненные резервы в конце)
     os.makedirs(os.path.dirname(OUTPUT_FILE), exist_ok=True)
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
         f.write(HEADER.strip() + "\n\n" + "\n".join(working_for_sub))
