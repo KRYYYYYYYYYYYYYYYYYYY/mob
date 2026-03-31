@@ -14,13 +14,9 @@ on:
         required: false
         default: 'false'
       force_run:
-        description: 'Админ пропуск'
+        description: 'Принудительный запуск без ожидания 1 часа'
         required: false
         default: 'false'
-      cooldown_hours:
-        description: 'Время восстановления после последнего успешного запуска (часы)'
-        required: false
-        default: '1'
 
 jobs:
   update:
@@ -33,8 +29,8 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # --- GATE: запускать не чаще чем раз в cooldown_hours после УСПЕШНОГО завершения ---
-      - name: Gate by last successful run (+cooldown)
+      # --- GATE: запускать только спустя 1 час после последнего SUCCESS ---
+      - name: Gate by last successful run (+1h)
         id: gate
         uses: actions/github-script@v7
         with:
@@ -42,30 +38,13 @@ jobs:
           script: |
             const owner = context.repo.owner;
             const repo = context.repo.repo;
-
-            // workflow file name from workflow_ref:
-            // owner/repo/.github/workflows/main.yml@refs/heads/main
-            const wfRef = context.workflowRef || '';
-            const m = wfRef.match(/\.github\/workflows\/([^@]+)@/);
-            const workflow_id = m ? m[1] : 'main.yml';
+            const workflow_id = 'main.yml';
+            const branch = 'main';
+            const cooldownMs = 60 * 60 * 1000; // 1 hour fixed
 
             const isDispatch = context.eventName === 'workflow_dispatch';
             const inputs = (context.payload && context.payload.inputs) || {};
             const forceRun = isDispatch && String(inputs.force_run || 'false') === 'true';
-
-            // Для ручного запуска можно менять кулдаун, по умолчанию 1 час.
-            // Для schedule всегда 1 час.
-            const parsedCooldownHours = Number(inputs.cooldown_hours ?? '1');
-            const cooldownHours = Number.isFinite(parsedCooldownHours) && parsedCooldownHours > 0
-              ? parsedCooldownHours
-              : 1;
-            const cooldownMs = cooldownHours * 60 * 60 * 1000;
-
-            core.info(`Event: ${context.eventName}`);
-            core.info(`force_run input: ${String(inputs.force_run || 'false')}`);
-            core.info(`cooldown_hours input: ${String(inputs.cooldown_hours || '1')}`);
-            core.info(`Effective cooldown (hours): ${cooldownHours}`);
-
             if (forceRun) {
               core.info('force_run=true -> bypass cooldown for this run.');
               core.setOutput('should_run', 'true');
@@ -77,28 +56,30 @@ jobs:
               owner,
               repo,
               workflow_id,
+              branch,
               status: 'completed',
-              per_page: 50
+              per_page: 100
             });
 
-            // последний success НЕ текущий run
             const nowRunId = context.runId;
             const lastSuccess = res.data.workflow_runs.find(
               r => r.conclusion === 'success' && r.id !== nowRunId
             );
 
             if (!lastSuccess) {
-              core.info('No previous successful runs found -> allow run.');
+              core.info('No previous successful run on main -> allow.');
               core.setOutput('should_run', 'true');
               core.setOutput('reason', 'no_previous_success');
               return;
             }
 
-            const last = new Date(lastSuccess.updated_at).getTime(); // время завершения
+            const lastSuccessAt = new Date(lastSuccess.updated_at).getTime();
             const now = Date.now();
-            const diffMs = now - last;
+            const diffMs = now - lastSuccessAt;
+            const remainMs = cooldownMs - diffMs;
 
-            core.info(`Last success at: ${lastSuccess.updated_at}`);
+            core.info(`Last success run id: ${lastSuccess.id}`);
+            core.info(`Last success at (UTC): ${lastSuccess.updated_at}`);
             core.info(`Minutes since last success: ${Math.floor(diffMs / 60000)}`);
 
             if (diffMs >= cooldownMs) {
@@ -107,6 +88,7 @@ jobs:
             } else {
               core.setOutput('should_run', 'false');
               core.setOutput('reason', 'cooldown_not_reached');
+              core.setOutput('minutes_left', String(Math.ceil(remainMs / 60000)));
             }
 
       - name: Cancel run (cooldown not reached)
@@ -115,11 +97,14 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const owner = context.repo.owner;
-            const repo = context.repo.repo;
             const run_id = context.runId;
-            core.notice(`Cooldown not reached -> cancelling run ${run_id}`);
-            await github.rest.actions.cancelWorkflowRun({ owner, repo, run_id });
+            const left = '${{ steps.gate.outputs.minutes_left }}' || '?';
+            core.notice(`Cooldown < 1h (left ~${left} min) -> cancelling run ${run_id}`);
+            await github.rest.actions.cancelWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id
+            });
 
       # --- УСТАНОВКА И СБОРКА XRAY L7 ЧЕКЕРА ---
       - name: Set up Go
