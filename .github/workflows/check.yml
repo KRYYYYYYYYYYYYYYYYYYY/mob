@@ -1,20 +1,16 @@
 name: 🧩 Reserve Checker
 
 on:
-  workflow_run:
-    workflows: ["Auto Update VPN"]
-    types: [completed]
+  schedule:
+    - cron: "*/30 * * * *"
   workflow_dispatch:
 
 concurrency:
   group: reserve-check-lock
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   reserve_check:
-    if: |
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-latest
     permissions:
       contents: write
