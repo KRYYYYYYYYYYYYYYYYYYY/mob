@@ -47,16 +47,18 @@ EXTERNAL_SOURCE_URL = [
 GRACE_PERIOD = 2 * 24 * 60 * 60 
 
 HEADER = """#hide-settings: 1
-#new-url https://functions.yandexcloud.net/d4enbo52eap1kqgtbt2q
+#no-limit-xhttp-enabled: 1
+#subscription-always-hwid-enable: 1
+#color-profile: {"backgroundGradientRotationAngle":37.1,"serverRowBackgroundColor":"#21003D67","subsHeaderColor":"#42296DFF","profileWebPageIconColor":"#A2B8FFFF","selectedServerRowColor":"#3E2F62B5","disclosureSubHeaderTextColor":"#C1C2E2FF","buttonTextColor":"#FFFFFFFF","buttonTimerColor":"#FFFFFFFF","subscriptionInfoBackgroundColor":"#21003CFF","backgroundColors":["#3D2A7DFF","#6557BAFF","#9377FF7F"],"disclosureHeaderTextColor":"#FFFFFFFF","backgroundGradientColorIntensity":1,"additionalOptionsButtonColor":"#FFFFFFFF","buttonImageType":"light","serverRowSubTitleTextColor":"#C1C2E2FF","supportIconColor":"#FFFFFFFF","topBarButtonsColor":"#FFFFFFFF","subscriptionTrafficBackgroundColor":"#533EA7FF","subHeaderButtonColor":"#FFFFFFFF","buttonColor":"#9377FFFF","powerIconColor":"#3D2A7DFF","subscriptionInfoTextColor":"#FFFFFFFF","serverRowTitleTextColor":"#FFFFFFFF","backgroundImageType":"system","elipseColors":["#00B460FF","#CF72FFE0","#FFDD00FF"],"serverRowChevronColor":"#FFFFFFFF"}
 #profile-title: 🏳️Мобильный инет🏳️
 #remark: 🏳️Мобильный инет🏳️
 #announce: Подписка для использования ТОЛЬКО на мобильном интернете в условиях БЕЛЫХ СПИСКОВ! P.s. Бесплатная подписка не гарантирует рабочих серверов, в общем, а уж 24/7 - тем более. Сугубо ваше право ее юзать.
 #profile-update-interval: 2
 #mtu: 1500
 #v6: 0
-#sub-info-text: "привед"
+#sub-info-text: "пора"
 #sub-info-color: green
-#sub-info-button-text: "кря"
+#sub-info-button-text: "пр"
 #sub-info-button-link: "https://yandex.ru/images/search?img_url=https%3A%2F%2Fi.imgflip.com%2F6hqocf.jpg&lr=10407&pos=0&rpt=simage&source=serp&text=%D1%80%D0%B8%D0%BA%D1%80%D0%BE%D0%BB"
 """
 
