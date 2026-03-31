@@ -56,10 +56,10 @@ HEADER = """#hide-settings: 1
 #profile-update-interval: 2
 #mtu: 1500
 #v6: 0
-#sub-info-text: "пора"
+#sub-info-text: пора
 #sub-info-color: green
-#sub-info-button-text: "пр"
-#sub-info-button-link: "https://yandex.ru/images/search?img_url=https%3A%2F%2Fi.imgflip.com%2F6hqocf.jpg&lr=10407&pos=0&rpt=simage&source=serp&text=%D1%80%D0%B8%D0%BA%D1%80%D0%BE%D0%BB"
+#sub-info-button-text: пр
+#sub-info-button-link: https://yandex.ru/images/search?img_url=https%3A%2F%2Fi.imgflip.com%2F6hqocf.jpg&lr=10407&pos=0&rpt=simage&source=serp&text=%D1%80%D0%B8%D0%BA%D1%80%D0%BE%D0%BB
 """
 
 ALLOWED_COUNTRIES = {"US", "DE", "NL", "GB", "FR", "FI", "SG", "JP", "PL", "TR", "RU"}
