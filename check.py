@@ -46,7 +46,7 @@ EXTERNAL_SOURCE_URL = [
 
 GRACE_PERIOD = 2 * 24 * 60 * 60 
 
-HEADER = """#provider-id: ioZjl2e1
+HEADER = """
 #hide-settings: 1
 #profile-title: 🏳️Мобильный инет🏳️
 #remark: 🏳️Мобильный инет🏳️
