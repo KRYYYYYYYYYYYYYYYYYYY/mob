@@ -46,14 +46,18 @@ EXTERNAL_SOURCE_URL = [
 
 GRACE_PERIOD = 2 * 24 * 60 * 60 
 
-HEADER = """
-#hide-settings: 1
+HEADER = """#hide-settings: 1
+#new-url https://functions.yandexcloud.net/d4enbo52eap1kqgtbt2q
 #profile-title: 🏳️Мобильный инет🏳️
 #remark: 🏳️Мобильный инет🏳️
 #announce: Подписка для использования ТОЛЬКО на мобильном интернете в условиях БЕЛЫХ СПИСКОВ! P.s. Бесплатная подписка не гарантирует рабочих серверов, в общем, а уж 24/7 - тем более. Сугубо ваше право ее юзать.
 #profile-update-interval: 2
 #mtu: 1500
 #v6: 0
+#sub-info-text: "привед"
+#sub-info-color: green
+#sub-info-button-text: "кря"
+#sub-info-button-link: "https://yandex.ru/images/search?img_url=https%3A%2F%2Fi.imgflip.com%2F6hqocf.jpg&lr=10407&pos=0&rpt=simage&source=serp&text=%D1%80%D0%B8%D0%BA%D1%80%D0%BE%D0%BB"
 """
 
 ALLOWED_COUNTRIES = {"US", "DE", "NL", "GB", "FR", "FI", "SG", "JP", "PL", "TR", "RU"}
