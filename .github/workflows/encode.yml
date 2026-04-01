@@ -14,11 +14,11 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Create Base64 file
-        # Добавил проверку: если файла нет, скрипт не упадет с ошибкой
         run: |
           mkdir -p kr/mob
           if [ -f kr/mob/wifi.txt ]; then
-            base64 -w 0 kr/mob/wifi.txt > kykyk.txt
+            # Создаем файл сразу с ID в названии
+            base64 -w 0 kr/mob/wifi.txt > kykyk.ioZjl2e1.txt
           else
             echo "Файл не найден!" && exit 1
           fi
@@ -33,22 +33,23 @@ jobs:
           git config --global user.email "bot@example.com"
           
           # --- ШАГ 1: ПУШ В GITHUB ---
-          # Удаляем папку, если она осталась от прошлого неудачного запуска
           rm -rf gh_repo
           git clone --quiet "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository_owner }}/kyti.git" gh_repo
-          cp kykyk.txt gh_repo/
+          # Копируем файл с новым именем
+          cp kykyk.ioZjl2e1.txt gh_repo/
           cd gh_repo
-          git add kykyk.txt
-          git commit -m "Update from GH Action ${{ github.run_number }}" || echo "No changes"
+          git add kykyk.ioZjl2e1.txt
+          git commit -m "Update encrypted data with ID from GH Action" || echo "No changes"
           git push
           cd .. 
 
           # --- ШАГ 2: ПУШ В GITVERSE ---
           rm -rf gv_repo
           git clone --quiet "https://Kreyker:${GV_TOKEN}@gitverse.ru/Kreyker/kyti.git" gv_repo
-          cp kykyk.txt gv_repo/
+          # Копируем файл с новым именем
+          cp kykyk.ioZjl2e1.txt gv_repo/
           cd gv_repo
-          git add kykyk.txt
-          git commit -m "Update from GitHub Sync ${{ github.run_number }}" || echo "No changes"
+          git add kykyk.ioZjl2e1.txt
+          git commit -m "Update from GitHub Sync with ID" || echo "No changes"
           git push
           cd ..
