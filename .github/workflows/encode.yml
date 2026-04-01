@@ -1,0 +1,29 @@
+name: Auto Base64 Encoder
+
+on:
+  push:
+    paths:
+      - 'wifi.txt' # Робот проснется только если ты изменишь этот файл
+
+jobs:
+  convert:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Разрешаем роботу записывать файл в репо
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Convert to Base64
+        run: |
+          # Берем wifi.txt, кодируем в одну строку (-w 0) и сохраняем в kykyk.txt
+          base64 -w 0 wifi.txt > kykyk.txt
+
+      - name: Commit and Push
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@://github.com"
+          git add kykyk.txt
+          git commit -m "Update kykyk.txt with new base64 data" || exit 0
+          git push
