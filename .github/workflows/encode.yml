@@ -1,29 +1,36 @@
-name: Auto Base64 Encoder
+name: Push Base64 to Another Repo
 
 on:
   push:
     paths:
-      - 'wifi.txt' # Робот проснется только если ты изменишь этот файл
+      - 'wifi.txt' # Робот сработает только когда ты изменишь этот файл
 
 jobs:
-  convert:
+  push-to-mirror:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write # Разрешаем роботу записывать файл в репо
-
     steps:
-      - name: Checkout code
+      - name: Checkout Source
         uses: actions/checkout@v4
 
-      - name: Convert to Base64
-        run: |
-          # Берем wifi.txt, кодируем в одну строку (-w 0) и сохраняем в kykyk.txt
-          base64 -w 0 wifi.txt > kykyk.txt
+      - name: Create Base64 file
+        run: base64 -w 0 wifi.txt > kykyk.txt
 
-      - name: Commit and Push
+      - name: Push to Second Repo
+        env:
+          API_TOKEN_GITHUB: ${{ secrets.MY_TOKEN }}
         run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@://github.com"
+          git config --global user.name "SyncBot"
+          git config --global user.email "bot@example.com"
+          
+          # 1. Клонируем второй репозиторий (Витрину) во временную папку target_repo
+          # Используем токен для доступа
+          git clone https://x-access-token:${API_TOKEN_GITHUB}@://github.com{{ github.repository_owner }}/kyti.git target_repo
+          
+          # 2. Копируем свежий kykyk.txt из основной папки во вторую
+          cp kykyk.txt target_repo/
+          
+          # 3. Переходим в папку второго репо и отправляем изменения
+          cd target_repo
           git add kykyk.txt
-          git commit -m "Update kykyk.txt with new base64 data" || exit 0
+          git commit -m "Update encrypted data" || echo "No changes to commit"
           git push
