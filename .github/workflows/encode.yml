@@ -1,55 +1,89 @@
-name: Push Base64 to Another Repo
+name: 🛡️ Smart Sync: Base64 to Remote Repos
 
 on:
   push:
     paths:
       - 'kr/mob/wifi.txt'
-  workflow_dispatch:
+  workflow_dispatch: # Позволяет запустить вручную для теста
 
 jobs:
   push-to-mirror:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Source
+      # 1. Скачиваем текущий репозиторий
+      - name: 📂 Checkout Source
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 2 # Нужно для проверки изменений между коммитами
 
-      - name: Create Base64 file
+      # 2. Жесткая проверка файла в текущем репозитории
+      - name: 🔍 Verify Local File Changes
+        id: check_file
         run: |
-          mkdir -p kr/mob
-          if [ -f kr/mob/wifi.txt ]; then
-            # Создаем файл сразу с ID в названии
-            base64 -w 0 kr/mob/wifi.txt > kykyk.ioZjl2e1.txt
-          else
-            echo "Файл не найден!" && exit 1
+          FILE_PATH="kr/mob/wifi.txt"
+          
+          if [ ! -f "$FILE_PATH" ]; then
+            echo "❌ ERROR: Файл $FILE_PATH не найден!"
+            exit 1
           fi
 
-      - name: Sync with GitHub and GitVerse
+          # Проверяем, не пустой ли файл
+          if [ ! -s "$FILE_PATH" ]; then
+            echo "⚠️ WARNING: Файл $FILE_PATH пуст. Пропускаем синхронизацию."
+            echo "should_sync=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "✅ Файл найден и содержит данные."
+          echo "should_sync=true" >> $GITHUB_OUTPUT
+
+      # 3. Создаем Base64 (только если проверка пройдена)
+      - name: 📝 Create Base64 file
+        if: steps.check_file.outputs.should_sync == 'true'
+        run: |
+          base64 -w 0 kr/mob/wifi.txt > kykyk.ioZjl2e1.txt
+          echo "✅ Base64 создан."
+
+      # 4. Синхронизация с внешними репозиториями
+      - name: 🚀 Sync with GitHub and GitVerse
+        if: steps.check_file.outputs.should_sync == 'true'
         env:
           GH_TOKEN: ${{ secrets.MY_TOKEN }}
           GV_TOKEN: ${{ secrets.GITVERSE_TOKEN }}
         run: |
-          # 1. Настройка личности
+          # Настройка бота
           git config --global user.name "SyncBot"
           git config --global user.email "bot@example.com"
           
-          # --- ШАГ 1: ПУШ В GITHUB ---
-          rm -rf gh_repo
-          git clone --quiet "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository_owner }}/kyti.git" gh_repo
-          # Копируем файл с новым именем
-          cp kykyk.ioZjl2e1.txt gh_repo/
-          cd gh_repo
-          git add kykyk.ioZjl2e1.txt
-          git commit -m "Update encrypted data with ID from GH Action" || echo "No changes"
-          git push
-          cd .. 
+          TARGET_FILE="kykyk.ioZjl2e1.txt"
 
-          # --- ШАГ 2: ПУШ В GITVERSE ---
-          rm -rf gv_repo
-          git clone --quiet "https://Kreyker:${GV_TOKEN}@gitverse.ru/Kreyker/kyti.git" gv_repo
-          # Копируем файл с новым именем
-          cp kykyk.ioZjl2e1.txt gv_repo/
-          cd gv_repo
-          git add kykyk.ioZjl2e1.txt
-          git commit -m "Update from GitHub Sync with ID" || echo "No changes"
-          git push
-          cd ..
+          # --- ФУНКЦИЯ ПУША (чтобы не дублировать код) ---
+          sync_repo() {
+            REPO_URL=$1
+            DIR_NAME=$2
+            COMMIT_MSG=$3
+
+            echo "📦 Синхронизация с $DIR_NAME..."
+            rm -rf $DIR_NAME
+            git clone --quiet "$REPO_URL" $DIR_NAME
+            cp $TARGET_FILE $DIR_NAME/
+            
+            cd $DIR_NAME
+            if [[ -n $(git status --porcelain) ]]; then
+              git add $TARGET_FILE
+              git commit -m "$COMMIT_MSG"
+              git push
+              echo "✅ Изменения отправлены в $DIR_NAME"
+            else
+              echo "ℹ️ Нет изменений для $DIR_NAME (файлы идентичны)"
+            fi
+            cd ..
+          }
+
+          # --- ШАГ 1: GITHUB (Repo: kyti) ---
+          GH_REPO_URL="https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository_owner }}/kyti.git"
+          sync_repo "$GH_REPO_URL" "gh_repo" "Update encrypted data [Action ID: ${GITHUB_RUN_ID}]"
+
+          # --- ШАГ 2: GITVERSE (Repo: kyti) ---
+          GV_REPO_URL="https://Kreyker:${GV_TOKEN}@gitverse.ru/Kreyker/kyti.git"
+          sync_repo "$GV_REPO_URL" "gv_repo" "Sync from GitHub [Action ID: ${GITHUB_RUN_ID}]"
