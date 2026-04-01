@@ -16,24 +16,31 @@ jobs:
       - name: Create Base64 file
         run: base64 -w 0 kr/mob/wifi.txt > kykyk.txt
 
-      - name: Push to Second Repo
+      - name: Sync with GitHub and GitVerse
         env:
-          API_TOKEN_GITHUB: ${{ secrets.MY_TOKEN }}
+          GH_TOKEN: ${{ secrets.MY_TOKEN }}
+          GV_TOKEN: ${{ secrets.GITVERSE_TOKEN }}
         run: |
-          # Setup identity
+          # 1. Настройка личности
           git config --global user.name "SyncBot"
           git config --global user.email "bot@example.com"
           
-          # 1. Corrected Clone URL
-          # Removed the extra "://" and added missing "/"
-          git clone "https://x-access-token:${API_TOKEN_GITHUB}@github.com/${{ github.repository_owner }}/kyti.git" target_repo
-          
-          # 2. Copy the file
-          cp kykyk.txt target_repo/
-          
-          # 3. Commit and Push
-          cd target_repo
+          # --- ШАГ 1: ПУШ В GITHUB ---
+          # Исправлена ссылка: убрано лишнее :// и добавлены правильные скобки ${{ }}
+          git clone --quiet "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository_owner }}/kyti.git" gh_repo
+          cp kykyk.txt gh_repo/
+          cd gh_repo
           git add kykyk.txt
-          # Using || exit 0 ensures the workflow doesn't fail if there's nothing to change
-          git commit -m "Update encrypted data from ${{ github.sha }}" || echo "No changes to commit"
+          git commit -m "Update encrypted data from GH Action" || echo "No changes"
           git push
+          cd .. 
+
+          # --- ШАГ 2: ПУШ В GITVERSE ---
+          # Здесь всё верно: твой ник Kreyker и репозиторий kyti
+          git clone --quiet "https://Kreyker:${GV_TOKEN}@gitverse.ru/Kreyker/kyti.git" gv_repo
+          cp kykyk.txt gv_repo/
+          cd gv_repo
+          git add kykyk.txt
+          git commit -m "Update from GitHub Sync" || echo "No changes"
+          git push
+          cd ..
