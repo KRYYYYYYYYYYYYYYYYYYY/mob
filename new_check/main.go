@@ -7,7 +7,6 @@ import (
 	"os/signal"
 	"runtime"
 	"syscall"
-	"time"
 )
 
 // держим веб-сервер жить, пока не прервут процесс
@@ -31,10 +30,6 @@ func main() {
 	flag.BoolVar(&enableTCPProbe, "tcp-probe", true, "fast TCP probe before starting xray")
 	flag.IntVar(&maxWorkCfg, "maxworkcfg", 0, "stop after N working configs (0 = unlimited)")
 	flag.BoolVar(&serveKeep, "serve-keep", false, "keep web server running after checks finish")
-	flag.BoolVar(&strongStyleTest, "strong-style", true, "strict mobile-like probing (204 checks)")
-	flag.DurationVar(&strongMaxRT, "strong-max-rt", 4*time.Second, "max per-request latency in strong mode")
-	flag.BoolVar(&strongDoubleTest, "strong-double", true, "repeat strict probe twice")
-	flag.IntVar(&minSuccessURLs, "min-success-urls", 2, "minimum distinct successful probe URLs in normal mode")
 	flag.Parse()
 
 	// конфиг веба + старт сервера
