@@ -1157,6 +1157,7 @@ def note_reason(reason_stats: dict, reason: str, base_part: str = "", extra: str
     with open(CHECK_LOG_FILE, "a", encoding="utf-8") as f:
         f.write(line + "\n")
 
+
 def normalize_rank_entry(base_part: str, entry):
     """Приводит запись ranking.json к единому виду."""
     if isinstance(entry, dict):
