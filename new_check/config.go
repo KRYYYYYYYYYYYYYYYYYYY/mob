@@ -1,6 +1,10 @@
 package main
 
-import "time"
+import (
+	"os"
+	"path/filepath"
+	"time"
+)
 
 // пути/файлы
 var (
@@ -14,6 +18,34 @@ var (
 
 	configJSONPath = "new_check/config.json"
 )
+
+func pickExistingPath(paths ...string) string {
+	for _, p := range paths {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	if len(paths) == 0 {
+		return ""
+	}
+	return paths[0]
+}
+
+func rebuildOutputPaths() {
+	allOutFile = filepath.Join(outputDir, "result.txt")
+	workingFile = filepath.Join(outputDir, "working.txt")
+	firstOKFile = filepath.Join(outputDir, "first_working.txt")
+	timeWifiFile = filepath.Join(outputDir, "time_wifi.txt")
+}
+
+func init() {
+	// Поддерживаем запуск как из корня репозитория, так и из new_check/.
+	inputFile = pickExistingPath("new_check/input.txt", "input.txt")
+	wifiFile = pickExistingPath("kr/mob/wifi.txt", "../kr/mob/wifi.txt")
+	outputDir = pickExistingPath("new_check/result", "result")
+	configJSONPath = pickExistingPath("new_check/config.json", "config.json")
+	rebuildOutputPaths()
+}
 
 // флаги (инициализируются в main)
 var (
@@ -37,8 +69,15 @@ const (
 var (
 	httpFetchTimeout = 15 * time.Second
 	maxRemoteSize    = int64(5 * 1024 * 1024)
+	strongStyleTest  = true
+	strongMaxRT      = 4 * time.Second
+	strongDoubleTest = true
+	minSuccessURLs   = 2
 	testURLs         = []string{
-		"http://example.com/",
+		"https://www.gstatic.com/generate_204",
+		"https://connectivitycheck.gstatic.com/generate_204",
+		"http://cp.cloudflare.com/generate_204",
+		"https://detectportal.firefox.com/success.txt",
 	}
 )
 
