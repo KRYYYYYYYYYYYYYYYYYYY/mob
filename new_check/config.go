@@ -29,16 +29,18 @@ var (
 
 // дефолтные значения
 const (
-	DefaultBootWait      = 1200 * time.Millisecond
-	DefaultTestTimeout   = 10 * time.Second
-	DefaultXrayRunBudget = 18 * time.Second
+	DefaultWorkers       = 16
+	DefaultRetrySNI      = 2
+	DefaultBootWait      = 700 * time.Millisecond
+	DefaultTestTimeout   = 2 * time.Second
+	DefaultXrayRunBudget = 6 * time.Second
 )
 
 var (
-	httpFetchTimeout = 15 * time.Second
+	httpFetchTimeout = 10 * time.Second
 	maxRemoteSize    = int64(5 * 1024 * 1024)
 	testURLs         = []string{
-		"http://example.com/",
+		"http://connectivitycheck.gstatic.com/generate_204",
 	}
 )
 

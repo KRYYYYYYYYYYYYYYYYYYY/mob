@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"runtime"
 	"syscall"
 )
 
@@ -22,11 +21,11 @@ func waitIfServeKeep(srv *httpServer) {
 
 func main() {
 	// флаги работы чекера
-	flag.IntVar(&workers, "workers", runtime.NumCPU()*2, "number of parallel workers")
+	flag.IntVar(&workers, "workers", DefaultWorkers, "number of parallel workers")
 	flag.DurationVar(&bootWait, "boot-wait", DefaultBootWait, "wait after xray start")
 	flag.DurationVar(&testTimeout, "test-timeout", DefaultTestTimeout, "HTTP test timeout")
 	flag.DurationVar(&xrayRunBudget, "xray-budget", DefaultXrayRunBudget, "per-check time budget")
-	flag.IntVar(&retrySNI, "retry-sni", 3, "max SNI attempts per config")
+	flag.IntVar(&retrySNI, "retry-sni", DefaultRetrySNI, "max SNI attempts per config")
 	flag.BoolVar(&enableTCPProbe, "tcp-probe", true, "fast TCP probe before starting xray")
 	flag.IntVar(&maxWorkCfg, "maxworkcfg", 0, "stop after N working configs (0 = unlimited)")
 	flag.BoolVar(&serveKeep, "serve-keep", false, "keep web server running after checks finish")
