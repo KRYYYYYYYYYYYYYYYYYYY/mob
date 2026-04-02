@@ -1,6 +1,7 @@
 import socket
 import time
 import os
+import asyncio
 import ssl
 import re
 import json
@@ -12,6 +13,11 @@ import psutil
 from concurrent.futures import ThreadPoolExecutor
 import threading
 from ua_versions import get_mobile_user_agents, maybe_refresh_ua_versions
+from mobile_vless_checker import (
+    HostLimiter as AsyncHostLimiter,
+    check_one as async_check_one,
+    load_mobile_whitelist as async_load_mobile_whitelist,
+)
 
 # --- КОНФИГУРАЦИЯ ---
 ALLOWED_COUNTRIES = {"US", "DE", "NL", "GB", "FR", "FI", "SG", "JP", "PL", "TR", "RU"}
@@ -68,6 +74,44 @@ file_lock = threading.Lock()
 go_lib = None
 _MOBILE_WHITELIST_CACHE = None
 _MOBILE_WHITELIST_LOCK = threading.Lock()
+_ASYNC_MOBILE_WHITELIST_CACHE = None
+
+
+def async_mobile_probe_torture(link: str, stress_config: dict) -> bool:
+    global _ASYNC_MOBILE_WHITELIST_CACHE
+    async_cfg = {
+        "max_handshake_ms": int(float(stress_config.get("timeout", 1.2)) * 1000),
+        "recv_timeout": float(stress_config.get("recv_timeout", 0.9)),
+        "probe_attempts": int(stress_config.get("probe_attempts", 3)),
+        "min_success": int(stress_config.get("l7_min_success", 1)),
+        "workers": int(stress_config.get("workers", 16)),
+        "max_parallel_per_host": 1,
+        "min_bytes_received": int(stress_config.get("min_bytes_received", 50)),
+        "max_latency_ms": int(stress_config.get("max_latency_ms", 2000)),
+        "mobile_whitelist_enabled": bool(stress_config.get("mobile_whitelist_enabled", True)),
+        "mobile_whitelist_fail_open": bool(stress_config.get("mobile_whitelist_fail_open", False)),
+        "mobile_whitelist_timeout_sec": float(stress_config.get("mobile_whitelist_timeout_sec", 10)),
+        "mobile_whitelist_retries": int(stress_config.get("mobile_whitelist_retries", 2)),
+        "mobile_whitelist_retry_sleep_sec": float(stress_config.get("mobile_whitelist_retry_sleep_sec", 1)),
+        "mobile_whitelist_domains_url": str(stress_config.get("mobile_whitelist_domains_url", DEFAULT_MOBILE_WHITELIST["domains_url"])),
+        "mobile_whitelist_ips_url": str(stress_config.get("mobile_whitelist_ips_url", DEFAULT_MOBILE_WHITELIST["ips_url"])),
+        "mobile_whitelist_cidrs_url": str(stress_config.get("mobile_whitelist_cidrs_url", DEFAULT_MOBILE_WHITELIST["cidrs_url"])),
+        "http_probe_path": "/generate_204",
+        "http_probe_host": "connectivitycheck.gstatic.com",
+        "user_agent": DEFAULT_MOBILE_HEADER_PROFILES[-1]["user_agent"],
+    }
+    if _ASYNC_MOBILE_WHITELIST_CACHE is None:
+        _ASYNC_MOBILE_WHITELIST_CACHE = async_load_mobile_whitelist(async_cfg)
+    limiter = AsyncHostLimiter(1)
+
+    async def _run():
+        return await async_check_one(link, async_cfg, _ASYNC_MOBILE_WHITELIST_CACHE, limiter)
+
+    try:
+        result = asyncio.run(_run())
+        return result.status == "Active"
+    except Exception:
+        return False
 
 def normalize_rank_entry(base: str, data):
     """Унифицирует формат ranking.json: dict(rank, link, ...)."""
@@ -92,6 +136,9 @@ def decrease_rank(ranking_db, base, delta=30, note="FAIL"):
 
 def l7_multi_probe(link: str, stress_config: dict, fallback_sni: str) -> bool:
     """Проверка кворумом по нескольким SNI-кандидатам для лучшего совпадения с мобилкой."""
+    if os.getenv("USE_ASYNC_MOBILE_CHECKER", "1") == "1":
+        return async_mobile_probe_torture(link, stress_config)
+
     timeout_sec = max(1, int(stress_config.get("timeout", 3)))
     min_hits = max(1, int(stress_config.get("l7_min_success", 2)))
     max_candidates = max(1, int(stress_config.get("l7_max_candidates", 3)))
@@ -403,24 +450,25 @@ def remove_from_all(base_part):
 # --- НОВАЯ ФУНКЦИЯ ЗАГРУЗКИ КОНФИГА ---
 def load_stress_config():
     config = {
-        "timeout": 2.5,
+        "timeout": 1.2,
         "dpi_sleep": 0.5,
-        "recv_timeout": 1.7,
-        "between_attempts_sleep": 0.35,
-        "probe_attempts": 4,
-        "min_success": 2,
+        "recv_timeout": 0.9,
+        "between_attempts_sleep": 0.2,
+        "probe_attempts": 3,
+        "min_success": 1,
         "torture_total_attempts": 20,
-        "torture_min_success": 20,
+        "torture_min_success": 12,
         "torture_cycle_sleep": 60,
-        "l7_min_success": 2,
-        "l7_max_candidates": 3,
-        "probe_paths": list(DEFAULT_PROBE_PATHS),
+        "l7_min_success": 1,
+        "l7_max_candidates": 2,
+        "workers": 16,
+        "probe_paths": ["/generate_204"],
         "mobile_header_profiles": list(DEFAULT_MOBILE_HEADER_PROFILES),
         "mobile_whitelist_enabled": True,
-        "mobile_whitelist_fail_open": True,
-        "mobile_whitelist_timeout_sec": 20.0,
-        "mobile_whitelist_retries": 3,
-        "mobile_whitelist_retry_sleep_sec": 2.0,
+        "mobile_whitelist_fail_open": False,
+        "mobile_whitelist_timeout_sec": 10.0,
+        "mobile_whitelist_retries": 2,
+        "mobile_whitelist_retry_sleep_sec": 1.0,
         "mobile_whitelist_domains_url": DEFAULT_MOBILE_WHITELIST["domains_url"],
         "mobile_whitelist_ips_url": DEFAULT_MOBILE_WHITELIST["ips_url"],
         "mobile_whitelist_cidrs_url": DEFAULT_MOBILE_WHITELIST["cidrs_url"],
@@ -440,6 +488,7 @@ def load_stress_config():
             config["torture_cycle_sleep"] = int(data.get("torture_cycle_sleep", config["torture_cycle_sleep"]))
             config["l7_min_success"] = int(data.get("l7_min_success", config["l7_min_success"]))
             config["l7_max_candidates"] = int(data.get("l7_max_candidates", config["l7_max_candidates"]))
+            config["workers"] = int(data.get("workers", config["workers"]))
             if isinstance(data.get("probe_paths"), list) and data.get("probe_paths"):
                 config["probe_paths"] = [str(x) for x in data["probe_paths"] if str(x).strip()]
             if isinstance(data.get("mobile_header_profiles"), list) and data.get("mobile_header_profiles"):
@@ -694,7 +743,8 @@ def main_torturer():
             except Exception:
                 return base, full_link, False, "ERROR", 0, 0
 
-        with ThreadPoolExecutor(max_workers=15) as executor:
+        workers = max(1, int(stress_config.get("workers", 16)))
+        with ThreadPoolExecutor(max_workers=workers) as executor:
             # Передавай конфиг явно в каждый поток
             results = list(executor.map(run_torture, candidates))
 
