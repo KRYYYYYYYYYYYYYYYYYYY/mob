@@ -147,6 +147,31 @@ func isStrictProbeSuccess(probeURL string, statusCode, bodyLen, latencyMs int, g
 	return statusCode >= 200 && statusCode < 400
 }
 
+// Переключатели тестового режима для probeResultOK (используются unit-тестами).
+var (
+	strongStyleTest = true
+	strongMaxRT     = 4 * time.Second
+)
+
+func probeResultOK(probeURL string, statusCode, bodyLen int, rt time.Duration) bool {
+	if rt <= 0 {
+		return false
+	}
+	if strongStyleTest {
+		if rt > strongMaxRT {
+			return false
+		}
+		if strings.Contains(strings.ToLower(probeURL), "generate_204") {
+			return statusCode == http.StatusNoContent && bodyLen == 0
+		}
+		return statusCode >= 200 && statusCode < 400
+	}
+	if strings.Contains(strings.ToLower(probeURL), "generate_204") {
+		return statusCode == http.StatusNoContent && bodyLen == 0
+	}
+	return statusCode >= 200 && statusCode < 400
+}
+
 func waitSocksReady(port, timeoutSec int) bool {
 	deadline := time.Now().Add(time.Duration(timeoutSec) * time.Second)
 	for time.Now().Before(deadline) {
