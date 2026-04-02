@@ -117,7 +117,7 @@ func RunScanOnce(max int) {
 	// По умолчанию включаем Python async mobile checker.
 	// Отключение: USE_ASYNC_MOBILE_CHECKER=0
 	if os.Getenv("USE_ASYNC_MOBILE_CHECKER") != "0" {
-		pyResults, err := runPythonMobileChecker(all)
+		pyResults, err := runPythonMobileCheckerBridge(all)
 		if err != nil {
 			fmt.Println("python mobile checker fallback to native:", err)
 		} else if len(pyResults) > 0 {
