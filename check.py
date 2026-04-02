@@ -58,7 +58,7 @@ HEADER = """#providerid ioZjl2e1
 """
 
 ALLOWED_COUNTRIES = {"US", "DE", "NL", "GB", "FR", "FI", "SG", "JP", "PL", "TR", "RU"}
-MAIN_TARGET_SIZE = 100
+MAIN_TARGET_SIZE = 50
 RESERVE_MARKER = "RESERVE"
 
 DEFAULT_PROBE_PATHS = ["/", "/generate_204", "/favicon.ico"]
@@ -1351,7 +1351,9 @@ def main():
     extend_check_queue(sorted(deferred_base, key=lambda l: ranking_sort_key(l, ranking_db)))
 
     # --- [ШАГ 3: ПОДГОТОВКА К ЦИКЛУ] ---
-    working_for_sub = immortals[:MAIN_TARGET_SIZE] # Сразу забиваем подписку бессмертными
+    # Бессмертные всегда сохраняем как есть, а MAIN_TARGET_SIZE — это цель
+    # именно по добору новых (проверенных в этом прогоне) серверов.
+    working_for_sub = immortals[:]
     working_for_base = []            # Сюда пойдут те, кто реально ответил
     
     now = time.time()
@@ -1457,12 +1459,7 @@ def main():
         mobile_whitelist = get_mobile_whitelist(stress_config)
 
     raw_external_loaded = False
-    print(f"📡 Начинаю добор до {MAIN_TARGET_SIZE}. В очереди (текущие+отложенные): {len(check_queue)}")
-    if len(working_for_sub) >= MAIN_TARGET_SIZE:
-        print(
-            "ℹ️ Чек новых серверов пропущен: цель уже закрыта бессмертными "
-            f"({len(working_for_sub)}/{MAIN_TARGET_SIZE})."
-        )
+    print(f"📡 Начинаю добор новых до {MAIN_TARGET_SIZE}. В очереди (текущие+отложенные): {len(check_queue)}")
 
     # --- [ШАГ 4: ЦИКЛ ПРОВЕРКИ] ---
     workers = max(1, int(stress_config.get("workers", 32)))
@@ -1472,7 +1469,7 @@ def main():
     print(f"⚙️ Параллельная проверка: workers={workers}, batch={batch_size}")
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        while len(working_for_sub) < MAIN_TARGET_SIZE:
+        while len(working_for_base) < MAIN_TARGET_SIZE:
             if stress_config.get("mobile_whitelist_enabled", True):
                 mobile_whitelist = get_mobile_whitelist(stress_config)
             if time.time() - start_time >= max_check_duration_sec:
@@ -1588,7 +1585,7 @@ def main():
                 for link, base_part, host in batch
             }
             for fut in as_completed(futures):
-                if len(working_for_sub) >= MAIN_TARGET_SIZE or checked_today >= MAX_TO_CHECK:
+                if len(working_for_base) >= MAIN_TARGET_SIZE or checked_today >= MAX_TO_CHECK:
                     break
                 source_link, base_part, host = futures[fut]
                 checked_today += 1
@@ -1623,7 +1620,7 @@ def main():
                     final_link = rebuild_link_name(tuned_link, f"mob {counter} [{ping_label}]")
                     final_link = upsert_query_param(final_link, link_tune_param_key, link_tune_param_value)
                     working_for_sub.append(final_link)
-                    print(f"✅ ОК {len(working_for_sub)}/{MAIN_TARGET_SIZE} ({country}): {current_latency}ms")
+                    print(f"✅ ОК {len(working_for_base)}/{MAIN_TARGET_SIZE} ({country}): {current_latency}ms")
                     note_reason(reason_stats, "ok", base_part, f"{country},{current_latency}ms")
                     counter += 1
                 else:
@@ -1660,7 +1657,7 @@ def main():
                             final_link = rebuild_link_name(tuned_link, f"mob {counter} [{ping_label}]")
                             final_link = upsert_query_param(final_link, link_tune_param_key, link_tune_param_value)
                             working_for_sub.append(final_link)
-                            print(f"🟡 RECOVERED {len(working_for_sub)}/{MAIN_TARGET_SIZE} ({country}): {recheck_latency}ms")
+                            print(f"🟡 RECOVERED {len(working_for_base)}/{MAIN_TARGET_SIZE} ({country}): {recheck_latency}ms")
                             note_reason(reason_stats, "ok_after_recheck", base_part, f"{country},{recheck_latency}ms")
                             counter += 1
                             continue
