@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"regexp"
@@ -183,27 +184,90 @@ func doHTTPViaSocks(port int) (bool, int) {
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 	}
 	client := &http.Client{Transport: tb, Timeout: testTimeout}
+
+	if strongStyleTest {
+		target := "https://www.gstatic.com/generate_204"
+		best := 0
+		attempts := 1
+		if strongDoubleTest {
+			attempts = 2
+		}
+		for i := 0; i < attempts; i++ {
+			ok, lat := runProbeOnce(client, target)
+			if !ok || lat > strongMaxRT {
+				return false, 0
+			}
+			ms := int(lat.Milliseconds())
+			if ms <= 0 {
+				ms = 1
+			}
+			if best == 0 || ms < best {
+				best = ms
+			}
+		}
+		return true, best
+	}
+
+	successHosts := map[string]struct{}{}
+	successCount := 0
 	best := 0
 	for _, u := range testURLs {
-		start := time.Now()
-		resp, err := client.Get(u)
-		if err != nil {
+		ok, lat := runProbeOnce(client, u)
+		if !ok {
 			continue
 		}
-		io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
-		lat := int(time.Since(start).Milliseconds())
-		if lat <= 0 {
-			lat = 1
+		successCount++
+		if pu, err := url.Parse(u); err == nil {
+			successHosts[pu.Hostname()] = struct{}{}
 		}
-		if best == 0 || lat < best {
-			best = lat
+		ms := int(lat.Milliseconds())
+		if ms <= 0 {
+			ms = 1
+		}
+		if best == 0 || ms < best {
+			best = ms
 		}
 	}
-	if best == 0 {
+	if successCount == 0 {
+		return false, 0
+	}
+	if len(successHosts) < minSuccessURLs {
 		return false, 0
 	}
 	return true, best
+}
+
+func runProbeOnce(client *http.Client, target string) (bool, time.Duration) {
+	start := time.Now()
+	resp, err := client.Get(target)
+	if err != nil {
+		return false, 0
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+	resp.Body.Close()
+	lat := time.Since(start)
+	return probeResultOK(target, resp.StatusCode, len(body), lat), lat
+}
+
+func probeResultOK(target string, statusCode, bodyLen int, latency time.Duration) bool {
+	lower := strings.ToLower(target)
+	is204Probe := strings.Contains(lower, "generate_204")
+	if strongStyleTest {
+		if statusCode != http.StatusNoContent {
+			return false
+		}
+		if bodyLen != 0 {
+			return false
+		}
+		return latency <= strongMaxRT
+	}
+	if is204Probe {
+		if statusCode != http.StatusNoContent {
+			return false
+		}
+		return bodyLen == 0
+	}
+	return statusCode >= 200 && statusCode < 400
 }
 
 func pickFreePort() (int, net.Listener, error) {

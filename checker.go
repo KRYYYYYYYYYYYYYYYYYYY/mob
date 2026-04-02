@@ -162,6 +162,16 @@ func applyProbeHeaders(req *http.Request, idx int) {
 	}
 }
 
+func isStrictProbeSuccess(probeURL string, statusCode, bodyLen, latencyMs int, gotFirstByte bool) bool {
+	if !gotFirstByte || latencyMs <= 0 || latencyMs > 12000 {
+		return false
+	}
+	if strings.Contains(strings.ToLower(probeURL), "generate_204") {
+		return statusCode == http.StatusNoContent && bodyLen == 0
+	}
+	return statusCode >= 200 && statusCode < 400
+}
+
 func waitSocksReady(port, timeoutSec int) bool {
 	deadline := time.Now().Add(time.Duration(timeoutSec) * time.Second)
 	for time.Now().Before(deadline) {
@@ -450,13 +460,12 @@ func startXrayAndProbe(configJSON []byte, socksPort, timeoutSec int) int {
 				}
 				continue
 			}
-			_, _ = io.Copy(io.Discard, resp.Body)
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 			resp.Body.Close()
 
-			// 2xx/3xx считаем рабочим признаком L7-доступа.
-			if (resp.StatusCode >= 200 && resp.StatusCode < 400) || resp.StatusCode == http.StatusNoContent {
-				latencyMs := int(time.Since(reqStart).Milliseconds())
-				if !gotFirstByte || latencyMs <= 0 || latencyMs > maxAcceptedLatencyMs {
+			latencyMs := int(time.Since(reqStart).Milliseconds())
+			if isStrictProbeSuccess(probeURL, resp.StatusCode, len(body), latencyMs, gotFirstByte) {
+				if latencyMs > maxAcceptedLatencyMs {
 					continue
 				}
 				successHits++
@@ -735,12 +744,12 @@ func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C
 				}
 				continue
 			}
-			_, _ = io.Copy(io.Discard, resp.Body)
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 			resp.Body.Close()
 
-			if (resp.StatusCode >= 200 && resp.StatusCode < 400) || resp.StatusCode == http.StatusNoContent {
-				latencyMs := int(time.Since(reqStart).Milliseconds())
-				if !gotFirstByte || latencyMs <= 0 || latencyMs > maxAcceptedLatencyMs {
+			latencyMs := int(time.Since(reqStart).Milliseconds())
+			if isStrictProbeSuccess(probeURL, resp.StatusCode, len(body), latencyMs, gotFirstByte) {
+				if latencyMs > maxAcceptedLatencyMs {
 					continue
 				}
 				successHits++
@@ -754,7 +763,7 @@ func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C
 			}
 		}
 	}
-	if successHits >= 1 {
+	if successHits >= 2 {
 		return firstSuccessLatency
 	}
 	return -1

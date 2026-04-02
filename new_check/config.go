@@ -69,8 +69,15 @@ const (
 var (
 	httpFetchTimeout = 15 * time.Second
 	maxRemoteSize    = int64(5 * 1024 * 1024)
+	strongStyleTest  = true
+	strongMaxRT      = 4 * time.Second
+	strongDoubleTest = true
+	minSuccessURLs   = 2
 	testURLs         = []string{
-		"http://example.com/",
+		"https://www.gstatic.com/generate_204",
+		"https://connectivitycheck.gstatic.com/generate_204",
+		"http://cp.cloudflare.com/generate_204",
+		"https://detectportal.firefox.com/success.txt",
 	}
 )
 
