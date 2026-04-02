@@ -2,8 +2,15 @@ name: Smart Sync Base64
 
 on:
   push:
+    branches:
+      - '**'
     paths:
       - 'kr/mob/wifi.txt'
+      - '.github/workflows/encode.yml'
+  pull_request:
+    paths:
+      - 'kr/mob/wifi.txt'
+      - '.github/workflows/encode.yml'
   workflow_dispatch:
   schedule:
     - cron: '*/2 * * * *'
@@ -25,7 +32,31 @@ jobs:
             echo "❌ ERROR: File $FILE_PATH not found!"
             exit 1
           fi
-          echo "should_sync=true" >> $GITHUB_OUTPUT
+
+          EVENT_NAME="${{ github.event_name }}"
+          SHOULD_SYNC="false"
+
+          if [ "$EVENT_NAME" = "push" ]; then
+            BEFORE_SHA="${{ github.event.before }}"
+            if [ -n "$BEFORE_SHA" ] && [ "$BEFORE_SHA" != "0000000000000000000000000000000000000000" ]; then
+              if git diff --name-only "$BEFORE_SHA" "${{ github.sha }}" | grep -Fxq "$FILE_PATH"; then
+                SHOULD_SYNC="true"
+              fi
+            else
+              # Initial push or unknown previous SHA
+              SHOULD_SYNC="true"
+            fi
+          elif [ "$EVENT_NAME" = "pull_request" ]; then
+            if git diff --name-only "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}" | grep -Fxq "$FILE_PATH"; then
+              SHOULD_SYNC="true"
+            fi
+          else
+            # workflow_dispatch / schedule
+            SHOULD_SYNC="true"
+          fi
+
+          echo "should_sync=$SHOULD_SYNC" >> "$GITHUB_OUTPUT"
+          echo "ℹ️ event=$EVENT_NAME, should_sync=$SHOULD_SYNC"
 
       - name: 📝 Create Base64 file
         if: steps.check_file.outputs.should_sync == 'true'
@@ -33,14 +64,14 @@ jobs:
           base64 -w 0 kr/mob/wifi.txt > kykyk.ioZjl2e1.txt
 
       - name: 🚀 Sync with GitHub and GitVerse
-        if: steps.check_file.outputs.should_sync == 'true'
+        if: steps.check_file.outputs.should_sync == 'true' && github.event_name != 'pull_request'
         env:
           GH_TOKEN: ${{ secrets.MY_TOKEN }}
           GV_TOKEN: ${{ secrets.GITVERSE_TOKEN }}
         run: |
           git config --global user.name "SyncBot"
           git config --global user.email "bot@example.com"
-          
+
           # Настройки GitHub
           rm -rf gh_repo
           git clone --quiet "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository_owner }}/kyti.git" gh_repo
