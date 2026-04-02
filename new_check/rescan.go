@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -78,7 +77,7 @@ func RunScanOnce(max int) {
 		scanTarget = max
 	}
 	if scanTarget <= 0 {
-		scanTarget = 200
+		scanTarget = 50
 	}
 	fmt.Printf("reserve capacity=%d (normal=%d), scanTarget=%d\n", reserveCapacity, normalCount, scanTarget)
 
@@ -117,7 +116,7 @@ func RunScanOnce(max int) {
 
 	// стартуем воркеров
 	if workers <= 0 {
-		workers = runtime.NumCPU() * 2
+		workers = DefaultWorkers
 	}
 	jobs := make(chan string, len(all))
 	results := make(chan Result, len(all))
