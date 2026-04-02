@@ -108,19 +108,37 @@ func parseLine(line string) (*ParsedConfig, error) {
 	switch strings.ToLower(u.Scheme) {
 	case "vless", "trojan":
 		q := u.Query()
+		security := strings.ToLower(q.Get("security"))
+		if security == "xtls" {
+			security = "tls"
+		}
+		netw := strings.ToLower(q.Get("type"))
+		if netw == "httpupgrade" {
+			netw = "ws"
+		}
+		id := u.User.Username()
+		if dec, derr := url.QueryUnescape(id); derr == nil {
+			id = dec
+		}
+		sni := firstNonEmpty(q.Get("sni"), q.Get("peer"))
+		hostHdr := firstNonEmpty(q.Get("host"), q.Get("authority"))
+		path := firstNonEmpty(q.Get("path"), u.Path)
+		if path == "" && netw == "ws" {
+			path = "/"
+		}
 		pc := &ParsedConfig{
 			Raw:         line,
 			Scheme:      strings.ToLower(u.Scheme),
-			Security:    strings.ToLower(q.Get("security")),
+			Security:    security,
 			Host:        u.Hostname(),
 			Port:        u.Port(),
-			Path:        u.Path,
-			Net:         strings.ToLower(q.Get("type")),
-			TLS:         strings.ToLower(q.Get("security")) == "tls",
-			SNI:         q.Get("sni"),
-			ID:          u.User.Username(),
+			Path:        path,
+			Net:         netw,
+			TLS:         security == "tls",
+			SNI:         sni,
+			ID:          id,
 			Alpn:        q.Get("alpn"),
-			HostHdr:     q.Get("host"),
+			HostHdr:     hostHdr,
 			PBK:         q.Get("pbk"),
 			ShortID:     q.Get("sid"),
 			SpiderX:     q.Get("spx"),
@@ -128,14 +146,20 @@ func parseLine(line string) (*ParsedConfig, error) {
 			Flow:        q.Get("flow"),
 			Params:      q,
 		}
-		if pc.Net == "httpupgrade" {
-			pc.Net = "ws"
+		if (pc.Security == "tls" || pc.Security == "reality") && pc.SNI == "" && pc.Host != "" {
+			pc.SNI = pc.Host
+		}
+		if pc.Net == "ws" && pc.HostHdr == "" {
+			pc.HostHdr = pc.SNI
 		}
 		if strings.Contains(pc.Net, "grpc") {
 			pc.Note = "unsupported: grpc"
 		}
 		if pc.Security == "reality" && strings.Contains(pc.Net, "grpc") {
 			pc.Note = "unsupported: reality/grpc"
+		}
+		if pc.Security == "reality" && pc.PBK == "" {
+			pc.Note = firstNonEmpty(pc.Note, "invalid: reality-missing-pbk")
 		}
 		return pc, nil
 	default:
