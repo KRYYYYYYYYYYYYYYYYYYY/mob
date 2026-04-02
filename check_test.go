@@ -6,6 +6,7 @@ import (
 )
 
 func TestProbeResultOK_StrongMode204(t *testing.T) {
+	// Проверяем strict/mobile семантику.
 	oldStrong := strongStyleTest
 	oldRT := strongMaxRT
 	defer func() {

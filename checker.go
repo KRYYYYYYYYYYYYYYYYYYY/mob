@@ -158,6 +158,7 @@ func probeResultOK(probeURL string, statusCode, bodyLen int, rt time.Duration) b
 		return false
 	}
 	if strongStyleTest {
+		// strict/mobile mode: ограничение по RTT + жесткий 204 для generate_204.
 		if rt > strongMaxRT {
 			return false
 		}
@@ -167,6 +168,7 @@ func probeResultOK(probeURL string, statusCode, bodyLen int, rt time.Duration) b
 		return statusCode >= 200 && statusCode < 400
 	}
 	if strings.Contains(strings.ToLower(probeURL), "generate_204") {
+		// normal mode: для generate_204 по-прежнему требуем 204 + пустой body.
 		return statusCode == http.StatusNoContent && bodyLen == 0
 	}
 	return statusCode >= 200 && statusCode < 400
