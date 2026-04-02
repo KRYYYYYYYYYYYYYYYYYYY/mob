@@ -244,7 +244,7 @@ def probe_vless_l7(link, target_sni, timeout=5):
 def extract_sni(link):
     parsed = urllib.parse.urlparse(link)
     params = urllib.parse.parse_qs(parsed.query)
-    return params.get("sni", [""])[0]
+    return params.get("sni", params.get("peer", [""]))[0]
 
 # ---------------------------------------------------------------------------
 # ПАРСЕРЫ ПРОТОКОЛОВ (из crazy_xray_checker — поддержка vmess/trojan/ss)
@@ -389,23 +389,34 @@ def parse_vless_link(link: str) -> dict | None:
         if not host or not port:
             return None
         security = params.get("security", ["none"])[0].lower()
+        if security == "xtls":
+            security = "tls"
         net_type = params.get("type", ["tcp"])[0].lower()
         if net_type == "httpupgrade":
             net_type = "ws"
+        path = params.get("path", [""])[0] or parsed.path or ""
+        if net_type == "ws" and not path:
+            path = "/"
+        sni = params.get("sni", params.get("peer", [""]))[0]
+        if not sni and security in {"tls", "reality"}:
+            sni = host
+        host_hdr = params.get("host", params.get("authority", [""]))[0]
+        if net_type == "ws" and not host_hdr:
+            host_hdr = sni
         return {
             "scheme":   "vless",
             "addr":     host,
             "port":     int(port),
-            "id":       parsed.username or "",
+            "id":       urllib.parse.unquote(parsed.username or ""),
             "security": security,
-            "sni":      params.get("sni", [""])[0],
+            "sni":      sni,
             "pbk":      params.get("pbk", [""])[0],
             "sid":      params.get("sid", [""])[0],
             "fp":       params.get("fp", [""])[0],
             "flow":     params.get("flow", [""])[0],
             "net_type": net_type,
-            "path":     params.get("path", [""])[0],
-            "host_hdr": params.get("host", [""])[0],
+            "path":     path,
+            "host_hdr": host_hdr,
             "method":   "",
             "password": "",
         }

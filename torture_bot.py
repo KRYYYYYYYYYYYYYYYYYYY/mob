@@ -127,6 +127,26 @@ def init_checker_lib():
         ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int
     ]
     go_lib.CheckVlessL7.restype = ctypes.c_int
+    if hasattr(go_lib, "CheckAnyL7"):
+        go_lib.CheckAnyL7.argtypes = [
+            ctypes.c_char_p,  # scheme
+            ctypes.c_char_p,  # addr
+            ctypes.c_int,     # port
+            ctypes.c_char_p,  # id
+            ctypes.c_char_p,  # security
+            ctypes.c_char_p,  # sni
+            ctypes.c_char_p,  # pbk
+            ctypes.c_char_p,  # sid
+            ctypes.c_char_p,  # fp
+            ctypes.c_char_p,  # flow
+            ctypes.c_char_p,  # net_type
+            ctypes.c_char_p,  # path
+            ctypes.c_char_p,  # host_hdr
+            ctypes.c_char_p,  # method
+            ctypes.c_char_p,  # password
+            ctypes.c_int,     # timeout
+        ]
+        go_lib.CheckAnyL7.restype = ctypes.c_int
     if hasattr(go_lib, "SetProbeProfilesJSON"):
         go_lib.SetProbeProfilesJSON.argtypes = [ctypes.c_char_p]
         go_lib.SetProbeProfilesJSON.restype = ctypes.c_int
@@ -286,14 +306,45 @@ def probe_vless_l7(link: str, target_sni: str, timeout_sec: int = 5) -> int:
         if not host or not port:
             return 0
         uuid = parsed.username if parsed.username else ""
-        pbk = params.get('pbk', [''])[0]
-        sid = params.get('sid', [''])[0]
-        flow = params.get('flow', [''])[0]
+        security = (params.get("security", [""])[0] or "").lower()
+        if security == "xtls":
+            security = "tls"
+        net_type = (params.get("type", ["tcp"])[0] or "tcp").lower()
+        if net_type == "httpupgrade":
+            net_type = "ws"
+        path = params.get("path", [""])[0] or ""
+        host_hdr = params.get("host", [""])[0] or ""
+        pbk = params.get("pbk", [""])[0] or ""
+        sid = params.get("sid", [""])[0] or ""
+        fp = params.get("fp", [""])[0] or ""
+        flow = params.get("flow", [""])[0] or ""
+        sni = target_sni or params.get("sni", [host])[0] or host
+
+        if hasattr(go_lib, "CheckAnyL7"):
+            return int(go_lib.CheckAnyL7(
+                b"vless",
+                host.encode("utf-8"),
+                int(port),
+                uuid.encode("utf-8"),
+                security.encode("utf-8"),
+                sni.encode("utf-8"),
+                pbk.encode("utf-8"),
+                sid.encode("utf-8"),
+                fp.encode("utf-8"),
+                flow.encode("utf-8"),
+                net_type.encode("utf-8"),
+                path.encode("utf-8"),
+                host_hdr.encode("utf-8"),
+                b"",
+                b"",
+                int(timeout_sec),
+            ))
+
         return int(go_lib.CheckVlessL7(
             host.encode('utf-8'),
             int(port),
             uuid.encode('utf-8'),
-            (target_sni or "").encode('utf-8'),
+            sni.encode('utf-8'),
             pbk.encode('utf-8'),
             sid.encode('utf-8'),
             flow.encode('utf-8'),
