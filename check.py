@@ -1458,6 +1458,11 @@ def main():
 
     raw_external_loaded = False
     print(f"📡 Начинаю добор до {MAIN_TARGET_SIZE}. В очереди (текущие+отложенные): {len(check_queue)}")
+    if len(working_for_sub) >= MAIN_TARGET_SIZE:
+        print(
+            "ℹ️ Чек новых серверов пропущен: цель уже закрыта бессмертными "
+            f"({len(working_for_sub)}/{MAIN_TARGET_SIZE})."
+        )
 
     # --- [ШАГ 4: ЦИКЛ ПРОВЕРКИ] ---
     workers = max(1, int(stress_config.get("workers", 32)))
