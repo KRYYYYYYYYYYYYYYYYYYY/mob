@@ -114,6 +114,39 @@ func RunScanOnce(max int) {
 		return
 	}
 
+	// Опциональный путь: прогон через Python async mobile checker
+	// (единый DPI-aware backend для всего проекта).
+	if os.Getenv("USE_ASYNC_MOBILE_CHECKER") == "1" {
+		pyResults, err := runPythonMobileChecker(all)
+		if err != nil {
+			fmt.Println("python mobile checker fallback to native:", err)
+		} else if len(pyResults) > 0 {
+			fmt.Printf("python mobile checker used: checked=%d\n", len(pyResults))
+			okCount := 0
+			var okResults []Result
+			_ = os.WriteFile(timeWifiFile, []byte(""), 0o644)
+			for _, r := range pyResults {
+				state := "FAIL"
+				if r.OK {
+					state = "OK"
+					okResults = append(okResults, r)
+					stream.WriteWorkLine(r.Line)
+					appendLine(timeWifiFile, r.Line)
+					okCount++
+					if okCount >= scanTarget {
+						break
+					}
+				}
+				outLine := fmt.Sprintf("%s | %s | %s", state, r.Reason, r.Line)
+				fmt.Println(outLine)
+				stream.WriteResultLine(outLine)
+			}
+			finalizeResults(okResults, scanTarget, reserveCapacity, reservesFromWifi)
+			fmt.Println("done. full log:", allOutFile)
+			return
+		}
+	}
+
 	// стартуем воркеров
 	if workers <= 0 {
 		workers = DefaultWorkers
@@ -160,6 +193,11 @@ func RunScanOnce(max int) {
 		stream.WriteResultLine(outLine)
 	}
 
+	finalizeResults(okResults, scanTarget, reserveCapacity, reservesFromWifi)
+	fmt.Println("done. full log:", allOutFile)
+}
+
+func finalizeResults(okResults []Result, scanTarget, reserveCapacity int, reservesFromWifi []string) {
 	// финализация файлов
 	sort.SliceStable(okResults, func(i, j int) bool {
 		li := okResults[i].LatencyMs
@@ -216,7 +254,6 @@ func RunScanOnce(max int) {
 		_ = os.WriteFile(timeWifiFile, []byte(""), 0o644)
 		fmt.Println("no working configs found")
 	}
-	fmt.Println("done. full log:", allOutFile)
 }
 
 func readLines(path string) ([]string, error) {
