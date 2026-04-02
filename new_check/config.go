@@ -4,15 +4,15 @@ import "time"
 
 // пути/файлы
 var (
-	inputFile    = "new_check/input.txt"
-	wifiFile     = "kr/mob/wifi.txt"
-	outputDir    = "new_check/result"
+	inputFile    = "input.txt"
+	wifiFile     = "../kr/mob/wifi.txt"
+	outputDir    = "result"
 	allOutFile   = outputDir + "/result.txt"
 	workingFile  = outputDir + "/working.txt"
 	firstOKFile  = outputDir + "/first_working.txt"
 	timeWifiFile = outputDir + "/time_wifi.txt"
 
-	configJSONPath = "new_check/config.json"
+	configJSONPath = "config.json"
 )
 
 // флаги (инициализируются в main)
