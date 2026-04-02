@@ -8,14 +8,14 @@ import (
 	"strings"
 )
 
-type pyMobileResult struct {
+type pyMobileBridgeResult struct {
 	Proxy     string `json:"proxy"`
 	Status    string `json:"status"`
 	Reason    string `json:"reason"`
 	LatencyMs int    `json:"latency_ms"`
 }
 
-func runPythonMobileChecker(lines []string) ([]Result, error) {
+func runPythonMobileCheckerBridge(lines []string) ([]Result, error) {
 	tmpIn, err := os.CreateTemp("", "mobile-check-input-*.txt")
 	if err != nil {
 		return nil, fmt.Errorf("create temp input: %w", err)
@@ -67,7 +67,7 @@ func runPythonMobileChecker(lines []string) ([]Result, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read python output: %w", err)
 	}
-	var parsed []pyMobileResult
+	var parsed []pyMobileBridgeResult
 	if err := json.Unmarshal(raw, &parsed); err != nil {
 		return nil, fmt.Errorf("decode python output: %w", err)
 	}
