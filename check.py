@@ -8,6 +8,7 @@ import math
 import urllib.parse
 import urllib.request
 import time
+import asyncio
 import subprocess
 import ipaddress
 import ctypes
@@ -17,6 +18,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock, BoundedSemaphore
 
 from ua_versions import get_mobile_user_agents, maybe_refresh_ua_versions
+from mobile_vless_checker import (
+    HostLimiter as AsyncHostLimiter,
+    check_one as async_check_one,
+    load_mobile_whitelist as async_load_mobile_whitelist,
+)
 
 
 # Настройки путей
@@ -58,7 +64,7 @@ HEADER = """#providerid ioZjl2e1
 """
 
 ALLOWED_COUNTRIES = {"US", "DE", "NL", "GB", "FR", "FI", "SG", "JP", "PL", "TR", "RU"}
-MAIN_TARGET_SIZE = 100
+MAIN_TARGET_SIZE = 50
 RESERVE_MARKER = "RESERVE"
 
 DEFAULT_PROBE_PATHS = ["/", "/generate_204", "/favicon.ico"]
@@ -97,6 +103,8 @@ DEFAULT_MOBILE_HEADER_PROFILES = [
 go_lib = None
 HOST_GATES = {}
 HOST_LOCKS_GUARD = Lock()
+ASYNC_WL_CACHE = {"ts": 0.0, "wl": None, "fingerprint": None}
+ASYNC_WL_LOCK = Lock()
 
 def get_host_gate(host: str, max_parallel_per_host: int) -> BoundedSemaphore:
     permits = max(1, int(max_parallel_per_host))
@@ -118,6 +126,75 @@ def l7_multi_probe_host_serialized(link: str, host: str, stress_config: dict):
     with gate:
         tuned_cfg = tuned_probe_settings(link, stress_config)
         return l7_multi_probe(link, tuned_cfg)
+
+
+def build_async_checker_config(stress_config: dict) -> dict:
+    return {
+        "max_handshake_ms": int(float(stress_config.get("timeout", 1.2)) * 1000),
+        "recv_timeout": float(stress_config.get("recv_timeout", 0.9)),
+        "probe_attempts": int(stress_config.get("probe_attempts", 3)),
+        "min_success": int(stress_config.get("l7_min_success", 1)),
+        "workers": int(stress_config.get("workers", 16)),
+        "max_parallel_per_host": int(stress_config.get("max_parallel_per_host", 1)),
+        "min_bytes_received": int(stress_config.get("min_bytes_received", 50)),
+        "max_latency_ms": int(stress_config.get("max_latency_ms", 2000)),
+        "mobile_whitelist_enabled": bool(stress_config.get("mobile_whitelist_enabled", True)),
+        "mobile_whitelist_fail_open": bool(stress_config.get("mobile_whitelist_fail_open", False)),
+        "mobile_whitelist_timeout_sec": float(stress_config.get("mobile_whitelist_timeout_sec", 10)),
+        "mobile_whitelist_retries": int(stress_config.get("mobile_whitelist_retries", 2)),
+        "mobile_whitelist_retry_sleep_sec": float(stress_config.get("mobile_whitelist_retry_sleep_sec", 1)),
+        "mobile_whitelist_domains_url": str(stress_config.get("mobile_whitelist_domains_url", DEFAULT_MOBILE_WHITELIST["domains_url"])),
+        "mobile_whitelist_ips_url": str(stress_config.get("mobile_whitelist_ips_url", DEFAULT_MOBILE_WHITELIST["ips_url"])),
+        "mobile_whitelist_cidrs_url": str(stress_config.get("mobile_whitelist_cidrs_url", DEFAULT_MOBILE_WHITELIST["cidrs_url"])),
+        "http_probe_path": "/generate_204",
+        "http_probe_host": "connectivitycheck.gstatic.com",
+        "user_agent": DEFAULT_MOBILE_HEADER_PROFILES[-1]["user_agent"],
+    }
+
+
+def get_cached_async_whitelist(async_cfg: dict):
+    now = time.time()
+    fingerprint = (
+        async_cfg.get("mobile_whitelist_domains_url"),
+        async_cfg.get("mobile_whitelist_ips_url"),
+        async_cfg.get("mobile_whitelist_cidrs_url"),
+        async_cfg.get("mobile_whitelist_enabled"),
+        async_cfg.get("mobile_whitelist_timeout_sec"),
+        async_cfg.get("mobile_whitelist_retries"),
+    )
+    ttl = max(30.0, float(async_cfg.get("mobile_whitelist_retry_interval_sec", 60.0)))
+    with ASYNC_WL_LOCK:
+        if (
+            ASYNC_WL_CACHE["wl"] is not None
+            and ASYNC_WL_CACHE["fingerprint"] == fingerprint
+            and now - ASYNC_WL_CACHE["ts"] <= ttl
+        ):
+            return ASYNC_WL_CACHE["wl"]
+    wl = async_load_mobile_whitelist(async_cfg)
+    with ASYNC_WL_LOCK:
+        ASYNC_WL_CACHE["wl"] = wl
+        ASYNC_WL_CACHE["ts"] = now
+        ASYNC_WL_CACHE["fingerprint"] = fingerprint
+    return wl
+
+
+def async_mobile_probe(link: str, stress_config: dict):
+    async_cfg = build_async_checker_config(stress_config)
+    wl = get_cached_async_whitelist(async_cfg)
+    limiter = AsyncHostLimiter(async_cfg.get("max_parallel_per_host", 1))
+
+    async def _run():
+        return await async_check_one(link, async_cfg, wl, limiter)
+
+    try:
+        result = asyncio.run(_run())
+    except Exception:
+        return False, 0
+    if result.status == "Active":
+        return True, int(result.latency_ms or 1)
+    if result.reason in {"early_termination_dpi_pattern", "dpi_drop_bytes_lt_min", "slow_handshake"}:
+        return False, -2
+    return False, 0
 
 
 def init_checker_lib() -> None:
@@ -760,11 +837,12 @@ def apply_profile_preset(stress_config: dict, profile_name: str) -> None:
     """
     name = (profile_name or "mobile_strict").strip().lower()
     if name == "mobile_strict":
-        stress_config["probe_attempts"] = max(4, int(stress_config.get("probe_attempts", 4)))
-        stress_config["l7_min_success"] = max(2, int(stress_config.get("l7_min_success", 2)))
-        stress_config["stability_min_success_rate"] = max(0.60, float(stress_config.get("stability_min_success_rate", 0.5)))
-        stress_config["stability_max_loss_rate"] = min(0.35, float(stress_config.get("stability_max_loss_rate", 0.5)))
-        stress_config["stability_max_jitter_ms"] = min(650, int(stress_config.get("stability_max_jitter_ms", 800)))
+        # Профиль под жесткую мобильную сеть: fail-fast и минимум параллелизма.
+        stress_config["probe_attempts"] = max(3, int(stress_config.get("probe_attempts", 3)))
+        stress_config["l7_min_success"] = max(1, int(stress_config.get("l7_min_success", 1)))
+        stress_config["stability_min_success_rate"] = max(0.34, float(stress_config.get("stability_min_success_rate", 0.34)))
+        stress_config["stability_max_loss_rate"] = min(0.60, float(stress_config.get("stability_max_loss_rate", 0.60)))
+        stress_config["stability_max_jitter_ms"] = min(900, int(stress_config.get("stability_max_jitter_ms", 900)))
     elif name == "wifi_lenient":
         stress_config["probe_attempts"] = max(3, int(stress_config.get("probe_attempts", 4)))
         stress_config["l7_min_success"] = 1
@@ -773,11 +851,11 @@ def apply_profile_preset(stress_config: dict, profile_name: str) -> None:
         stress_config["stability_max_jitter_ms"] = max(1100, int(stress_config.get("stability_max_jitter_ms", 800)))
     else:
         # Для этого репозитория по умолчанию держим только mobile-friendly профиль.
-        stress_config["probe_attempts"] = max(4, int(stress_config.get("probe_attempts", 4)))
-        stress_config["l7_min_success"] = max(2, int(stress_config.get("l7_min_success", 2)))
-        stress_config["stability_min_success_rate"] = max(0.60, float(stress_config.get("stability_min_success_rate", 0.5)))
-        stress_config["stability_max_loss_rate"] = min(0.35, float(stress_config.get("stability_max_loss_rate", 0.5)))
-        stress_config["stability_max_jitter_ms"] = min(650, int(stress_config.get("stability_max_jitter_ms", 800)))
+        stress_config["probe_attempts"] = max(3, int(stress_config.get("probe_attempts", 3)))
+        stress_config["l7_min_success"] = max(1, int(stress_config.get("l7_min_success", 1)))
+        stress_config["stability_min_success_rate"] = max(0.34, float(stress_config.get("stability_min_success_rate", 0.34)))
+        stress_config["stability_max_loss_rate"] = min(0.60, float(stress_config.get("stability_max_loss_rate", 0.60)))
+        stress_config["stability_max_jitter_ms"] = min(900, int(stress_config.get("stability_max_jitter_ms", 900)))
 
 def is_mobile_only_candidate(link: str, pc: dict | None = None) -> tuple[bool, str]:
     """
@@ -1103,6 +1181,9 @@ def l7_multi_probe(link: str, stress_config: dict):
     - Все протоколы: CheckAnyL7 (SNI-перебор и транспортная логика внутри Go)
     Python здесь делает только оркестрацию повторов и фильтрацию стабильности.
     """
+    if os.getenv("USE_ASYNC_MOBILE_CHECKER", "1") == "1":
+        return async_mobile_probe(link, stress_config)
+
     min_hits = max(1, int(stress_config.get("l7_min_success", 2)))
     probe_attempts = max(1, int(stress_config.get("probe_attempts", 4)))
     between_attempts_sleep = max(0.0, float(stress_config.get("between_attempts_sleep", 0.35)))
@@ -1351,7 +1432,9 @@ def main():
     extend_check_queue(sorted(deferred_base, key=lambda l: ranking_sort_key(l, ranking_db)))
 
     # --- [ШАГ 3: ПОДГОТОВКА К ЦИКЛУ] ---
-    working_for_sub = immortals[:MAIN_TARGET_SIZE] # Сразу забиваем подписку бессмертными
+    # Бессмертные всегда сохраняем как есть, а MAIN_TARGET_SIZE — это цель
+    # именно по добору новых (проверенных в этом прогоне) серверов.
+    working_for_sub = immortals[:]
     working_for_base = []            # Сюда пойдут те, кто реально ответил
     
     now = time.time()
@@ -1371,36 +1454,36 @@ def main():
 
     # Настройки стресс-теста (твой блок 1-в-1)
     stress_config = {
-        "timeout": 2.5, "dpi_sleep": 0.5, "target_mtu": 1280,
-        "probe_attempts": 4, "min_success": 2, "recv_timeout": 1.7,
-        "between_attempts_sleep": 0.35,
-        "l7_min_success": 2,
-        "workers": 32,
-        "batch_multiplier": 4,
-        "max_parallel_per_host": 2,
+        "timeout": 1.2, "dpi_sleep": 0.5, "target_mtu": 1280,
+        "probe_attempts": 3, "min_success": 1, "recv_timeout": 0.9,
+        "between_attempts_sleep": 0.2,
+        "l7_min_success": 1,
+        "workers": 16,
+        "batch_multiplier": 2,
+        "max_parallel_per_host": 1,
         "profile_preset": "mobile_strict",
-        "max_latency_ms": 6000,
-        "max_check_duration_sec": 2 * 60 * 60,
+        "max_latency_ms": 2000,
+        "max_check_duration_sec": 60 * 60,
         "stability_max_spread_ms": 1200,
         "stability_max_ratio": 4.0,
         "stability_max_na": 0,
-        "stability_max_jitter_ms": 800,
-        "stability_min_success_rate": 0.5,
-        "stability_max_loss_rate": 0.5,
+        "stability_max_jitter_ms": 900,
+        "stability_min_success_rate": 0.34,
+        "stability_max_loss_rate": 0.60,
         "stability_min_samples": 3,
         "stability_p95_max_ms": 6000,
         "probe_paths": list(DEFAULT_PROBE_PATHS),
         "mobile_header_profiles": list(DEFAULT_MOBILE_HEADER_PROFILES),
         "mobile_whitelist_enabled": True,
-        "mobile_whitelist_fail_open": True,
-        "mobile_whitelist_timeout_sec": 20.0,
-        "mobile_whitelist_retries": 3,
-        "mobile_whitelist_retry_sleep_sec": 2.0,
-        "mobile_whitelist_retry_interval_sec": 60.0,
+        "mobile_whitelist_fail_open": False,
+        "mobile_whitelist_timeout_sec": 10.0,
+        "mobile_whitelist_retries": 2,
+        "mobile_whitelist_retry_sleep_sec": 1.0,
+        "mobile_whitelist_retry_interval_sec": 30.0,
         "mobile_whitelist_domains_url": DEFAULT_MOBILE_WHITELIST["domains_url"],
         "mobile_whitelist_ips_url": DEFAULT_MOBILE_WHITELIST["ips_url"],
         "mobile_whitelist_cidrs_url": DEFAULT_MOBILE_WHITELIST["cidrs_url"],
-        "external_respect_blacklist": False,
+        "external_respect_blacklist": True,
     }
     if os.path.exists('test1/stress_profile.json'):
         try:
@@ -1457,7 +1540,7 @@ def main():
         mobile_whitelist = get_mobile_whitelist(stress_config)
 
     raw_external_loaded = False
-    print(f"📡 Начинаю добор до {MAIN_TARGET_SIZE}. В очереди (текущие+отложенные): {len(check_queue)}")
+    print(f"📡 Начинаю добор новых до {MAIN_TARGET_SIZE}. В очереди (текущие+отложенные): {len(check_queue)}")
 
     # --- [ШАГ 4: ЦИКЛ ПРОВЕРКИ] ---
     workers = max(1, int(stress_config.get("workers", 32)))
@@ -1467,7 +1550,7 @@ def main():
     print(f"⚙️ Параллельная проверка: workers={workers}, batch={batch_size}")
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        while len(working_for_sub) < MAIN_TARGET_SIZE:
+        while len(working_for_base) < MAIN_TARGET_SIZE:
             if stress_config.get("mobile_whitelist_enabled", True):
                 mobile_whitelist = get_mobile_whitelist(stress_config)
             if time.time() - start_time >= max_check_duration_sec:
@@ -1583,7 +1666,7 @@ def main():
                 for link, base_part, host in batch
             }
             for fut in as_completed(futures):
-                if len(working_for_sub) >= MAIN_TARGET_SIZE or checked_today >= MAX_TO_CHECK:
+                if len(working_for_base) >= MAIN_TARGET_SIZE or checked_today >= MAX_TO_CHECK:
                     break
                 source_link, base_part, host = futures[fut]
                 checked_today += 1
@@ -1618,7 +1701,7 @@ def main():
                     final_link = rebuild_link_name(tuned_link, f"mob {counter} [{ping_label}]")
                     final_link = upsert_query_param(final_link, link_tune_param_key, link_tune_param_value)
                     working_for_sub.append(final_link)
-                    print(f"✅ ОК {len(working_for_sub)}/{MAIN_TARGET_SIZE} ({country}): {current_latency}ms")
+                    print(f"✅ ОК {len(working_for_base)}/{MAIN_TARGET_SIZE} ({country}): {current_latency}ms")
                     note_reason(reason_stats, "ok", base_part, f"{country},{current_latency}ms")
                     counter += 1
                 else:
@@ -1655,7 +1738,7 @@ def main():
                             final_link = rebuild_link_name(tuned_link, f"mob {counter} [{ping_label}]")
                             final_link = upsert_query_param(final_link, link_tune_param_key, link_tune_param_value)
                             working_for_sub.append(final_link)
-                            print(f"🟡 RECOVERED {len(working_for_sub)}/{MAIN_TARGET_SIZE} ({country}): {recheck_latency}ms")
+                            print(f"🟡 RECOVERED {len(working_for_base)}/{MAIN_TARGET_SIZE} ({country}): {recheck_latency}ms")
                             note_reason(reason_stats, "ok_after_recheck", base_part, f"{country},{recheck_latency}ms")
                             counter += 1
                             continue
