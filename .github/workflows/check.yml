@@ -1,16 +1,20 @@
 name: 🧩 Reserve Checker
 
 on:
-  schedule:
-    - cron: "*/30 * * * *"
+  workflow_run:
+    workflows: ["Auto Update VPN"]
+    types: [completed]
   workflow_dispatch:
 
 concurrency:
   group: reserve-check-lock
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   reserve_check:
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -27,19 +31,19 @@ jobs:
       - name: 📥 Install Xray core
         run: |
           set -euo pipefail
-          bash new_check/install-go-xray.sh
+          sudo bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install --version latest
+          xray version
 
       - name: 📦 Build reserve checker
-        working-directory: new_check
         run: |
+          cd new_check
           go build -o crazy_checker .
 
       - name: ▶️ Run reserve checker
-        working-directory: new_check
         env:
           RESERVE_MTU_VALUE: "1400"
           XRAY_BIN: /usr/local/bin/xray
-        run: ./crazy_checker -workers 24 -maxworkcfg 200
+        run: ./new_check/crazy_checker -workers 24 -maxworkcfg 200
 
       - name: 💾 Commit reserve updates
         run: |
@@ -47,5 +51,5 @@ jobs:
           git config --local user.name "github-actions[bot]"
           git add kr/mob/wifi.txt new_check/result/working.txt new_check/result/first_working.txt new_check/result/result.txt new_check/result/time_wifi.txt
           git commit -m "🧩 Update reserve tail in wifi [skip ci]" || echo "No changes to commit"
-          git pull --rebase --autostash -X theirs origin main
+          git pull --rebase -X theirs origin main
           git push origin main
