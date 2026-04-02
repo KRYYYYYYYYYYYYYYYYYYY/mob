@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptrace"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -26,9 +27,54 @@ type probeProfile struct {
 	Headers   map[string]string
 }
 
+const (
+	defaultHappUA    = "Happ/3.16.0/Android/1741613"
+	defaultV2rayngUA = "okhttp/4.12.0 v2rayNG/2.0.17"
+)
+
+func loadProbeUserAgents() (string, string) {
+	raw, err := os.ReadFile("ua_versions.json")
+	if err != nil {
+		return defaultHappUA, defaultV2rayngUA
+	}
+	var cfg struct {
+		Happ struct {
+			Version string `json:"version"`
+			Build   string `json:"build"`
+		} `json:"happ"`
+		V2RayNG struct {
+			Version string `json:"version"`
+			OkHTTP  string `json:"okhttp"`
+		} `json:"v2rayng"`
+	}
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return defaultHappUA, defaultV2rayngUA
+	}
+	happVersion := strings.TrimSpace(cfg.Happ.Version)
+	if happVersion == "" {
+		happVersion = "3.16.0"
+	}
+	happBuild := strings.TrimSpace(cfg.Happ.Build)
+	if happBuild == "" {
+		happBuild = "1741613"
+	}
+	v2Version := strings.TrimSpace(cfg.V2RayNG.Version)
+	if v2Version == "" {
+		v2Version = "2.0.17"
+	}
+	okhttp := strings.TrimSpace(cfg.V2RayNG.OkHTTP)
+	if okhttp == "" {
+		okhttp = "4.12.0"
+	}
+	return fmt.Sprintf("Happ/%s/Android/%s", happVersion, happBuild), fmt.Sprintf("okhttp/%s v2rayNG/%s", okhttp, v2Version)
+}
+
 var probeProfiles = []probeProfile{
 	{
-		UserAgent: "Happ/3.15.1 (com.happproxy; Android 16; Samsung SM-A336B)",
+		UserAgent: func() string {
+			happ, _ := loadProbeUserAgents()
+			return happ
+		}(),
 		Headers: map[string]string{
 			"Accept":           "*/*",
 			"Accept-Language":  "ru-RU,ru;q=0.9,en-US;q=0.8",
@@ -36,7 +82,10 @@ var probeProfiles = []probeProfile{
 		},
 	},
 	{
-		UserAgent: "okhttp/4.12.0 v2rayNG/1.12.28",
+		UserAgent: func() string {
+			_, v2rayng := loadProbeUserAgents()
+			return v2rayng
+		}(),
 		Headers: map[string]string{
 			"Accept":           "*/*",
 			"Accept-Language":  "ru-RU,ru;q=0.9,en-US;q=0.8",

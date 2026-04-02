@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
@@ -92,7 +93,7 @@ func RunScanOnce(max int) {
 		fmt.Println("open input:", err)
 		return
 	}
-	seeds = append(seeds, inputSeeds...)
+	seeds = append(seeds, expandInputSeeds(inputSeeds)...)
 	seeds = dedupKeepOrder(seeds)
 
 	// раскрываем URL-ы
@@ -139,7 +140,6 @@ func RunScanOnce(max int) {
 
 	// сбор результатов
 	_ = os.WriteFile(timeWifiFile, []byte(""), 0o644)
-	okCount := 0
 	var okResults []Result
 	for r := range results {
 		state := "FAIL"
@@ -148,13 +148,6 @@ func RunScanOnce(max int) {
 			okResults = append(okResults, r)
 			stream.WriteWorkLine(r.Line)
 			appendLine(timeWifiFile, r.Line)
-
-			okCount++
-			if okCount >= scanTarget {
-				atomic.StoreInt32(&stopEarly, 1)
-				fmt.Printf("scan target reached: %d, stopping...\n", scanTarget)
-				break
-			}
 		}
 		outLine := fmt.Sprintf("%s | %s | %s", state, r.Reason, r.Line)
 		fmt.Println(outLine)
@@ -179,7 +172,12 @@ func RunScanOnce(max int) {
 		}
 		return li < lj
 	})
+	existingFingerprints, err := loadWifiFingerprints(wifiFile)
+	if err != nil {
+		fmt.Println("wifi fingerprint scan:", err)
+	}
 	seenFinal := map[string]struct{}{}
+	seenFingerprint := map[string]struct{}{}
 	finalReserves := make([]string, 0, scanTarget)
 	for _, rr := range okResults {
 		link := rr.Line
@@ -187,7 +185,19 @@ func RunScanOnce(max int) {
 		if _, ok := seenFinal[base]; ok {
 			continue
 		}
+		fingerprint := lineFingerprint(link)
+		if fingerprint != "" {
+			if _, exists := existingFingerprints[fingerprint]; exists {
+				continue
+			}
+			if _, seen := seenFingerprint[fingerprint]; seen {
+				continue
+			}
+		}
 		seenFinal[base] = struct{}{}
+		if fingerprint != "" {
+			seenFingerprint[fingerprint] = struct{}{}
+		}
 		tuned := link
 		mtuVal := strings.TrimSpace(os.Getenv("RESERVE_MTU_VALUE"))
 		if mtuVal != "" {
@@ -265,6 +275,66 @@ func dedupKeepOrder(in []string) []string {
 		out = append(out, s)
 	}
 	return out
+}
+
+var inlineURLRe = regexp.MustCompile(`https?://[^\s,;]+`)
+
+func expandInputSeeds(lines []string) []string {
+	out := make([]string, 0, len(lines))
+	for _, ln := range lines {
+		expanded := splitInlineURLs(ln)
+		out = append(out, expanded...)
+	}
+	return out
+}
+
+func splitInlineURLs(line string) []string {
+	matches := inlineURLRe.FindAllString(line, -1)
+	if len(matches) == 0 {
+		return []string{line}
+	}
+	rest := inlineURLRe.ReplaceAllString(line, "")
+	if strings.Trim(rest, " \t,;") != "" {
+		return []string{line}
+	}
+	return matches
+}
+
+func loadWifiFingerprints(path string) (map[string]struct{}, error) {
+	lines, err := readLines(path)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, err
+	}
+	out := make(map[string]struct{}, len(lines))
+	for _, ln := range lines {
+		fp := lineFingerprint(ln)
+		if fp != "" {
+			out[fp] = struct{}{}
+		}
+	}
+	return out, nil
+}
+
+func lineFingerprint(line string) string {
+	pc, _ := parseLine(line)
+	if pc == nil {
+		return ""
+	}
+	host := strings.ToLower(strings.TrimSpace(pc.Host))
+	port := strings.TrimSpace(pc.Port)
+	scheme := strings.ToLower(strings.TrimSpace(pc.Scheme))
+	key := strings.ToLower(strings.TrimSpace(pc.ID))
+	if scheme == "shadowsocks" {
+		key = strings.ToLower(strings.TrimSpace(pc.Method + "|" + pc.Password))
+	}
+	if key == "" {
+		base := strings.TrimSpace(strings.SplitN(line, "#", 2)[0])
+		if base == "" {
+			return ""
+		}
+		return strings.ToLower(base)
+	}
+	return strings.Join([]string{scheme, host, port, key}, "|")
 }
 
 func reserveRename(link string, idx int) string {
