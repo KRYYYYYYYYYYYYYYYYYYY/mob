@@ -1,20 +1,17 @@
 name: 🧩 Reserve Checker
 
+
 on:
-  workflow_run:
-    workflows: ["Auto Update VPN"]
-    types: [completed]
+  schedule:
+    - cron: "*/5 * * * *"
   workflow_dispatch:
 
 concurrency:
   group: reserve-check-lock
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   reserve_check:
-    if: |
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -31,20 +28,36 @@ jobs:
       - name: 📥 Install Xray core
         run: |
           set -euo pipefail
-          # Убираем флаг --version latest
-          sudo bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
-          /usr/local/bin/xray version
+          bash new_check/install-go-xray.sh
 
       - name: 📦 Build reserve checker
+        working-directory: new_check
         run: |
-          cd new_check
           go build -o crazy_checker .
 
-      - name: ▶️ Run reserve checker
+      - name: ▶️ Run and Save (2 times with 2 min pause)
+        working-directory: new_check
         env:
           RESERVE_MTU_VALUE: "1400"
           XRAY_BIN: /usr/local/bin/xray
-        run: ./new_check/crazy_checker -workers 24 -maxworkcfg 200
+        run: |
+          for i in {1..2}; do
+            echo "🚀 Run #$i"
+            ./crazy_checker -workers 24 -maxworkcfg 200
+            
+            echo "💾 Saving results..."
+            git config --local user.email "github-actions[bot]@://github.com"
+            git config --local user.name "github-actions[bot]"
+            git add result/working.txt result/first_working.txt result/result.txt result/time_wifi.txt ../kr/mob/wifi.txt
+            git commit -m "🧩 Update reserve ($i/2) [skip ci]" || echo "No changes"
+            git pull --rebase --autostash -X theirs origin main
+            git push origin main
+            
+            if [ $i -lt 2 ]; then
+              echo "⏳ Waiting 2 minutes before next check..."
+              sleep 120
+            fi
+          done
 
       - name: 💾 Commit reserve updates
         run: |
@@ -52,5 +65,7 @@ jobs:
           git config --local user.name "github-actions[bot]"
           git add kr/mob/wifi.txt new_check/result/working.txt new_check/result/first_working.txt new_check/result/result.txt new_check/result/time_wifi.txt
           git commit -m "🧩 Update reserve tail in wifi [skip ci]" || echo "No changes to commit"
-          git pull --rebase -X theirs origin main
+          git pull --rebase --autostash -X theirs origin main
           git push origin main
+          
+    
