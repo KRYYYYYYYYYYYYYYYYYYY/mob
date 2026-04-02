@@ -564,19 +564,45 @@ FLOW_ALLOWED = {
     "xtls-rprx-vision",
 }
 _MOBILE_WHITELIST_CACHE = None
+_MOBILE_WHITELIST_LAST_GOOD = None
 _MOBILE_WHITELIST_LOCK = Lock()
 
-def _download_lines(url: str, timeout: float = 20.0) -> list[str]:
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        raw = resp.read().decode("utf-8", errors="ignore")
-    out = []
-    for line in raw.splitlines():
-        s = line.strip()
-        if not s or s.startswith("#"):
-            continue
-        out.append(s)
-    return out
+def _download_lines(url: str, timeout: float = 20.0, retries: int = 3, retry_sleep_sec: float = 2.0) -> list[str]:
+    headers = {"User-Agent": "Mozilla/5.0"}
+    hostname = ""
+    try:
+        hostname = urllib.parse.urlparse(url).netloc
+    except Exception:
+        hostname = ""
+
+    last_error = None
+    attempts = max(1, int(retries))
+    for attempt in range(1, attempts + 1):
+        try:
+            if hostname:
+                try:
+                    socket.gethostbyname(hostname)
+                except Exception:
+                    pass
+            print(f"📡 [WL] Попытка {attempt}: {url.split('/')[-1]}...", end=" ")
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                raw = resp.read().decode("utf-8", errors="ignore")
+            out = []
+            for line in raw.splitlines():
+                s = line.strip()
+                if not s or s.startswith("#"):
+                    continue
+                out.append(s)
+            print(f"✅ Строк: {len(out)}")
+            return out
+        except Exception as e:
+            last_error = e
+            wait_for = max(0.0, retry_sleep_sec) * attempt
+            print(f"❌ Ошибка: {e}. Ждем {wait_for:.1f}с...")
+            if attempt < attempts:
+                time.sleep(wait_for)
+    raise RuntimeError(f"failed to download whitelist {url}: {last_error}")
 
 def _normalize_domain(value: str) -> str:
     d = (value or "").strip().lower().rstrip(".")
@@ -608,17 +634,19 @@ def load_mobile_whitelist(config: dict) -> dict:
     ips_url = str(config.get("mobile_whitelist_ips_url", DEFAULT_MOBILE_WHITELIST["ips_url"])).strip()
     cidrs_url = str(config.get("mobile_whitelist_cidrs_url", DEFAULT_MOBILE_WHITELIST["cidrs_url"])).strip()
     timeout = float(config.get("mobile_whitelist_timeout_sec", 20.0))
+    url_retries = int(config.get("mobile_whitelist_url_retries", 3))
+    url_retry_sleep_sec = float(config.get("mobile_whitelist_url_retry_sleep_sec", 2.0))
     domains: set[str] = set()
     ips: set[str] = set()
     cidrs = []
     errors = []
 
-    for item in _download_lines(domains_url, timeout=timeout):
+    for item in _download_lines(domains_url, timeout=timeout, retries=url_retries, retry_sleep_sec=url_retry_sleep_sec):
         d = _normalize_domain(item)
         if d:
             domains.add(d)
 
-    for item in _download_lines(ips_url, timeout=timeout):
+    for item in _download_lines(ips_url, timeout=timeout, retries=url_retries, retry_sleep_sec=url_retry_sleep_sec):
         s = item.strip()
         try:
             ipaddress.ip_address(s)
@@ -626,7 +654,7 @@ def load_mobile_whitelist(config: dict) -> dict:
         except Exception:
             errors.append(f"bad_ip:{s}")
 
-    for item in _download_lines(cidrs_url, timeout=timeout):
+    for item in _download_lines(cidrs_url, timeout=timeout, retries=url_retries, retry_sleep_sec=url_retry_sleep_sec):
         s = item.strip()
         try:
             cidrs.append(ipaddress.ip_network(s, strict=False))
@@ -642,7 +670,7 @@ def load_mobile_whitelist(config: dict) -> dict:
     }
 
 def get_mobile_whitelist(config: dict, force_reload: bool = False) -> dict:
-    global _MOBILE_WHITELIST_CACHE
+    global _MOBILE_WHITELIST_CACHE, _MOBILE_WHITELIST_LAST_GOOD
     with _MOBILE_WHITELIST_LOCK:
         retry_interval_sec = float(config.get("mobile_whitelist_retry_interval_sec", 60.0))
         if _MOBILE_WHITELIST_CACHE is not None and not force_reload:
@@ -662,12 +690,21 @@ def get_mobile_whitelist(config: dict, force_reload: bool = False) -> dict:
             try:
                 wl = load_mobile_whitelist(config)
                 _MOBILE_WHITELIST_CACHE = wl
+                _MOBILE_WHITELIST_LAST_GOOD = wl
                 print(f"✅ Загружен mobile whitelist: domains={len(wl['domains'])}, ips={len(wl['ips'])}, cidrs={len(wl['cidrs'])}")
                 return _MOBILE_WHITELIST_CACHE
             except Exception as e:
                 last_error = e
                 if attempt < retries:
                     time.sleep(max(0.0, retry_sleep_sec))
+
+        if _MOBILE_WHITELIST_LAST_GOOD is not None:
+            stale = dict(_MOBILE_WHITELIST_LAST_GOOD)
+            stale["stale"] = True
+            stale["stale_reason"] = str(last_error)
+            _MOBILE_WHITELIST_CACHE = stale
+            print(f"⚠️ Не удалось обновить mobile whitelist, использую последний успешный кэш: {last_error}")
+            return _MOBILE_WHITELIST_CACHE
 
         _MOBILE_WHITELIST_CACHE = {
             "ok": False,
@@ -1156,6 +1193,7 @@ def note_reason(reason_stats: dict, reason: str, base_part: str = "", extra: str
         line += f" | {extra}"
     with open(CHECK_LOG_FILE, "a", encoding="utf-8") as f:
         f.write(line + "\n")
+
 
 def normalize_rank_entry(base_part: str, entry):
     """Приводит запись ranking.json к единому виду."""
