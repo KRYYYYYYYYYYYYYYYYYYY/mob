@@ -8,6 +8,7 @@ import math
 import urllib.parse
 import urllib.request
 import time
+import asyncio
 import subprocess
 import ipaddress
 import ctypes
@@ -17,6 +18,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock, BoundedSemaphore
 
 from ua_versions import get_mobile_user_agents, maybe_refresh_ua_versions
+from mobile_vless_checker import (
+    HostLimiter as AsyncHostLimiter,
+    check_one as async_check_one,
+    load_mobile_whitelist as async_load_mobile_whitelist,
+)
 
 
 # Настройки путей
@@ -97,6 +103,8 @@ DEFAULT_MOBILE_HEADER_PROFILES = [
 go_lib = None
 HOST_GATES = {}
 HOST_LOCKS_GUARD = Lock()
+ASYNC_WL_CACHE = {"ts": 0.0, "wl": None, "fingerprint": None}
+ASYNC_WL_LOCK = Lock()
 
 def get_host_gate(host: str, max_parallel_per_host: int) -> BoundedSemaphore:
     permits = max(1, int(max_parallel_per_host))
@@ -118,6 +126,75 @@ def l7_multi_probe_host_serialized(link: str, host: str, stress_config: dict):
     with gate:
         tuned_cfg = tuned_probe_settings(link, stress_config)
         return l7_multi_probe(link, tuned_cfg)
+
+
+def build_async_checker_config(stress_config: dict) -> dict:
+    return {
+        "max_handshake_ms": int(float(stress_config.get("timeout", 1.2)) * 1000),
+        "recv_timeout": float(stress_config.get("recv_timeout", 0.9)),
+        "probe_attempts": int(stress_config.get("probe_attempts", 3)),
+        "min_success": int(stress_config.get("l7_min_success", 1)),
+        "workers": int(stress_config.get("workers", 16)),
+        "max_parallel_per_host": int(stress_config.get("max_parallel_per_host", 1)),
+        "min_bytes_received": int(stress_config.get("min_bytes_received", 50)),
+        "max_latency_ms": int(stress_config.get("max_latency_ms", 2000)),
+        "mobile_whitelist_enabled": bool(stress_config.get("mobile_whitelist_enabled", True)),
+        "mobile_whitelist_fail_open": bool(stress_config.get("mobile_whitelist_fail_open", False)),
+        "mobile_whitelist_timeout_sec": float(stress_config.get("mobile_whitelist_timeout_sec", 10)),
+        "mobile_whitelist_retries": int(stress_config.get("mobile_whitelist_retries", 2)),
+        "mobile_whitelist_retry_sleep_sec": float(stress_config.get("mobile_whitelist_retry_sleep_sec", 1)),
+        "mobile_whitelist_domains_url": str(stress_config.get("mobile_whitelist_domains_url", DEFAULT_MOBILE_WHITELIST["domains_url"])),
+        "mobile_whitelist_ips_url": str(stress_config.get("mobile_whitelist_ips_url", DEFAULT_MOBILE_WHITELIST["ips_url"])),
+        "mobile_whitelist_cidrs_url": str(stress_config.get("mobile_whitelist_cidrs_url", DEFAULT_MOBILE_WHITELIST["cidrs_url"])),
+        "http_probe_path": "/generate_204",
+        "http_probe_host": "connectivitycheck.gstatic.com",
+        "user_agent": DEFAULT_MOBILE_HEADER_PROFILES[-1]["user_agent"],
+    }
+
+
+def get_cached_async_whitelist(async_cfg: dict):
+    now = time.time()
+    fingerprint = (
+        async_cfg.get("mobile_whitelist_domains_url"),
+        async_cfg.get("mobile_whitelist_ips_url"),
+        async_cfg.get("mobile_whitelist_cidrs_url"),
+        async_cfg.get("mobile_whitelist_enabled"),
+        async_cfg.get("mobile_whitelist_timeout_sec"),
+        async_cfg.get("mobile_whitelist_retries"),
+    )
+    ttl = max(30.0, float(async_cfg.get("mobile_whitelist_retry_interval_sec", 60.0)))
+    with ASYNC_WL_LOCK:
+        if (
+            ASYNC_WL_CACHE["wl"] is not None
+            and ASYNC_WL_CACHE["fingerprint"] == fingerprint
+            and now - ASYNC_WL_CACHE["ts"] <= ttl
+        ):
+            return ASYNC_WL_CACHE["wl"]
+    wl = async_load_mobile_whitelist(async_cfg)
+    with ASYNC_WL_LOCK:
+        ASYNC_WL_CACHE["wl"] = wl
+        ASYNC_WL_CACHE["ts"] = now
+        ASYNC_WL_CACHE["fingerprint"] = fingerprint
+    return wl
+
+
+def async_mobile_probe(link: str, stress_config: dict):
+    async_cfg = build_async_checker_config(stress_config)
+    wl = get_cached_async_whitelist(async_cfg)
+    limiter = AsyncHostLimiter(async_cfg.get("max_parallel_per_host", 1))
+
+    async def _run():
+        return await async_check_one(link, async_cfg, wl, limiter)
+
+    try:
+        result = asyncio.run(_run())
+    except Exception:
+        return False, 0
+    if result.status == "Active":
+        return True, int(result.latency_ms or 1)
+    if result.reason in {"early_termination_dpi_pattern", "dpi_drop_bytes_lt_min", "slow_handshake"}:
+        return False, -2
+    return False, 0
 
 
 def init_checker_lib() -> None:
@@ -1104,6 +1181,9 @@ def l7_multi_probe(link: str, stress_config: dict):
     - Все протоколы: CheckAnyL7 (SNI-перебор и транспортная логика внутри Go)
     Python здесь делает только оркестрацию повторов и фильтрацию стабильности.
     """
+    if os.getenv("USE_ASYNC_MOBILE_CHECKER", "1") == "1":
+        return async_mobile_probe(link, stress_config)
+
     min_hits = max(1, int(stress_config.get("l7_min_success", 2)))
     probe_attempts = max(1, int(stress_config.get("probe_attempts", 4)))
     between_attempts_sleep = max(0.0, float(stress_config.get("between_attempts_sleep", 0.35)))
