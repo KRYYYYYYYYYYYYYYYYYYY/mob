@@ -1,130 +1,226 @@
 package main
 
 import (
-	"encoding/json"
-	"errors"
+	"bytes"
+	"context"
+	"crypto/tls"
+	"fmt"
+	"io"
 	"net"
+	"net/http"
+	"os"
+	"os/exec"
+	"regexp"
 	"strings"
+	"time"
+
+	"golang.org/x/net/proxy"
 )
 
-func defaultPortFor(pc *ParsedConfig) int {
-	switch pc.Security {
-	case "tls", "reality":
-		return 443
+func quickTCPProbe(host, port string, timeout time.Duration) bool {
+	if host == "" || port == "" {
+		return true
 	}
-	if pc.Net == "ws" { return 80 }
-	return 443
+	d := net.Dialer{Timeout: timeout}
+	c, err := d.Dial("tcp", net.JoinHostPort(host, port))
+	if err != nil {
+		return false
+	}
+	_ = c.Close()
+	return true
 }
 
-func buildXrayConfig(pc *ParsedConfig, socksPort int) ([]byte, error) {
-	type Obj = map[string]any
+var domainRe = regexp.MustCompile(`([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}`)
 
-	stream := Obj{}
-	// network
-	netw := pc.Net
-	if netw == "" {
-		if pc.Path != "" { netw = "ws" } else { netw = "tcp" }
+func extractSNICandidates(sni, hostHdr, fallbackHost string) []string {
+	var cand []string
+	push := func(v string) {
+		v = strings.ToLower(strings.TrimSpace(v))
+		if v == "" {
+			return
+		}
+		for _, x := range cand {
+			if x == v {
+				return
+			}
+		}
+		cand = append(cand, v)
 	}
-	if pc.Security == "reality" { netw = "tcp" } // REALITY только tcp
-	stream["network"] = netw
-
-	// security
-	switch pc.Security {
-	case "tls":
-		stream["security"] = "tls"
-		tlsSettings := Obj{"allowInsecure": true}
-		if pc.SNI != "" {
-			tlsSettings["serverName"] = pc.SNI
-		} else if net.ParseIP(pc.Host) == nil && pc.Host != "" {
-			tlsSettings["serverName"] = pc.Host
-		}
-		if pc.Alpn != "" { tlsSettings["alpn"] = strings.Split(pc.Alpn, ",") }
-		stream["tlsSettings"] = tlsSettings
-	case "reality":
-		stream["security"] = "reality"
-		reality := Obj{
-			"serverName":  pc.SNI,
-			"publicKey":   pc.PBK,
-			"shortId":     pc.ShortID,
-			"spiderX":     firstNonEmpty(pc.SpiderX, "/"),
-			"fingerprint": firstNonEmpty(pc.Fingerprint, "chrome"),
-		}
-		stream["realitySettings"] = reality
+	push(hostHdr)
+	for _, m := range domainRe.FindAllString(sni, -1) {
+		push(m)
 	}
-
-	// ws settings
-	if netw == "ws" {
-		ws := Obj{"path": pc.Path}
-		if pc.HostHdr != "" { ws["headers"] = Obj{"Host": pc.HostHdr} }
-		stream["wsSettings"] = ws
+	if fallbackHost != "" && net.ParseIP(fallbackHost) == nil {
+		push(fallbackHost)
 	}
+	if len(cand) == 0 && sni != "" {
+		push(sni)
+	}
+	if len(cand) > 5 {
+		cand = cand[:5]
+	}
+	return cand
+}
 
-	out := Obj{"tag": "tested", "protocol": "", "settings": Obj{}}
-
-	switch pc.Scheme {
-	case "vmess":
-		out["protocol"] = "vmess"
-		out["settings"] = Obj{
-			"vnext": []any{ Obj{
-				"address": pc.Host,
-				"port":    atoiDefault(pc.Port, defaultPortFor(pc)),
-				"users": []any{ Obj{"id": pc.ID, "security": "auto"} },
-			}},
-		}
-	case "vless":
-		out["protocol"] = "vless"
-		user := Obj{"id": pc.ID, "encryption": "none"}
-		if pc.Security == "reality" || strings.Contains(strings.ToLower(pc.Flow), "vision") {
-			user["flow"] = "xtls-rprx-vision"
-		}
-		out["settings"] = Obj{
-			"vnext": []any{ Obj{
-				"address": pc.Host,
-				"port":    atoiDefault(pc.Port, defaultPortFor(pc)),
-				"users":   []any{ user },
-			}},
-		}
-	case "trojan":
-		out["protocol"] = "trojan"
-		out["settings"] = Obj{
-			"servers": []any{ Obj{
-				"address":  pc.Host,
-				"port":     atoiDefault(pc.Port, defaultPortFor(pc)),
-				"password": pc.ID,
-				"ota":      false,
-			}},
-		}
-	case "shadowsocks":
-		out["protocol"] = "shadowsocks"
-		out["settings"] = Obj{
-			"servers": []any{ Obj{
-				"address":  pc.Host,
-				"port":     atoiDefault(pc.Port, defaultPortFor(pc)),
-				"method":   pc.Method,
-				"password": pc.Password,
-			}},
-		}
-	default:
-		return nil, errors.New("unsupported scheme: " + pc.Scheme)
+func checkViaXray(pc *ParsedConfig) (string, bool, int) {
+	if pc.Scheme != "vmess" && pc.Scheme != "vless" && pc.Scheme != "trojan" && pc.Scheme != "shadowsocks" {
+		return "unsupported-scheme", false, 0
+	}
+	if pc.Note != "" && strings.Contains(pc.Note, "unsupported") {
+		return pc.Note, false, 0
+	}
+	if strings.Contains(strings.ToLower(pc.Net), "grpc") {
+		return "unsupported: grpc", false, 0
 	}
 
-	cfg := Obj{
-		"inbounds": []any{
-			Obj{
-				"tag":      "socks-in",
-				"port":     socksPort,
-				"listen":   "127.0.0.1",
-				"protocol": "socks",
-				"settings": Obj{"udp": false, "auth": "noauth"},
-			},
+	// быстрый TCP-проб
+	if enableTCPProbe {
+		if !quickTCPProbe(pc.Host, firstNonEmpty(pc.Port, "443"), 500*time.Millisecond) {
+			return "tcp-dead", false, 0
+		}
+	}
+
+	// перебор SNI (для кривых строк)
+	sniCandidates := []string{pc.SNI}
+	if strings.Count(pc.SNI, ".") >= 2 {
+		sniCandidates = extractSNICandidates(pc.SNI, pc.HostHdr, pc.Host)
+	}
+	if len(sniCandidates) == 0 {
+		sniCandidates = []string{pc.SNI}
+	}
+
+	attempts := 0
+	var lastReason string
+
+	for _, sni := range sniCandidates {
+		attempts++
+
+		// free socks port
+		socksPort, l, err := pickFreePort()
+		if err != nil {
+			return "no-free-port", false, 0
+		}
+		l.Close()
+
+		// подмена SNI на попытку
+		origSNI := pc.SNI
+		pc.SNI = sni
+		cfgJSON, err := buildXrayConfig(pc, socksPort)
+		pc.SNI = origSNI
+		if err != nil {
+			lastReason = "build-config-fail: " + err.Error()
+			continue
+		}
+
+		tmp, err := os.CreateTemp("", "xraycheck-*.json")
+		if err != nil {
+			return "tempfile-fail: " + err.Error(), false, 0
+		}
+		_, _ = tmp.Write(cfgJSON)
+		tmp.Close()
+		defer os.Remove(tmp.Name())
+
+		xrayBin := os.Getenv("XRAY_BIN")
+		if xrayBin == "" {
+			xrayBin = "xray"
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), xrayRunBudget)
+		cmd := exec.CommandContext(ctx, xrayBin, "-c", tmp.Name())
+		var outBuf, errBuf bytes.Buffer
+		cmd.Stdout = &outBuf
+		cmd.Stderr = &errBuf
+
+		if err := cmd.Start(); err != nil {
+			cancel()
+			lastReason = "xray-start-fail: " + err.Error()
+			continue
+		}
+
+		time.Sleep(bootWait)
+
+		ok, latencyMs := doHTTPViaSocks(socksPort)
+		if !ok {
+			time.Sleep(150 * time.Millisecond)
+			ok, latencyMs = doHTTPViaSocks(socksPort)
+		}
+
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		cancel()
+
+		if ok {
+			return "xray-ok", true, latencyMs
+		}
+		if tail := tailString(errBuf.String(), 180); tail != "" {
+			lastReason = "xray-handshake-fail: " + tail
+		} else {
+			lastReason = "xray-handshake-fail"
+		}
+		if attempts >= retrySNI {
+			break
+		}
+	}
+
+	if lastReason == "" {
+		lastReason = "xray-handshake-fail"
+	}
+	return lastReason, false, 0
+}
+
+func doHTTPViaSocks(port int) (bool, int) {
+	tb := &http.Transport{
+		Proxy: nil,
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			d, err := proxy.SOCKS5("tcp", fmt.Sprintf("127.0.0.1:%d", port), nil, &net.Dialer{
+				Timeout:   testTimeout,
+				KeepAlive: 0,
+			})
+			if err != nil {
+				return nil, err
+			}
+			return d.(proxy.ContextDialer).DialContext(ctx, network, addr)
 		},
-		"outbounds": []any{
-			out,
-			Obj{"tag": "direct", "protocol": "freedom"},
-			Obj{"tag": "block", "protocol": "blackhole"},
-		},
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 	}
+	client := &http.Client{Transport: tb, Timeout: testTimeout}
+	best := 0
+	for _, u := range testURLs {
+		start := time.Now()
+		resp, err := client.Get(u)
+		if err != nil {
+			continue
+		}
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		lat := int(time.Since(start).Milliseconds())
+		if lat <= 0 {
+			lat = 1
+		}
+		if best == 0 || lat < best {
+			best = lat
+		}
+	}
+	if best == 0 {
+		return false, 0
+	}
+	return true, best
+}
 
-	out["streamSettings"] = stream
-	return json.Marshal(cfg)
+func pickFreePort() (int, net.Listener, error) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return 0, nil, err
+	}
+	return l.Addr().(*net.TCPAddr).Port, l, nil
+}
+
+func tailString(s string, n int) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	if len(s) <= n {
+		return s
+	}
+	return s[len(s)-n:]
 }
