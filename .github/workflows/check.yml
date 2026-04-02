@@ -31,8 +31,9 @@ jobs:
       - name: 📥 Install Xray core
         run: |
           set -euo pipefail
-          sudo bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install --version latest
-          xray version
+          # Убираем флаг --version latest
+          sudo bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
+          /usr/local/bin/xray version
 
       - name: 📦 Build reserve checker
         run: |
