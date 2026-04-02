@@ -114,14 +114,14 @@ func RunScanOnce(max int) {
 		return
 	}
 
-	// Опциональный путь: прогон через Python async mobile checker
-	// (единый DPI-aware backend для всего проекта).
-	if os.Getenv("USE_ASYNC_MOBILE_CHECKER") == "1" {
+	// По умолчанию включаем Python async mobile checker.
+	// Отключение: USE_ASYNC_MOBILE_CHECKER=0
+	if os.Getenv("USE_ASYNC_MOBILE_CHECKER") != "0" {
 		pyResults, err := runPythonMobileChecker(all)
 		if err != nil {
 			fmt.Println("python mobile checker fallback to native:", err)
 		} else if len(pyResults) > 0 {
-			fmt.Printf("python mobile checker used: checked=%d\n", len(pyResults))
+			fmt.Printf("python mobile checker used (default path): checked=%d\n", len(pyResults))
 			okCount := 0
 			var okResults []Result
 			_ = os.WriteFile(timeWifiFile, []byte(""), 0o644)
