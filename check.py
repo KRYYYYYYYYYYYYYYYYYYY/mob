@@ -760,11 +760,12 @@ def apply_profile_preset(stress_config: dict, profile_name: str) -> None:
     """
     name = (profile_name or "mobile_strict").strip().lower()
     if name == "mobile_strict":
-        stress_config["probe_attempts"] = max(4, int(stress_config.get("probe_attempts", 4)))
-        stress_config["l7_min_success"] = max(2, int(stress_config.get("l7_min_success", 2)))
-        stress_config["stability_min_success_rate"] = max(0.60, float(stress_config.get("stability_min_success_rate", 0.5)))
-        stress_config["stability_max_loss_rate"] = min(0.35, float(stress_config.get("stability_max_loss_rate", 0.5)))
-        stress_config["stability_max_jitter_ms"] = min(650, int(stress_config.get("stability_max_jitter_ms", 800)))
+        # Профиль под жесткую мобильную сеть: fail-fast и минимум параллелизма.
+        stress_config["probe_attempts"] = max(3, int(stress_config.get("probe_attempts", 3)))
+        stress_config["l7_min_success"] = max(1, int(stress_config.get("l7_min_success", 1)))
+        stress_config["stability_min_success_rate"] = max(0.34, float(stress_config.get("stability_min_success_rate", 0.34)))
+        stress_config["stability_max_loss_rate"] = min(0.60, float(stress_config.get("stability_max_loss_rate", 0.60)))
+        stress_config["stability_max_jitter_ms"] = min(900, int(stress_config.get("stability_max_jitter_ms", 900)))
     elif name == "wifi_lenient":
         stress_config["probe_attempts"] = max(3, int(stress_config.get("probe_attempts", 4)))
         stress_config["l7_min_success"] = 1
@@ -773,11 +774,11 @@ def apply_profile_preset(stress_config: dict, profile_name: str) -> None:
         stress_config["stability_max_jitter_ms"] = max(1100, int(stress_config.get("stability_max_jitter_ms", 800)))
     else:
         # Для этого репозитория по умолчанию держим только mobile-friendly профиль.
-        stress_config["probe_attempts"] = max(4, int(stress_config.get("probe_attempts", 4)))
-        stress_config["l7_min_success"] = max(2, int(stress_config.get("l7_min_success", 2)))
-        stress_config["stability_min_success_rate"] = max(0.60, float(stress_config.get("stability_min_success_rate", 0.5)))
-        stress_config["stability_max_loss_rate"] = min(0.35, float(stress_config.get("stability_max_loss_rate", 0.5)))
-        stress_config["stability_max_jitter_ms"] = min(650, int(stress_config.get("stability_max_jitter_ms", 800)))
+        stress_config["probe_attempts"] = max(3, int(stress_config.get("probe_attempts", 3)))
+        stress_config["l7_min_success"] = max(1, int(stress_config.get("l7_min_success", 1)))
+        stress_config["stability_min_success_rate"] = max(0.34, float(stress_config.get("stability_min_success_rate", 0.34)))
+        stress_config["stability_max_loss_rate"] = min(0.60, float(stress_config.get("stability_max_loss_rate", 0.60)))
+        stress_config["stability_max_jitter_ms"] = min(900, int(stress_config.get("stability_max_jitter_ms", 900)))
 
 def is_mobile_only_candidate(link: str, pc: dict | None = None) -> tuple[bool, str]:
     """
@@ -1373,36 +1374,36 @@ def main():
 
     # Настройки стресс-теста (твой блок 1-в-1)
     stress_config = {
-        "timeout": 2.5, "dpi_sleep": 0.5, "target_mtu": 1280,
-        "probe_attempts": 4, "min_success": 2, "recv_timeout": 1.7,
-        "between_attempts_sleep": 0.35,
-        "l7_min_success": 2,
-        "workers": 32,
-        "batch_multiplier": 4,
-        "max_parallel_per_host": 2,
+        "timeout": 1.2, "dpi_sleep": 0.5, "target_mtu": 1280,
+        "probe_attempts": 3, "min_success": 1, "recv_timeout": 0.9,
+        "between_attempts_sleep": 0.2,
+        "l7_min_success": 1,
+        "workers": 16,
+        "batch_multiplier": 2,
+        "max_parallel_per_host": 1,
         "profile_preset": "mobile_strict",
-        "max_latency_ms": 6000,
-        "max_check_duration_sec": 2 * 60 * 60,
+        "max_latency_ms": 2000,
+        "max_check_duration_sec": 60 * 60,
         "stability_max_spread_ms": 1200,
         "stability_max_ratio": 4.0,
         "stability_max_na": 0,
-        "stability_max_jitter_ms": 800,
-        "stability_min_success_rate": 0.5,
-        "stability_max_loss_rate": 0.5,
+        "stability_max_jitter_ms": 900,
+        "stability_min_success_rate": 0.34,
+        "stability_max_loss_rate": 0.60,
         "stability_min_samples": 3,
         "stability_p95_max_ms": 6000,
         "probe_paths": list(DEFAULT_PROBE_PATHS),
         "mobile_header_profiles": list(DEFAULT_MOBILE_HEADER_PROFILES),
         "mobile_whitelist_enabled": True,
-        "mobile_whitelist_fail_open": True,
-        "mobile_whitelist_timeout_sec": 20.0,
-        "mobile_whitelist_retries": 3,
-        "mobile_whitelist_retry_sleep_sec": 2.0,
-        "mobile_whitelist_retry_interval_sec": 60.0,
+        "mobile_whitelist_fail_open": False,
+        "mobile_whitelist_timeout_sec": 10.0,
+        "mobile_whitelist_retries": 2,
+        "mobile_whitelist_retry_sleep_sec": 1.0,
+        "mobile_whitelist_retry_interval_sec": 30.0,
         "mobile_whitelist_domains_url": DEFAULT_MOBILE_WHITELIST["domains_url"],
         "mobile_whitelist_ips_url": DEFAULT_MOBILE_WHITELIST["ips_url"],
         "mobile_whitelist_cidrs_url": DEFAULT_MOBILE_WHITELIST["cidrs_url"],
-        "external_respect_blacklist": False,
+        "external_respect_blacklist": True,
     }
     if os.path.exists('test1/stress_profile.json'):
         try:
