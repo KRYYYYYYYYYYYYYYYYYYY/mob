@@ -12,6 +12,13 @@ on:
       - 'kr/mob/wifi.txt'
       - '.github/workflows/encode.yml'
   workflow_dispatch:
+  workflow_run:
+    workflows:
+      - "🧩 Reserve Checker"
+      - "🛡️ Proxy Inquisitor & Monitor"
+      - "Auto Update VPN"
+    types:
+      - completed
   schedule:
     - cron: '*/2 * * * *'
 
