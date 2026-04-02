@@ -8,7 +8,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"regexp"
@@ -76,7 +75,7 @@ func checkViaXray(pc *ParsedConfig) (string, bool, int) {
 
 	// быстрый TCP-проб
 	if enableTCPProbe {
-		if !quickTCPProbe(pc.Host, firstNonEmpty(pc.Port, "443"), 800*time.Millisecond) {
+		if !quickTCPProbe(pc.Host, firstNonEmpty(pc.Port, "443"), 500*time.Millisecond) {
 			return "tcp-dead", false, 0
 		}
 	}
@@ -141,7 +140,7 @@ func checkViaXray(pc *ParsedConfig) (string, bool, int) {
 
 		ok, latencyMs := doHTTPViaSocks(socksPort)
 		if !ok {
-			time.Sleep(300 * time.Millisecond)
+			time.Sleep(150 * time.Millisecond)
 			ok, latencyMs = doHTTPViaSocks(socksPort)
 		}
 
@@ -184,90 +183,27 @@ func doHTTPViaSocks(port int) (bool, int) {
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 	}
 	client := &http.Client{Transport: tb, Timeout: testTimeout}
-
-	if strongStyleTest {
-		target := "https://www.gstatic.com/generate_204"
-		best := 0
-		attempts := 1
-		if strongDoubleTest {
-			attempts = 2
-		}
-		for i := 0; i < attempts; i++ {
-			ok, lat := runProbeOnce(client, target)
-			if !ok || lat > strongMaxRT {
-				return false, 0
-			}
-			ms := int(lat.Milliseconds())
-			if ms <= 0 {
-				ms = 1
-			}
-			if best == 0 || ms < best {
-				best = ms
-			}
-		}
-		return true, best
-	}
-
-	successHosts := map[string]struct{}{}
-	successCount := 0
 	best := 0
 	for _, u := range testURLs {
-		ok, lat := runProbeOnce(client, u)
-		if !ok {
+		start := time.Now()
+		resp, err := client.Get(u)
+		if err != nil {
 			continue
 		}
-		successCount++
-		if pu, err := url.Parse(u); err == nil {
-			successHosts[pu.Hostname()] = struct{}{}
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		lat := int(time.Since(start).Milliseconds())
+		if lat <= 0 {
+			lat = 1
 		}
-		ms := int(lat.Milliseconds())
-		if ms <= 0 {
-			ms = 1
-		}
-		if best == 0 || ms < best {
-			best = ms
+		if best == 0 || lat < best {
+			best = lat
 		}
 	}
-	if successCount == 0 {
-		return false, 0
-	}
-	if len(successHosts) < minSuccessURLs {
+	if best == 0 {
 		return false, 0
 	}
 	return true, best
-}
-
-func runProbeOnce(client *http.Client, target string) (bool, time.Duration) {
-	start := time.Now()
-	resp, err := client.Get(target)
-	if err != nil {
-		return false, 0
-	}
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-	resp.Body.Close()
-	lat := time.Since(start)
-	return probeResultOK(target, resp.StatusCode, len(body), lat), lat
-}
-
-func probeResultOK(target string, statusCode, bodyLen int, latency time.Duration) bool {
-	lower := strings.ToLower(target)
-	is204Probe := strings.Contains(lower, "generate_204")
-	if strongStyleTest {
-		if statusCode != http.StatusNoContent {
-			return false
-		}
-		if bodyLen != 0 {
-			return false
-		}
-		return latency <= strongMaxRT
-	}
-	if is204Probe {
-		if statusCode != http.StatusNoContent {
-			return false
-		}
-		return bodyLen == 0
-	}
-	return statusCode >= 200 && statusCode < 400
 }
 
 func pickFreePort() (int, net.Listener, error) {
