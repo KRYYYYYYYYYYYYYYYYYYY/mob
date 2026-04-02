@@ -11,6 +11,7 @@ import requests
 import psutil
 from concurrent.futures import ThreadPoolExecutor
 import threading
+from ua_versions import get_mobile_user_agents, maybe_refresh_ua_versions
 
 # --- КОНФИГУРАЦИЯ ---
 ALLOWED_COUNTRIES = {"US", "DE", "NL", "GB", "FR", "FI", "SG", "JP", "PL", "TR", "RU"}
@@ -27,9 +28,11 @@ COUNTRY_CACHE_FILE = 'test1/countries_cache.json'
 THRESHOLD = 50
 
 DEFAULT_PROBE_PATHS = ["/", "/generate_204", "/favicon.ico"]
+maybe_refresh_ua_versions()
+HAPP_UA, V2RAYNG_UA = get_mobile_user_agents()
 DEFAULT_MOBILE_HEADER_PROFILES = [
     {
-        "user_agent": "Happ/3.15.1 (com.happproxy; Android 16; Samsung SM-A336B)",
+        "user_agent": HAPP_UA,
         "headers": {
             "Accept": "*/*",
             "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8",
@@ -37,7 +40,7 @@ DEFAULT_MOBILE_HEADER_PROFILES = [
         },
     },
     {
-        "user_agent": "okhttp/4.12.0 v2rayNG/1.12.28",
+        "user_agent": V2RAYNG_UA,
         "headers": {
             "Accept": "*/*",
             "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8",
