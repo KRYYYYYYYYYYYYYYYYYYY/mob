@@ -71,35 +71,10 @@ func loadProbeUserAgents() (string, string) {
 
 var probeProfiles = []probeProfile{
 	{
-		UserAgent: func() string {
-			happ, _ := loadProbeUserAgents()
-			return happ
-		}(),
-		Headers: map[string]string{
-			"Accept":           "*/*",
-			"Accept-Language":  "ru-RU,ru;q=0.9,en-US;q=0.8",
-			"X-Requested-With": "com.happproxy",
-		},
-	},
-	{
-		UserAgent: func() string {
-			_, v2rayng := loadProbeUserAgents()
-			return v2rayng
-		}(),
-		Headers: map[string]string{
-			"Accept":           "*/*",
-			"Accept-Language":  "ru-RU,ru;q=0.9,en-US;q=0.8",
-			"X-Requested-With": "com.v2ray.ang",
-		},
-	},
-	{
 		UserAgent: "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
 		Headers: map[string]string{
-			"Accept":             "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-			"Accept-Language":    "ru-RU,ru;q=0.9,en-US;q=0.8",
-			"Sec-CH-UA":          "\"Chromium\";v=\"124\", \"Google Chrome\";v=\"124\", \"Not-A.Brand\";v=\"99\"",
-			"Sec-CH-UA-Mobile":   "?1",
-			"Sec-CH-UA-Platform": "\"Android\"",
+			"Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+			"Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8",
 		},
 	},
 }
@@ -163,7 +138,7 @@ func applyProbeHeaders(req *http.Request, idx int) {
 }
 
 func isStrictProbeSuccess(probeURL string, statusCode, bodyLen, latencyMs int, gotFirstByte bool) bool {
-	if !gotFirstByte || latencyMs <= 0 || latencyMs > 12000 {
+	if !gotFirstByte || latencyMs <= 0 || latencyMs > 2000 {
 		return false
 	}
 	if strings.Contains(strings.ToLower(probeURL), "generate_204") {
@@ -420,24 +395,16 @@ func startXrayAndProbe(configJSON []byte, socksPort, timeoutSec int) int {
 		Timeout:   time.Duration(timeoutSec) * time.Second,
 	}
 
-	probeURLs := []string{
-		// Набор разнопровайдерных целей, чтобы не заваливаться из-за блокировок одного CDN/домена.
-		"https://www.gstatic.com/generate_204",
-		"https://connectivitycheck.gstatic.com/generate_204",
-		"http://cp.cloudflare.com/generate_204",
-		"http://www.msftconnecttest.com/connecttest.txt",
-		"https://detectportal.firefox.com/success.txt",
-		"http://example.com/",
-	}
+	probeURLs := []string{"https://connectivitycheck.gstatic.com/generate_204"}
 
 	successHits := 0
 	firstSuccessLatency := 0
 	successHosts := map[string]struct{}{}
-	minSuccessHits := 2
-	maxAcceptedLatencyMs := 12000
+	minSuccessHits := 1
+	maxAcceptedLatencyMs := 2000
 
 	for idx, probeURL := range probeURLs {
-		for attempt := 0; attempt < 2; attempt++ {
+		for attempt := 0; attempt < 1; attempt++ {
 			reqCtx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSec)*time.Second)
 			req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, probeURL, nil)
 			if err != nil {
@@ -455,9 +422,6 @@ func startXrayAndProbe(configJSON []byte, socksPort, timeoutSec int) int {
 			resp, err := client.Do(req)
 			cancel()
 			if err != nil {
-				if attempt == 0 {
-					time.Sleep(200 * time.Millisecond)
-				}
 				continue
 			}
 			body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
@@ -475,21 +439,15 @@ func startXrayAndProbe(configJSON []byte, socksPort, timeoutSec int) int {
 				if firstSuccessLatency == 0 {
 					firstSuccessLatency = latencyMs
 				}
-				// Mobile-строгость: нужно минимум 2 успешных ответа с разных endpoint'ов.
-				if successHits >= minSuccessHits && len(successHosts) >= 2 {
+				if successHits >= minSuccessHits {
 					return firstSuccessLatency
 				}
 				break
 			}
-			if attempt == 0 {
-				time.Sleep(200 * time.Millisecond)
-			}
 		}
 	}
 
-	// Для mobile-only отбора просим минимум 2 успешных ответа
-	// и минимум с 2 разных endpoint'ов.
-	if successHits >= minSuccessHits && len(successHosts) >= 2 {
+	if successHits >= minSuccessHits {
 		return firstSuccessLatency
 	}
 	return -1
@@ -540,13 +498,16 @@ func CheckAnyL7(
 		return 0
 	}
 	if timeout <= 0 {
-		timeout = 5
+		timeout = 2
 	}
 
 	// Быстрый TCP-проб (из crazy_xray_checker)
 	precheckTimeout := time.Duration(timeout) * time.Second
-	if precheckTimeout < 3*time.Second {
-		precheckTimeout = 3 * time.Second
+	if precheckTimeout > 1200*time.Millisecond {
+		precheckTimeout = 1200 * time.Millisecond
+	}
+	if precheckTimeout < 500*time.Millisecond {
+		precheckTimeout = 500 * time.Millisecond
 	}
 	d := net.Dialer{Timeout: precheckTimeout}
 	conn, err := d.Dial("tcp", net.JoinHostPort(addr, fmt.Sprintf("%d", port)))
@@ -565,7 +526,7 @@ func CheckAnyL7(
 		sniCandidates = []string{sni}
 	}
 
-	maxSNIAttempts := 3
+	maxSNIAttempts := 2
 	for i, candidateSNI := range sniCandidates {
 		if i >= maxSNIAttempts {
 			break
@@ -613,7 +574,7 @@ func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C
 		return 0
 	}
 	if timeout <= 0 {
-		timeout = 5
+		timeout = 2
 	}
 
 	d := net.Dialer{Timeout: 500 * time.Millisecond}
@@ -684,7 +645,7 @@ func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C
 	}
 	defer instance.Close()
 
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(300 * time.Millisecond)
 
 	socksDialer, err := proxy.SOCKS5("tcp", fmt.Sprintf("127.0.0.1:%d", socksPort), nil, &net.Dialer{
 		Timeout:   time.Duration(timeout) * time.Second,
@@ -711,20 +672,13 @@ func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C
 		Timeout:   time.Duration(timeout) * time.Second,
 	}
 
-	probeURLs := []string{
-		"https://www.gstatic.com/generate_204",
-		"https://connectivitycheck.gstatic.com/generate_204",
-		"http://cp.cloudflare.com/generate_204",
-		"http://www.msftconnecttest.com/connecttest.txt",
-		"https://detectportal.firefox.com/success.txt",
-		"http://example.com/",
-	}
+	probeURLs := []string{"https://connectivitycheck.gstatic.com/generate_204"}
 	successHits := 0
 	firstSuccessLatency := 0
-	maxAcceptedLatencyMs := 12000
+	maxAcceptedLatencyMs := 2000
 
 	for idx, probeURL := range probeURLs {
-		for attempt := 0; attempt < 2; attempt++ {
+		for attempt := 0; attempt < 1; attempt++ {
 			req, err := http.NewRequest(http.MethodGet, probeURL, nil)
 			if err != nil {
 				continue
@@ -739,9 +693,6 @@ func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C
 
 			resp, err := client.Do(req)
 			if err != nil {
-				if attempt == 0 {
-					time.Sleep(200 * time.Millisecond)
-				}
 				continue
 			}
 			body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
@@ -758,12 +709,9 @@ func CheckVlessL7(cAddr *C.char, cPort int, cUuid *C.char, cSni *C.char, cPbk *C
 				}
 				break
 			}
-			if attempt == 0 {
-				time.Sleep(200 * time.Millisecond)
-			}
 		}
 	}
-	if successHits >= 2 {
+	if successHits >= 1 {
 		return firstSuccessLatency
 	}
 	return -1

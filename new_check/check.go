@@ -75,7 +75,7 @@ func checkViaXray(pc *ParsedConfig) (string, bool, int) {
 
 	// быстрый TCP-проб
 	if enableTCPProbe {
-		if !quickTCPProbe(pc.Host, firstNonEmpty(pc.Port, "443"), 800*time.Millisecond) {
+		if !quickTCPProbe(pc.Host, firstNonEmpty(pc.Port, "443"), 500*time.Millisecond) {
 			return "tcp-dead", false, 0
 		}
 	}
@@ -140,7 +140,7 @@ func checkViaXray(pc *ParsedConfig) (string, bool, int) {
 
 		ok, latencyMs := doHTTPViaSocks(socksPort)
 		if !ok {
-			time.Sleep(300 * time.Millisecond)
+			time.Sleep(150 * time.Millisecond)
 			ok, latencyMs = doHTTPViaSocks(socksPort)
 		}
 
