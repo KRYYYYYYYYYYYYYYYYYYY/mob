@@ -34,12 +34,29 @@ jobs:
         run: |
           go build -o crazy_checker .
 
-      - name: ▶️ Run reserve checker
+      - name: ▶️ Run and Save (2 times with 2 min pause)
         working-directory: new_check
         env:
           RESERVE_MTU_VALUE: "1400"
           XRAY_BIN: /usr/local/bin/xray
-        run: ./crazy_checker -workers 24 -maxworkcfg 200
+        run: |
+          for i in {1..2}; do
+            echo "🚀 Run #$i"
+            ./crazy_checker -workers 24 -maxworkcfg 200
+            
+            echo "💾 Saving results..."
+            git config --local user.email "github-actions[bot]@://github.com"
+            git config --local user.name "github-actions[bot]"
+            git add result/working.txt result/first_working.txt result/result.txt result/time_wifi.txt ../kr/mob/wifi.txt
+            git commit -m "🧩 Update reserve ($i/2) [skip ci]" || echo "No changes"
+            git pull --rebase --autostash -X theirs origin main
+            git push origin main
+            
+            if [ $i -lt 2 ]; then
+              echo "⏳ Waiting 2 minutes before next check..."
+              sleep 120
+            fi
+          done
 
       - name: 💾 Commit reserve updates
         run: |
@@ -49,3 +66,5 @@ jobs:
           git commit -m "🧩 Update reserve tail in wifi [skip ci]" || echo "No changes to commit"
           git pull --rebase --autostash -X theirs origin main
           git push origin main
+          
+    
