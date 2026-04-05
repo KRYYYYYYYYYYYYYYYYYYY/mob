@@ -18,6 +18,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock, BoundedSemaphore
 
 from ua_versions import get_mobile_user_agents, maybe_refresh_ua_versions
+from stress_profile_loader import load_stress_profile_file
 from mobile_vless_checker import (
     HostLimiter as AsyncHostLimiter,
     check_one as async_check_one,
@@ -38,6 +39,7 @@ BLACKLIST_FILE = 'test1/blacklist.txt'
 REASONS_FILE = 'test1/reasons.json'
 CHECK_LOG_FILE = 'test1/check_log.txt'
 RUN_RESULT_FILE = 'test1/run_result.json'
+DIAGNOSTICS_FILE = 'test1/diagnostics.json'
 
 EXTERNAL_SOURCE_URL = [
     "https://raw.githubusercontent.com/zieng2/wl/main/vless_lite.txt",
@@ -1112,6 +1114,14 @@ def extract_host_port(link: str):
         return match.group(0), host, port
     return None, None, None
 
+
+def tcp_port_open(host: str, port: str, timeout: float = 0.8) -> bool:
+    try:
+        with socket.create_connection((host, int(port)), timeout=timeout):
+            return True
+    except Exception:
+        return False
+
 def format_uri_host(host: str) -> str:
     """Упаковывает IPv6 в скобки для использования в ссылке vless."""
     if is_ipv6(host) and not host.startswith("["):
@@ -1201,6 +1211,22 @@ def note_reason(reason_stats: dict, reason: str, base_part: str = "", extra: str
         line += f" | {extra}"
     with open(CHECK_LOG_FILE, "a", encoding="utf-8") as f:
         f.write(line + "\n")
+
+
+def add_diag(diag_stats: dict, code: str, base_part: str = "", extra: str = ""):
+    diag_stats[code] = int(diag_stats.get(code, 0)) + 1
+    if not base_part:
+        return
+    samples = diag_samples.setdefault(code, [])
+    if len(samples) >= 20:
+        return
+    payload = {"base": base_part}
+    if extra:
+        payload["extra"] = extra
+    samples.append(payload)
+
+
+diag_samples: dict[str, list[dict]] = {}
 
 
 def normalize_rank_entry(base_part: str, entry):
@@ -1340,6 +1366,8 @@ def main():
     token = os.getenv("GH_TOKEN")
     repo = os.getenv("GITHUB_REPOSITORY")
     reason_stats = {}
+    diag_stats = {}
+    diag_samples.clear()
     # сбрасываем лог текущего прогона
     with open(CHECK_LOG_FILE, "w", encoding="utf-8") as f:
         f.write("")
@@ -1531,10 +1559,9 @@ def main():
         "mobile_whitelist_cidrs_url": DEFAULT_MOBILE_WHITELIST["cidrs_url"],
         "external_respect_blacklist": True,
     }
-    if os.path.exists('test1/stress_profile.json'):
+    data = load_stress_profile_file()
+    if data:
         try:
-            with open('test1/stress_profile.json', 'r') as f:
-                data = json.load(f)
                 stress_config["timeout"] = data.get("max_handshake_ms", 2500) / 1000
                 stress_config["dpi_sleep"] = 0.5 if data.get("mimic_dpi_delay") else 0
                 stress_config["target_mtu"] = data.get("target_mtu", 1280)
@@ -1577,8 +1604,7 @@ def main():
                 stress_config["mobile_whitelist_cidrs_url"] = str(data.get("mobile_whitelist_cidrs_url", stress_config["mobile_whitelist_cidrs_url"])).strip() or stress_config["mobile_whitelist_cidrs_url"]
                 stress_config["external_respect_blacklist"] = bool(data.get("external_respect_blacklist", stress_config["external_respect_blacklist"]))
         except: pass
-    # Принудительно работаем в mobile-only режиме для отбора под мобильную сеть.
-    stress_config["profile_preset"] = "mobile_strict"
+    # Применяем пресет из единого stress profile (или mobile_strict по умолчанию).
     apply_profile_preset(stress_config, stress_config.get("profile_preset", "mobile_strict"))
     configure_go_probe_profiles(stress_config)
     mobile_whitelist = None
@@ -1654,9 +1680,10 @@ def main():
                     host, port = pc["addr"], str(pc["port"])
                 else:
                     endpoint, host, port = extract_host_port(base_part)
-                    if not endpoint or not host or not port:
-                        note_reason(reason_stats, "skip_bad_endpoint", base_part)
-                        continue
+                if not endpoint or not host or not port:
+                    note_reason(reason_stats, "skip_bad_endpoint", base_part)
+                    add_diag(diag_stats, "uuid-rejected", base_part, "bad_endpoint")
+                    continue
 
                 if host in runtime_blocked_hosts:
                     note_reason(reason_stats, "skip_runtime_blocked_host", base_part, runtime_blocked_hosts[host])
@@ -1669,6 +1696,13 @@ def main():
 
                 if is_ipv6(host):
                     note_reason(reason_stats, "skip_ipv6", base_part)
+                    add_diag(diag_stats, "ip-block", base_part, "ipv6_banned")
+                    add_to_blacklist(base_part)
+                    continue
+
+                if not tcp_port_open(host, port, timeout=max(0.3, float(stress_config.get("timeout", 1.2)))):
+                    note_reason(reason_stats, "skip_tcp_unreachable", base_part, host)
+                    add_diag(diag_stats, "ip-block", base_part, "tcp_closed_or_filtered")
                     add_to_blacklist(base_part)
                     continue
 
@@ -1695,11 +1729,13 @@ def main():
                         wl_ok, wl_reason = is_link_in_mobile_whitelist(base_part, mobile_whitelist, pc=pc)
                         if not wl_ok:
                             note_reason(reason_stats, wl_reason, base_part)
+                            add_diag(diag_stats, "wl-deny", base_part, wl_reason)
                             add_to_blacklist(base_part)
                             continue
                     elif stress_config.get("mobile_whitelist_enabled", True):
                         if not stress_config.get("mobile_whitelist_fail_open", False):
                             note_reason(reason_stats, "skip_mobile_whitelist_unavailable", base_part)
+                            add_diag(diag_stats, "wl-deny", base_part, "whitelist_unavailable")
                             continue
 
                 batch.append((link, base_part, host))
@@ -1791,6 +1827,14 @@ def main():
 
                         print("⛔ UUID/L7-доступ отклонен (подтверждено повторной проверкой)")
                         note_reason(reason_stats, "fail_l7_reject_confirmed", base_part)
+                        host_has_ok = bool(ip_counts.get(host, 0) > 0)
+                        add_diag(
+                            diag_stats,
+                            "uuid-rejected" if host_has_ok else "probable-provider-dpi",
+                            base_part,
+                            f"host={host}",
+                        )
+                        add_diag(diag_stats, "tcp-open-but-l7-block", base_part, host)
                         host_l7_reject_counts[host] = host_l7_reject_counts.get(host, 0) + 1
                         # Не блочим хост после единичного L7-отказа:
                         # на одном IP могут жить как битые, так и рабочие UUID.
@@ -1799,10 +1843,12 @@ def main():
                     elif current_latency == -2:
                         print("📉 Нестабильный сервер (сильный разброс/недоступность)")
                         note_reason(reason_stats, "fail_unstable_latency", base_part)
+                        add_diag(diag_stats, "probable-provider-dpi", base_part, "unstable_latency")
                         runtime_blocked_hosts[host] = "unstable"
                     else:
                         print("💀 Мертв")
                         note_reason(reason_stats, "fail_dead", base_part)
+                        add_diag(diag_stats, "ip-block", base_part, "dead_or_timeout")
                         runtime_blocked_hosts[host] = "dead"
 
                     add_to_blacklist(base_part)
@@ -1848,6 +1894,23 @@ def main():
         json.dump(ranking_db, f, ensure_ascii=False, indent=4)
     with open(REASONS_FILE, "w", encoding="utf-8") as f:
         json.dump(reason_stats, f, ensure_ascii=False, indent=4)
+    with open(DIAGNOSTICS_FILE, "w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "codes": {
+                    "tcp-open-but-l7-block": int(diag_stats.get("tcp-open-but-l7-block", 0)),
+                    "probable-provider-dpi": int(diag_stats.get("probable-provider-dpi", 0)),
+                    "uuid-rejected": int(diag_stats.get("uuid-rejected", 0)),
+                    "wl-deny": int(diag_stats.get("wl-deny", 0)),
+                    "ip-block": int(diag_stats.get("ip-block", 0)),
+                },
+                "samples": diag_samples,
+                "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+            },
+            f,
+            ensure_ascii=False,
+            indent=2,
+        )
 
     print(f"🏁 Завершено. Подписка: {len(working_for_sub)}, Очередь: {len(new_deferred)}")
     print(f"🧾 Reasons: {json.dumps(reason_stats, ensure_ascii=False)}")
