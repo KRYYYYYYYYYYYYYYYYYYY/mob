@@ -4,24 +4,25 @@ import "time"
 
 // пути/файлы
 var (
-	inputFile    = "new_check/input.txt"
+	inputFile    = "input.txt"
 	wifiFile     = "kr/mob/wifi.txt"
 	outputDir    = "new_check/result"
 	allOutFile   = outputDir + "/result.txt"
 	workingFile  = outputDir + "/working.txt"
 	firstOKFile  = outputDir + "/first_working.txt"
 	timeWifiFile = outputDir + "/time_wifi.txt"
+	diagOutFile  = outputDir + "/diagnostics.json"
 
-	configJSONPath = "new_check/config.json"
+	configJSONPath = "config.json"
 )
 
 // флаги (инициализируются в main)
 var (
-	workers        int
-	bootWait       time.Duration
-	testTimeout    time.Duration
-	xrayRunBudget  time.Duration
-	retrySNI       int
+	workers        int           = DefaultWorkers
+	bootWait       time.Duration = DefaultBootWait
+	testTimeout    time.Duration = DefaultTestTimeout
+	xrayRunBudget  time.Duration = DefaultXrayRunBudget
+	retrySNI       int           = DefaultRetrySNI
 	enableTCPProbe bool
 	maxWorkCfg     int
 	serveKeep      bool // ← держать веб-сервер после завершения проверки

@@ -13,6 +13,7 @@ import psutil
 from concurrent.futures import ThreadPoolExecutor
 import threading
 from ua_versions import get_mobile_user_agents, maybe_refresh_ua_versions
+from stress_profile_loader import load_stress_profile_file
 from mobile_vless_checker import (
     HostLimiter as AsyncHostLimiter,
     check_one as async_check_one,
@@ -473,10 +474,9 @@ def load_stress_config():
         "mobile_whitelist_ips_url": DEFAULT_MOBILE_WHITELIST["ips_url"],
         "mobile_whitelist_cidrs_url": DEFAULT_MOBILE_WHITELIST["cidrs_url"],
     }
-    if os.path.exists(PROFILE_FILE):
+    data = load_stress_profile_file()
+    if data:
         try:
-            with open(PROFILE_FILE, 'r', encoding='utf-8') as f:
-                data = json.load(f)
             config["timeout"] = data.get("max_handshake_ms", 2500) / 1000
             config["dpi_sleep"] = 0.5 if data.get("mimic_dpi_delay") else 0
             config["recv_timeout"] = float(data.get("recv_timeout", config["recv_timeout"]))
