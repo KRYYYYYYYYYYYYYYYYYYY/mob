@@ -422,18 +422,27 @@ func startXrayAndProbe(configJSON []byte, socksPort, timeoutSec int) int {
 		Timeout:   time.Duration(timeoutSec) * time.Second,
 	}
 
-	probeURLs := []string{"https://connectivitycheck.gstatic.com/generate_204"}
+	type probeTarget struct {
+		url     string
+		need204 bool
+		needIP  bool
+	}
+	probeTargets := []probeTarget{
+		{url: "https://connectivitycheck.gstatic.com/generate_204", need204: true},
+		{url: "https://www.google.com/generate_204", need204: true},
+		{url: "https://api.ipify.org?format=text", needIP: true},
+	}
 
 	successHits := 0
 	firstSuccessLatency := 0
-	successHosts := map[string]struct{}{}
+	ipEchoHit := false
 	minSuccessHits := 1
 	maxAcceptedLatencyMs := 2000
 
-	for idx, probeURL := range probeURLs {
+	for idx, target := range probeTargets {
 		for attempt := 0; attempt < 1; attempt++ {
 			reqCtx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSec)*time.Second)
-			req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, probeURL, nil)
+			req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, target.url, nil)
 			if err != nil {
 				cancel()
 				continue
@@ -455,18 +464,26 @@ func startXrayAndProbe(configJSON []byte, socksPort, timeoutSec int) int {
 			resp.Body.Close()
 
 			latencyMs := int(time.Since(reqStart).Milliseconds())
-			if isStrictProbeSuccess(probeURL, resp.StatusCode, len(body), latencyMs, gotFirstByte) {
+			okProbe := isStrictProbeSuccess(target.url, resp.StatusCode, len(body), latencyMs, gotFirstByte)
+			if target.needIP {
+				ipTxt := strings.TrimSpace(string(body))
+				okProbe = resp.StatusCode == http.StatusOK && net.ParseIP(ipTxt) != nil
+			}
+			if target.need204 {
+				okProbe = okProbe && resp.StatusCode == http.StatusNoContent && len(body) == 0
+			}
+			if okProbe {
 				if latencyMs > maxAcceptedLatencyMs {
 					continue
 				}
 				successHits++
-				if req.URL != nil {
-					successHosts[req.URL.Hostname()] = struct{}{}
+				if target.needIP {
+					ipEchoHit = true
 				}
 				if firstSuccessLatency == 0 {
 					firstSuccessLatency = latencyMs
 				}
-				if successHits >= minSuccessHits {
+				if successHits >= minSuccessHits && ipEchoHit {
 					return firstSuccessLatency
 				}
 				break
@@ -474,7 +491,7 @@ func startXrayAndProbe(configJSON []byte, socksPort, timeoutSec int) int {
 		}
 	}
 
-	if successHits >= minSuccessHits {
+	if successHits >= minSuccessHits && ipEchoHit {
 		return firstSuccessLatency
 	}
 	return -1

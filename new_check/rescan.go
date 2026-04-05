@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unicode"
 )
 
@@ -121,6 +123,7 @@ func RunScanOnce(max int) {
 		if err != nil {
 			fmt.Println("python mobile checker fallback to native:", err)
 		} else if len(pyResults) > 0 {
+			writeDiagnostics(pyResults)
 			fmt.Printf("python mobile checker used (default path): checked=%d\n", len(pyResults))
 			okCount := 0
 			var okResults []Result
@@ -173,7 +176,9 @@ func RunScanOnce(max int) {
 	_ = os.WriteFile(timeWifiFile, []byte(""), 0o644)
 	okCount := 0
 	var okResults []Result
+	var allResults []Result
 	for r := range results {
+		allResults = append(allResults, r)
 		state := "FAIL"
 		if r.OK {
 			state = "OK"
@@ -193,8 +198,61 @@ func RunScanOnce(max int) {
 		stream.WriteResultLine(outLine)
 	}
 
+	writeDiagnostics(allResults)
 	finalizeResults(okResults, scanTarget, reserveCapacity, reservesFromWifi)
 	fmt.Println("done. full log:", allOutFile)
+}
+
+func writeDiagnostics(results []Result) {
+	type sample struct {
+		Line   string `json:"line"`
+		Reason string `json:"reason,omitempty"`
+	}
+	codes := map[string]int{
+		"tcp-open-but-l7-block": 0,
+		"probable-provider-dpi": 0,
+		"uuid-rejected":         0,
+		"wl-deny":               0,
+		"ip-block":              0,
+	}
+	samples := map[string][]sample{}
+	pushSample := func(code, line, reason string) {
+		if len(samples[code]) >= 20 {
+			return
+		}
+		samples[code] = append(samples[code], sample{Line: line, Reason: reason})
+	}
+	for _, r := range results {
+		reason := strings.ToLower(strings.TrimSpace(r.Reason))
+		line := strings.TrimSpace(r.Line)
+		switch {
+		case strings.Contains(reason, "mobile_whitelist"), strings.Contains(reason, "not_in_mobile_whitelist"):
+			codes["wl-deny"]++
+			pushSample("wl-deny", line, r.Reason)
+		case strings.Contains(reason, "tcp-dead"), strings.Contains(reason, "tcp"):
+			codes["ip-block"]++
+			pushSample("ip-block", line, r.Reason)
+		case strings.Contains(reason, "xray-handshake-fail"), strings.Contains(reason, "handshake"):
+			codes["probable-provider-dpi"]++
+			codes["tcp-open-but-l7-block"]++
+			pushSample("probable-provider-dpi", line, r.Reason)
+		case strings.Contains(reason, "reject"), strings.Contains(reason, "invalid user"), strings.Contains(reason, "user not found"):
+			codes["uuid-rejected"]++
+			codes["tcp-open-but-l7-block"]++
+			pushSample("uuid-rejected", line, r.Reason)
+		case strings.Contains(reason, "dpi"), strings.Contains(reason, "early_termination"), strings.Contains(reason, "slow_handshake"):
+			codes["probable-provider-dpi"]++
+			codes["tcp-open-but-l7-block"]++
+			pushSample("probable-provider-dpi", line, r.Reason)
+		}
+	}
+	payload := map[string]any{
+		"codes":            codes,
+		"samples":          samples,
+		"generated_at_utc": time.Now().UTC().Format(time.RFC3339),
+	}
+	b, _ := json.MarshalIndent(payload, "", "  ")
+	_ = os.WriteFile(diagOutFile, b, 0o644)
 }
 
 func finalizeResults(okResults []Result, scanTarget, reserveCapacity int, reservesFromWifi []string) {

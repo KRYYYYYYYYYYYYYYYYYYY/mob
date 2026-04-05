@@ -55,7 +55,11 @@ func runPythonMobileCheckerBridge(lines []string) ([]Result, error) {
 		"--input", tmpIn.Name(),
 		"--output", tmpOutPath,
 	)
-	if _, err := os.Stat("test1/mobile_vless_checker_config.example.json"); err == nil {
+	if _, err := os.Stat("test1/stress_profile.json"); err == nil {
+		cmd.Args = append(cmd.Args, "--config", "test1/stress_profile.json")
+	} else if _, err := os.Stat("test1/stress_profile.example.json"); err == nil {
+		cmd.Args = append(cmd.Args, "--config", "test1/stress_profile.example.json")
+	} else if _, err := os.Stat("test1/mobile_vless_checker_config.example.json"); err == nil {
 		cmd.Args = append(cmd.Args, "--config", "test1/mobile_vless_checker_config.example.json")
 	}
 	out, err := cmd.CombinedOutput()
