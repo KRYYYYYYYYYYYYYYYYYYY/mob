@@ -18,6 +18,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock, BoundedSemaphore
 
 from ua_versions import get_mobile_user_agents, maybe_refresh_ua_versions
+from stress_profile_loader import load_stress_profile_file
+from xray_stats_client import query_v2ray_python_stats, query_sqlite_user_presence
 from mobile_vless_checker import (
     HostLimiter as AsyncHostLimiter,
     check_one as async_check_one,
@@ -38,6 +40,8 @@ BLACKLIST_FILE = 'test1/blacklist.txt'
 REASONS_FILE = 'test1/reasons.json'
 CHECK_LOG_FILE = 'test1/check_log.txt'
 RUN_RESULT_FILE = 'test1/run_result.json'
+DIAGNOSTICS_FILE = 'test1/diagnostics.json'
+DIAGNOSTICS_V2_FILE = 'test1/diagnostics_v2.json'
 
 EXTERNAL_SOURCE_URL = [
     "https://raw.githubusercontent.com/zieng2/wl/main/vless_lite.txt",
@@ -1076,6 +1080,14 @@ def extract_host_port(link: str):
         return match.group(0), host, port
     return None, None, None
 
+
+def tcp_port_open(host: str, port: str, timeout: float = 0.8) -> bool:
+    try:
+        with socket.create_connection((host, int(port)), timeout=timeout):
+            return True
+    except Exception:
+        return False
+
 def format_uri_host(host: str) -> str:
     """Упаковывает IPv6 в скобки для использования в ссылке vless."""
     if is_ipv6(host) and not host.startswith("["):
@@ -1165,6 +1177,62 @@ def note_reason(reason_stats: dict, reason: str, base_part: str = "", extra: str
         line += f" | {extra}"
     with open(CHECK_LOG_FILE, "a", encoding="utf-8") as f:
         f.write(line + "\n")
+
+
+def add_diag(diag_stats: dict, code: str, base_part: str = "", extra: str = ""):
+    diag_stats[code] = int(diag_stats.get(code, 0)) + 1
+    if not base_part:
+        return
+    samples = diag_samples.setdefault(code, [])
+    if len(samples) >= 20:
+        return
+    payload = {"base": base_part}
+    if extra:
+        payload["extra"] = extra
+    samples.append(payload)
+
+
+diag_samples: dict[str, list[dict]] = {}
+
+
+def _identifier_from_link(base_part: str, pc: dict | None) -> str:
+    if isinstance(pc, dict):
+        if pc.get("scheme") in {"vless", "vmess"}:
+            return str(pc.get("id", "")).strip()
+        if pc.get("scheme") == "trojan":
+            return str(pc.get("id", "")).strip()
+    parsed = urllib.parse.urlparse(base_part)
+    return (parsed.username or "").strip()
+
+
+def verify_server_side_signal(base_part: str, stress_config: dict, pc: dict | None) -> tuple[bool, dict]:
+    if not stress_config.get("server_stats_enabled", False):
+        return True, {"enabled": False}
+    identifier_mode = str(stress_config.get("server_stats_identifier_mode", "uuid")).strip().lower()
+    if identifier_mode == "base":
+        identifier = base_part
+    else:
+        identifier = _identifier_from_link(base_part, pc)
+    if not identifier:
+        return False, {"enabled": True, "error": "identifier_empty"}
+
+    host = str(stress_config.get("xray_api_host", "127.0.0.1")).strip() or "127.0.0.1"
+    port = int(stress_config.get("xray_api_port", 10085))
+    min_down = max(0, int(stress_config.get("xray_stats_min_downlink_bytes", 1)))
+
+    v2stats = query_v2ray_python_stats(host, port, identifier)
+    if v2stats.get("ok") and v2stats.get("available"):
+        down = int(v2stats.get("downlink", 0))
+        return down >= min_down, {"enabled": True, "source": "v2ray_python", **v2stats}
+
+    db_path = str(stress_config.get("xray_sqlite_db_path", "")).strip()
+    table = str(stress_config.get("xray_sqlite_table", "users")).strip() or "users"
+    column = str(stress_config.get("xray_sqlite_column", "email")).strip() or "email"
+    sqlite_info = query_sqlite_user_presence(db_path, table, column, identifier)
+    if sqlite_info.get("ok"):
+        return bool(sqlite_info.get("present", False)), {"enabled": True, "source": "sqlite", **sqlite_info}
+
+    return False, {"enabled": True, "source": "none", "v2ray": v2stats, "sqlite": sqlite_info}
 
 
 def normalize_rank_entry(base_part: str, entry):
@@ -1304,6 +1372,9 @@ def main():
     token = os.getenv("GH_TOKEN")
     repo = os.getenv("GITHUB_REPOSITORY")
     reason_stats = {}
+    diag_stats = {}
+    diag_samples.clear()
+    diag_tree = []
     # сбрасываем лог текущего прогона
     with open(CHECK_LOG_FILE, "w", encoding="utf-8") as f:
         f.write("")
@@ -1494,11 +1565,18 @@ def main():
         "mobile_whitelist_ips_url": DEFAULT_MOBILE_WHITELIST["ips_url"],
         "mobile_whitelist_cidrs_url": DEFAULT_MOBILE_WHITELIST["cidrs_url"],
         "external_respect_blacklist": True,
+        "server_stats_enabled": False,
+        "server_stats_identifier_mode": "uuid",
+        "xray_api_host": "127.0.0.1",
+        "xray_api_port": 10085,
+        "xray_stats_min_downlink_bytes": 1,
+        "xray_sqlite_db_path": "",
+        "xray_sqlite_table": "users",
+        "xray_sqlite_column": "email",
     }
-    if os.path.exists('test1/stress_profile.json'):
+    data = load_stress_profile_file()
+    if data:
         try:
-            with open('test1/stress_profile.json', 'r') as f:
-                data = json.load(f)
                 stress_config["timeout"] = data.get("max_handshake_ms", 2500) / 1000
                 stress_config["dpi_sleep"] = 0.5 if data.get("mimic_dpi_delay") else 0
                 stress_config["target_mtu"] = data.get("target_mtu", 1280)
@@ -1540,9 +1618,16 @@ def main():
                 stress_config["mobile_whitelist_ips_url"] = str(data.get("mobile_whitelist_ips_url", stress_config["mobile_whitelist_ips_url"])).strip() or stress_config["mobile_whitelist_ips_url"]
                 stress_config["mobile_whitelist_cidrs_url"] = str(data.get("mobile_whitelist_cidrs_url", stress_config["mobile_whitelist_cidrs_url"])).strip() or stress_config["mobile_whitelist_cidrs_url"]
                 stress_config["external_respect_blacklist"] = bool(data.get("external_respect_blacklist", stress_config["external_respect_blacklist"]))
+                stress_config["server_stats_enabled"] = bool(data.get("server_stats_enabled", stress_config["server_stats_enabled"]))
+                stress_config["server_stats_identifier_mode"] = str(data.get("server_stats_identifier_mode", stress_config["server_stats_identifier_mode"])).strip() or "uuid"
+                stress_config["xray_api_host"] = str(data.get("xray_api_host", stress_config["xray_api_host"])).strip() or "127.0.0.1"
+                stress_config["xray_api_port"] = int(data.get("xray_api_port", stress_config["xray_api_port"]))
+                stress_config["xray_stats_min_downlink_bytes"] = int(data.get("xray_stats_min_downlink_bytes", stress_config["xray_stats_min_downlink_bytes"]))
+                stress_config["xray_sqlite_db_path"] = str(data.get("xray_sqlite_db_path", stress_config["xray_sqlite_db_path"])).strip()
+                stress_config["xray_sqlite_table"] = str(data.get("xray_sqlite_table", stress_config["xray_sqlite_table"])).strip() or "users"
+                stress_config["xray_sqlite_column"] = str(data.get("xray_sqlite_column", stress_config["xray_sqlite_column"])).strip() or "email"
         except: pass
-    # Принудительно работаем в mobile-only режиме для отбора под мобильную сеть.
-    stress_config["profile_preset"] = "mobile_strict"
+    # Применяем пресет из единого stress profile (или mobile_strict по умолчанию).
     apply_profile_preset(stress_config, stress_config.get("profile_preset", "mobile_strict"))
     configure_go_probe_profiles(stress_config)
     mobile_whitelist = None
@@ -1618,9 +1703,10 @@ def main():
                     host, port = pc["addr"], str(pc["port"])
                 else:
                     endpoint, host, port = extract_host_port(base_part)
-                    if not endpoint or not host or not port:
-                        note_reason(reason_stats, "skip_bad_endpoint", base_part)
-                        continue
+                if not endpoint or not host or not port:
+                    note_reason(reason_stats, "skip_bad_endpoint", base_part)
+                    add_diag(diag_stats, "uuid-rejected", base_part, "bad_endpoint")
+                    continue
 
                 if host in runtime_blocked_hosts:
                     note_reason(reason_stats, "skip_runtime_blocked_host", base_part, runtime_blocked_hosts[host])
@@ -1633,6 +1719,15 @@ def main():
 
                 if is_ipv6(host):
                     note_reason(reason_stats, "skip_ipv6", base_part)
+                    add_diag(diag_stats, "ip-block", base_part, "ipv6_banned")
+                    diag_tree.append({"base": base_part, "host": host, "tcp_ok": False, "l7_ok": False, "ip_echo_ok": False, "server_stats_ok": False, "confidence": 0, "reason": "ipv6_banned"})
+                    add_to_blacklist(base_part)
+                    continue
+
+                if not tcp_port_open(host, port, timeout=max(0.3, float(stress_config.get("timeout", 1.2)))):
+                    note_reason(reason_stats, "skip_tcp_unreachable", base_part, host)
+                    add_diag(diag_stats, "ip-block", base_part, "tcp_closed_or_filtered")
+                    diag_tree.append({"base": base_part, "host": host, "tcp_ok": False, "l7_ok": False, "ip_echo_ok": False, "server_stats_ok": False, "confidence": 5, "reason": "tcp_closed_or_filtered"})
                     add_to_blacklist(base_part)
                     continue
 
@@ -1659,11 +1754,14 @@ def main():
                         wl_ok, wl_reason = is_link_in_mobile_whitelist(base_part, mobile_whitelist, pc=pc)
                         if not wl_ok:
                             note_reason(reason_stats, wl_reason, base_part)
+                            add_diag(diag_stats, "wl-deny", base_part, wl_reason)
+                            diag_tree.append({"base": base_part, "host": host, "tcp_ok": True, "l7_ok": False, "ip_echo_ok": False, "server_stats_ok": False, "confidence": 10, "reason": wl_reason})
                             add_to_blacklist(base_part)
                             continue
                     elif stress_config.get("mobile_whitelist_enabled", True):
                         if not stress_config.get("mobile_whitelist_fail_open", False):
                             note_reason(reason_stats, "skip_mobile_whitelist_unavailable", base_part)
+                            add_diag(diag_stats, "wl-deny", base_part, "whitelist_unavailable")
                             continue
 
                 batch.append((link, base_part, host))
@@ -1687,6 +1785,24 @@ def main():
                     is_alive, current_latency = False, 0
 
                 if is_alive:
+                    pc_now = parse_any_link_cached(base_part)
+                    server_ok, server_info = verify_server_side_signal(base_part, stress_config, pc_now)
+                    if not server_ok:
+                        note_reason(reason_stats, "fail_server_stats_check", base_part)
+                        add_diag(diag_stats, "uuid-rejected", base_part, "server_stats_not_confirmed")
+                        add_to_blacklist(base_part)
+                        runtime_blocked_hosts[host] = "server_stats_fail"
+                        diag_tree.append({
+                            "base": base_part,
+                            "host": host,
+                            "tcp_ok": True,
+                            "l7_ok": True,
+                            "ip_echo_ok": True,
+                            "server_stats_ok": False,
+                            "confidence": 70,
+                            "server_stats": server_info,
+                        })
+                        continue
                     host_l7_reject_counts[host] = 0
                     ip_counts[host] = ip_counts.get(host, 0) + 1
                     if ip_counts[host] > 5:
@@ -1713,6 +1829,18 @@ def main():
                     working_for_sub.append(final_link)
                     print(f"✅ ОК {len(working_for_base)}/{MAIN_TARGET_SIZE} ({country}): {current_latency}ms")
                     note_reason(reason_stats, "ok", base_part, f"{country},{current_latency}ms")
+                    confidence = 90 + (10 if server_info.get("enabled") and server_info.get("ok", True) else 0)
+                    diag_tree.append({
+                        "base": base_part,
+                        "host": host,
+                        "tcp_ok": True,
+                        "l7_ok": True,
+                        "ip_echo_ok": True,
+                        "server_stats_ok": bool(server_info.get("enabled") is False or server_info.get("ok", False) or server_info.get("available", False)),
+                        "confidence": min(100, confidence),
+                        "latency_ms": current_latency,
+                        "server_stats": server_info,
+                    })
                     counter += 1
                 else:
                     if current_latency < 0:
@@ -1755,6 +1883,24 @@ def main():
 
                         print("⛔ UUID/L7-доступ отклонен (подтверждено повторной проверкой)")
                         note_reason(reason_stats, "fail_l7_reject_confirmed", base_part)
+                        host_has_ok = bool(ip_counts.get(host, 0) > 0)
+                        add_diag(
+                            diag_stats,
+                            "uuid-rejected" if host_has_ok else "probable-provider-dpi",
+                            base_part,
+                            f"host={host}",
+                        )
+                        add_diag(diag_stats, "tcp-open-but-l7-block", base_part, host)
+                        diag_tree.append({
+                            "base": base_part,
+                            "host": host,
+                            "tcp_ok": True,
+                            "l7_ok": False,
+                            "ip_echo_ok": False,
+                            "server_stats_ok": False,
+                            "confidence": 25,
+                            "reason": "l7_reject_confirmed",
+                        })
                         host_l7_reject_counts[host] = host_l7_reject_counts.get(host, 0) + 1
                         # Не блочим хост после единичного L7-отказа:
                         # на одном IP могут жить как битые, так и рабочие UUID.
@@ -1763,10 +1909,32 @@ def main():
                     elif current_latency == -2:
                         print("📉 Нестабильный сервер (сильный разброс/недоступность)")
                         note_reason(reason_stats, "fail_unstable_latency", base_part)
+                        add_diag(diag_stats, "probable-provider-dpi", base_part, "unstable_latency")
+                        diag_tree.append({
+                            "base": base_part,
+                            "host": host,
+                            "tcp_ok": True,
+                            "l7_ok": False,
+                            "ip_echo_ok": False,
+                            "server_stats_ok": False,
+                            "confidence": 20,
+                            "reason": "unstable_latency",
+                        })
                         runtime_blocked_hosts[host] = "unstable"
                     else:
                         print("💀 Мертв")
                         note_reason(reason_stats, "fail_dead", base_part)
+                        add_diag(diag_stats, "ip-block", base_part, "dead_or_timeout")
+                        diag_tree.append({
+                            "base": base_part,
+                            "host": host,
+                            "tcp_ok": False,
+                            "l7_ok": False,
+                            "ip_echo_ok": False,
+                            "server_stats_ok": False,
+                            "confidence": 5,
+                            "reason": "dead_or_timeout",
+                        })
                         runtime_blocked_hosts[host] = "dead"
 
                     add_to_blacklist(base_part)
@@ -1812,6 +1980,41 @@ def main():
         json.dump(ranking_db, f, ensure_ascii=False, indent=4)
     with open(REASONS_FILE, "w", encoding="utf-8") as f:
         json.dump(reason_stats, f, ensure_ascii=False, indent=4)
+    with open(DIAGNOSTICS_FILE, "w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "codes": {
+                    "tcp-open-but-l7-block": int(diag_stats.get("tcp-open-but-l7-block", 0)),
+                    "probable-provider-dpi": int(diag_stats.get("probable-provider-dpi", 0)),
+                    "uuid-rejected": int(diag_stats.get("uuid-rejected", 0)),
+                    "wl-deny": int(diag_stats.get("wl-deny", 0)),
+                    "ip-block": int(diag_stats.get("ip-block", 0)),
+                },
+                "samples": diag_samples,
+                "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+            },
+            f,
+            ensure_ascii=False,
+            indent=2,
+        )
+    with open(DIAGNOSTICS_V2_FILE, "w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+                "profile": {
+                    "server_stats_enabled": bool(stress_config.get("server_stats_enabled", False)),
+                    "server_stats_identifier_mode": stress_config.get("server_stats_identifier_mode", "uuid"),
+                    "xray_api_host": stress_config.get("xray_api_host", "127.0.0.1"),
+                    "xray_api_port": int(stress_config.get("xray_api_port", 10085)),
+                },
+                "summary_codes": diag_stats,
+                "tree_count": len(diag_tree),
+                "tree": diag_tree[:2000],
+            },
+            f,
+            ensure_ascii=False,
+            indent=2,
+        )
 
     print(f"🏁 Завершено. Подписка: {len(working_for_sub)}, Очередь: {len(new_deferred)}")
     print(f"🧾 Reasons: {json.dumps(reason_stats, ensure_ascii=False)}")
