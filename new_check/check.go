@@ -184,14 +184,31 @@ func doHTTPViaSocks(port int) (bool, int) {
 	}
 	client := &http.Client{Transport: tb, Timeout: testTimeout}
 	best := 0
+	ipEchoHit := false
 	for _, u := range testURLs {
 		start := time.Now()
 		resp, err := client.Get(u)
 		if err != nil {
 			continue
 		}
-		io.Copy(io.Discard, resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 		resp.Body.Close()
+		lu := strings.ToLower(u)
+		ok := false
+		switch {
+		case strings.Contains(lu, "generate_204"):
+			ok = resp.StatusCode == http.StatusNoContent && len(body) == 0
+		case strings.Contains(lu, "ipify"):
+			ok = resp.StatusCode == http.StatusOK && net.ParseIP(strings.TrimSpace(string(body))) != nil
+			if ok {
+				ipEchoHit = true
+			}
+		default:
+			ok = resp.StatusCode >= 200 && resp.StatusCode < 400
+		}
+		if !ok {
+			continue
+		}
 		lat := int(time.Since(start).Milliseconds())
 		if lat <= 0 {
 			lat = 1
@@ -200,7 +217,7 @@ func doHTTPViaSocks(port int) (bool, int) {
 			best = lat
 		}
 	}
-	if best == 0 {
+	if best == 0 || !ipEchoHit {
 		return false, 0
 	}
 	return true, best

@@ -20,33 +20,25 @@ func waitIfServeKeep(srv *httpServer) {
 }
 
 func main() {
+	// единый stress profile для всех чекеров
+	applyStressConfigToRuntime()
+
 	// флаги работы чекера
-	flag.IntVar(&workers, "workers", DefaultWorkers, "number of parallel workers")
-	flag.DurationVar(&bootWait, "boot-wait", DefaultBootWait, "wait after xray start")
-	flag.DurationVar(&testTimeout, "test-timeout", DefaultTestTimeout, "HTTP test timeout")
-	flag.DurationVar(&xrayRunBudget, "xray-budget", DefaultXrayRunBudget, "per-check time budget")
-	flag.IntVar(&retrySNI, "retry-sni", DefaultRetrySNI, "max SNI attempts per config")
+	flag.IntVar(&workers, "workers", workers, "number of parallel workers")
+	flag.DurationVar(&bootWait, "boot-wait", bootWait, "wait after xray start")
+	flag.DurationVar(&testTimeout, "test-timeout", testTimeout, "HTTP test timeout")
+	flag.DurationVar(&xrayRunBudget, "xray-budget", xrayRunBudget, "per-check time budget")
+	flag.IntVar(&retrySNI, "retry-sni", retrySNI, "max SNI attempts per config")
 	flag.BoolVar(&enableTCPProbe, "tcp-probe", true, "fast TCP probe before starting xray")
 	flag.IntVar(&maxWorkCfg, "maxworkcfg", 0, "stop after N working configs (0 = unlimited)")
 	flag.BoolVar(&serveKeep, "serve-keep", false, "keep web server running after checks finish")
 	flag.Parse()
-
-	// конфиг веба + старт сервера
-	cfg, err := LoadAppConfig(configJSONPath)
-	if err != nil {
-		// не фатально: создадим шаблон и продолжим
-		fmt.Println("web config:", err)
-	}
-	srv := StartWebServer(cfg)
 
 	// 3. САМОЕ ГЛАВНОЕ: Просто запускаем скан напрямую.
 	// Никаких 'go', никаких фонов. Программа будет работать, пока не закончит.
 	fmt.Println("--- STARTING SCAN ---")
 	RunScanOnce(maxWorkCfg)
 	fmt.Println("--- SCAN FINISHED, SAVING RESULTS ---")
-
-	// 4. Принудительно закрываем сервер и выходим
-	_ = srv.Shutdown()
 	_ = os.Stdout.Sync()
 
 	// Программа завершится сама здесь
