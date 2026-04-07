@@ -1,13 +1,53 @@
-// Cloudflare Worker VLESS config helper (patched)
-// Fixes:
-// 1) Safe URL construction for /sub links (no request.url + "?..." concatenation bug)
-// 2) Generates links in format compatible with: allowinsecure=0, ws, tls, host/sni
+// Cloudflare Worker (ES module) — VLESS link generator patch
+// This file is runnable in Workers and registers fetch handler via export default.
+
+let userID = 'aca4ffc7-be60-4903-8e78-85635849bc37';
+
+export default {
+  /**
+   * @param {import('@cloudflare/workers-types').Request} request
+   * @param {{ UUID?: string }} env
+   */
+  async fetch(request, env) {
+    if (env.UUID) userID = env.UUID;
+
+    const url = new URL(request.url);
+    const host = request.headers.get('Host') || url.hostname;
+    const upgradeHeader = request.headers.get('Upgrade');
+
+    // Keep non-WS routes for config/sub generation.
+    if (!upgradeHeader || upgradeHeader.toLowerCase() !== 'websocket') {
+      switch (url.pathname) {
+        case '/':
+          return new Response('ok', { status: 200 });
+
+        case '/sub': {
+          const links = getSubscriptionLinks(userID, host, request);
+          return new Response(links.join('\n'), {
+            headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+          });
+        }
+
+        case `/${userID}`: {
+          return new Response(getVLESSConfig(userID, host, url), {
+            headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+          });
+        }
+
+        default:
+          return new Response('Not found', { status: 404 });
+      }
+    }
+
+    // Your original WS tunnel functions can be kept as-is below when integrating.
+    // Here we return a clear status instead of silently doing nothing.
+    return new Response('WebSocket tunnel handler is not included in this patch file.', { status: 426 });
+  },
+};
 
 /**
- * @param {string} uuid
- * @param {string} host
- * @param {URL} url
- * @returns {string}
+ * Build VLESS URI compatible with format:
+ * vless://UUID@HOST:443?path=%2Fws&security=tls&encryption=none&alpn=h2,http/1.1&host=HOST&allowinsecure=0&type=ws&sni=HOST#Remark
  */
 function getVLESSConfig(uuid, host, url) {
   const params = url.searchParams;
@@ -15,33 +55,28 @@ function getVLESSConfig(uuid, host, url) {
   const path = params.get('path') || '/ws';
   const alpn = params.get('alpn') || 'h2,http/1.1';
   const remark = params.get('remark') || 'CF';
-  const security = params.get('security') || 'tls';
-  const type = params.get('type') || 'ws';
-  const allowInsecure = params.get('allowinsecure') || '0';
-  const serverName = params.get('sni') || host;
-  const hostHeader = params.get('host') || host;
+  const allowinsecure = params.get('allowinsecure') || '0';
+  const sni = params.get('sni') || host;
+  const wsHost = params.get('host') || host;
 
-  return `vless://${uuid}@${host}:443` +
-    `?path=${encodeURIComponent(path)}` +
-    `&security=${encodeURIComponent(security)}` +
-    `&encryption=none` +
-    `&alpn=${encodeURIComponent(alpn)}` +
-    `&host=${encodeURIComponent(hostHeader)}` +
-    `&allowinsecure=${encodeURIComponent(allowInsecure)}` +
-    `&type=${encodeURIComponent(type)}` +
-    `&sni=${encodeURIComponent(serverName)}` +
-    `#${encodeURIComponent(remark)}`;
+  return `vless://${uuid}@${host}:443`
+    + `?path=${encodeURIComponent(path)}`
+    + `&security=tls`
+    + `&encryption=none`
+    + `&alpn=${alpn}`
+    + `&host=${wsHost}`
+    + `&allowinsecure=${allowinsecure}`
+    + `&type=ws`
+    + `&sni=${sni}`
+    + `#${encodeURIComponent(remark)}`;
 }
 
 /**
- * Build subscription links without malformed URL concatenation.
- * @param {string} userID
- * @param {string} host
- * @param {Request} request
+ * Safe /sub generation without `request.url + "?..."` concatenation bugs.
  */
 function getSubscriptionLinks(userID, host, request) {
   const base = new URL(request.url);
-  const mk = (path, remark) => {
+  const make = (path, remark) => {
     const u = new URL(base.toString());
     u.search = '';
     u.searchParams.set('path', path);
@@ -50,18 +85,8 @@ function getSubscriptionLinks(userID, host, request) {
   };
 
   return [
-    mk('/ws', 'WS'),
-    mk('/vpn', 'VPN'),
-    mk('/', 'ROOT'),
+    make('/ws', 'WS'),
+    make('/vpn', 'VPN'),
+    make('/', 'ROOT'),
   ];
-}
-
-// Example of required format:
-// vless://UUID@HOST:443?path=%2Fws&security=tls&encryption=none&alpn=h2%2Chttp%2F1.1&host=HOST&allowinsecure=0&type=ws&sni=HOST#Remark
-
-// Cloudflare Workers runtime has no CommonJS `module.exports`.
-// Expose helpers on globalThis for easy copy/paste usage in worker.js.
-if (typeof globalThis !== 'undefined') {
-  globalThis.getVLESSConfig = getVLESSConfig;
-  globalThis.getSubscriptionLinks = getSubscriptionLinks;
 }
