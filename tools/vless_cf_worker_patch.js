@@ -59,7 +59,9 @@ function getSubscriptionLinks(userID, host, request) {
 // Example of required format:
 // vless://UUID@HOST:443?path=%2Fws&security=tls&encryption=none&alpn=h2%2Chttp%2F1.1&host=HOST&allowinsecure=0&type=ws&sni=HOST#Remark
 
-module.exports = {
-  getVLESSConfig,
-  getSubscriptionLinks,
-};
+// Cloudflare Workers runtime has no CommonJS `module.exports`.
+// Expose helpers on globalThis for easy copy/paste usage in worker.js.
+if (typeof globalThis !== 'undefined') {
+  globalThis.getVLESSConfig = getVLESSConfig;
+  globalThis.getSubscriptionLinks = getSubscriptionLinks;
+}
