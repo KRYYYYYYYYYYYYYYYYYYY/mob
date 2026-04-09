@@ -1,4 +1,4 @@
-name: 🔄 Update pinned.txt
+name: 🔄 Update pinned + gg
 
 on:
   schedule:
@@ -15,15 +15,53 @@ jobs:
       - name: 📂 Checkout
         uses: actions/checkout@v4
 
-      - name: ⬇️ Download latest file
+      - name: ⬇️ Download source
         run: |
           mkdir -p test1
-          curl -sSL "https://gitverse.ru/api/repos/RoGo/mobile-whitelist/raw/branch/master/mobile-whitelist-1.txt" -o test1/pinned.txt
+          curl -sSL "https://gitverse.ru/api/repos/RoGo/mobile-whitelist/raw/branch/master/mobile-whitelist-1.txt" -o test1/source.txt
 
-      - name: 🔍 Check for changes
+      - name: 📌 Update pinned.txt
+        run: |
+          cp test1/source.txt test1/pinned.txt
+
+      - name: 🧠 Update gg.txt (preserve headers + routing)
+        run: |
+          mkdir -p kr/mob
+
+          # если файла нет — создаём пустой
+          touch kr/mob/gg.txt
+
+          awk '
+            BEGIN {
+              while (getline line < "test1/source.txt") {
+                if (line ~ /^vless:\/\//) vless[++v] = line
+              }
+              close("test1/source.txt")
+              i = 1
+            }
+
+            # сохраняем заголовки и routing как есть
+            /^#/ || /^happ:\/\// {
+              print
+              next
+            }
+
+            # пропускаем старые vless (они будут заменены)
+            /^vless:\/\// {
+              if (i in vless) print vless[i++]
+              next
+            }
+
+            # всё остальное сохраняем
+            { print }
+          ' kr/mob/gg.txt > kr/mob/gg_new.txt
+
+          mv kr/mob/gg_new.txt kr/mob/gg.txt
+
+      - name: 🔍 Check changes
         id: diff
         run: |
-          git add test1/pinned.txt
+          git add test1/pinned.txt kr/mob/gg.txt
           if git diff --cached --quiet; then
             echo "changed=false" >> $GITHUB_OUTPUT
           else
@@ -35,5 +73,5 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git commit -m "Update pinned.txt"
+          git commit -m "Update pinned + gg"
           git push
