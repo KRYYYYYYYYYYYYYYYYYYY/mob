@@ -18,7 +18,7 @@ on:
     types:
       - completed
   schedule:
-    - cron: '*/2 * * * *'
+    - cron: '*/5 * * * *'
 
 jobs:
   push-to-mirror:
@@ -64,7 +64,7 @@ jobs:
       - name: 📝 Create Base64 file
         if: steps.check_file.outputs.should_sync == 'true'
         run: |
-          base64 -w 0 kr/mob/gg.txt > kykyk.ioZjl2e1.txt
+          base64 -w 0 kr/mob/gg.txt > kiky.txt
 
       - name: 🚀 Sync with GitHub and GitVerse
         if: steps.check_file.outputs.should_sync == 'true' && github.event_name != 'pull_request'
@@ -78,10 +78,10 @@ jobs:
           # GitHub
           rm -rf gh_repo
           git clone --quiet "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository_owner }}/kyti.git" gh_repo
-          cp kykyk.ioZjl2e1.txt gh_repo/
+          cp kiky.txt gh_repo/
           cd gh_repo
           if [[ -n $(git status --porcelain) ]]; then
-            git add kykyk.ioZjl2e1.txt
+            git add kiky.txt
             git commit -m "Update from GH Action ${GITHUB_RUN_ID}"
             git push
           fi
@@ -90,9 +90,9 @@ jobs:
           # GitVerse
           rm -rf gv_repo
           git clone --quiet "https://Kreyker:${GV_TOKEN}@gitverse.ru/Kreyker/kyti.git" gv_repo
-          cp kykyk.ioZjl2e1.txt gv_repo/
+          cp kiky.txt gv_repo/
           cd gv_repo
           if [[ -n $(git status --porcelain) ]]; then
-            git add kykyk.ioZjl2e1.txt
+            git add kiky.txt
             git commit -m "Update from GitVerse Sync ${GITHUB_RUN_ID}"
             git push
