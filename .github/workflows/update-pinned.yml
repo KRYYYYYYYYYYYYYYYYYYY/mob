@@ -1,0 +1,31 @@
+name: Update pinned.txt
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"  # каждые 15 минут
+  workflow_dispatch:       # возможность запустить вручную
+
+jobs:
+  update-file:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Download new content
+        run: |
+          curl -sSL "https://gitverse.ru/api/repos/RoGo/mobile-whitelist/raw/branch/master/mobile-whitelist-1.txt" -o test1/pinned.txt
+
+      - name: Commit and push if changed
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add test1/pinned.txt
+
+          if git diff --cached --quiet; then
+            echo "No changes"
+          else
+            git commit -m "Auto-update pinned.txt"
+            git push
+          fi
