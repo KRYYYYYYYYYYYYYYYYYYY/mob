@@ -60,6 +60,7 @@ GRACE_PERIOD = 2 * 24 * 60 * 60
 
 HEADER = """#providerid: ioZjl2e1
 #hide-settings: 1
+#new-url: https://gitverse.ru/api/repos/Kreyker/kyti/raw/branch/main/kykyk.ioZjl2e1.txt#?providerid=ioZjl2e1
 #fallback-url: https://gitverse.ru/api/repos/Kreyker/kyti/raw/branch/main/kykyk.ioZjl2e1.txt#?providerid=ioZjl2e1
 #no-limit-enabled: 1
 #subscription-always-hwid-enable: 1
