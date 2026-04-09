@@ -1,0 +1,108 @@
+name: Smart Sync Base64 Encode2
+
+on:
+  push:
+    branches:
+      - '**'
+    paths:
+      - 'kr/mob/gg.txt'
+      - '.github/workflows/encode2.yml'
+
+  pull_request:
+    paths:
+      - 'kr/mob/gg.txt'
+      - '.github/workflows/encode2.yml'
+
+  workflow_dispatch:
+
+  workflow_run:
+    workflows:
+      - "🔄 Update pinned + gg"
+    types:
+      - completed
+
+  schedule:
+    - cron: '*/5 * * * *'
+
+jobs:
+  push-to-mirror:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📂 Checkout Source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: 🔍 Verify Local File Changes
+        id: check_file
+        run: |
+          FILE_PATH="kr/mob/gg.txt"
+
+          if [ ! -f "$FILE_PATH" ]; then
+            echo "❌ ERROR: File $FILE_PATH not found!"
+            exit 1
+          fi
+
+          EVENT_NAME="${{ github.event_name }}"
+          SHOULD_SYNC="false"
+
+          if [ "$EVENT_NAME" = "push" ]; then
+            BEFORE_SHA="${{ github.event.before }}"
+            if [ -n "$BEFORE_SHA" ] && [ "$BEFORE_SHA" != "0000000000000000000000000000000000000000" ]; then
+              if git diff --name-only "$BEFORE_SHA" "${{ github.sha }}" | grep -Fxq "$FILE_PATH"; then
+                SHOULD_SYNC="true"
+              fi
+            else
+              SHOULD_SYNC="true"
+            fi
+
+          elif [ "$EVENT_NAME" = "pull_request" ]; then
+            if git diff --name-only "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}" | grep -Fxq "$FILE_PATH"; then
+              SHOULD_SYNC="true"
+            fi
+
+          else
+            SHOULD_SYNC="true"
+          fi
+
+          echo "should_sync=$SHOULD_SYNC" >> "$GITHUB_OUTPUT"
+          echo "ℹ️ event=$EVENT_NAME, should_sync=$SHOULD_SYNC"
+
+      - name: 📝 Create Base64 file from GitVerse
+        if: steps.check_file.outputs.should_sync == 'true'
+        run: |
+          curl -sSL "https://gitverse.ru/Kreyker/kyti/content/main/kiky.txt" -o input.txt
+          base64 -w 0 input.txt > encode2.ioZjl2e1.txt
+
+      - name: 🚀 Sync with GitHub and GitVerse
+        if: steps.check_file.outputs.should_sync == 'true' && github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.MY_TOKEN }}
+          GV_TOKEN: ${{ secrets.GITVERSE_TOKEN }}
+        run: |
+          git config --global user.name "SyncBot"
+          git config --global user.email "bot@example.com"
+
+          # GitHub mirror
+          rm -rf gh_repo
+          git clone --quiet "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository_owner }}/kyti.git" gh_repo
+          cp encode2.ioZjl2e1.txt gh_repo/
+          cd gh_repo
+          if [[ -n $(git status --porcelain) ]]; then
+            git add encode2.ioZjl2e1.txt
+            git commit -m "Update encode2 base64 ${GITHUB_RUN_ID}"
+            git push
+          fi
+          cd ..
+
+          # GitVerse mirror
+          rm -rf gv_repo
+          git clone --quiet "https://Kreyker:${GV_TOKEN}@gitverse.ru/Kreyker/kyti.git" gv_repo
+          cp encode2.ioZjl2e1.txt gv_repo/
+          cd gv_repo
+          if [[ -n $(git status --porcelain) ]]; then
+            git add encode2.ioZjl2e1.txt
+            git commit -m "Update encode2 base64 GitVerse ${GITHUB_RUN_ID}"
+            git push
+          fi
