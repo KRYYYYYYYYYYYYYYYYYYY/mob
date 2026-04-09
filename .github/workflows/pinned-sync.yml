@@ -7,6 +7,12 @@ on:
       - "test1/pinned.txt"
       - "sync_pinned_wifi.py"
       - ".github/workflows/pinned-sync.yml"
+
+  workflow_run:
+    workflows: ["🔄 Update pinned.txt"]
+    types:
+      - completed
+
   workflow_dispatch:
 
 concurrency:
@@ -15,9 +21,15 @@ concurrency:
 
 jobs:
   sync:
+    # важно: фильтр только для workflow_run
+    if: |
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.conclusion == 'success'
+
     runs-on: ubuntu-latest
     permissions:
       contents: write
+
     steps:
       - name: 📂 Checkout
         uses: actions/checkout@v4
@@ -30,13 +42,18 @@ jobs:
           python-version: "3.10"
 
       - name: ⚡ Sync pinned -> wifi
-        run: python sync_pinned_wifi.py --previous-ref HEAD~1
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            python sync_pinned_wifi.py
+          else
+            python sync_pinned_wifi.py --previous-ref HEAD~1
+          fi
 
       - name: 💾 Commit changes
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
           git add kr/mob/wifi.txt
-          git commit -m "⚡ Sync wifi pinned block [skip ci]" || echo "No changes to commit"
+          git commit -m "⚡ Sync wifi pinned block [skip ci]" || echo "No changes"
           git pull --rebase -X theirs origin main
           git push origin main
