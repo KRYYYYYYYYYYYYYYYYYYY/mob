@@ -1,176 +1,188 @@
 {
   "codes": {
-    "tcp-open-but-l7-block": 0,
-    "probable-provider-dpi": 0,
+    "tcp-open-but-l7-block": 1,
+    "probable-provider-dpi": 1,
     "uuid-rejected": 0,
-    "wl-deny": 269,
-    "ip-block": 75
+    "wl-deny": 362,
+    "ip-block": 83
   },
   "samples": {
+    "ip-block": [
+      {
+        "base": "trojan://1234567890@172.86.94.189:8443?security=tls&sni=kfm-bn0.pages.dev&insecure=1&allowInsecure=1&type=ws&host=kfm-bn0.pages.dev&path=%2F%3Fed%3D2560%26https%3A%2F%2Ft.me%2FWangCai2%F0%9F%87%A8%F0%9F%87%B3",
+        "extra": "tcp_closed_or_filtered"
+      },
+      {
+        "base": "trojan://1234567890@185.230.163.33:2053?security=tls&sni=kfm-bn0.pages.dev&insecure=1&allowInsecure=1&type=ws&host=kfm-bn0.pages.dev&path=%2F%3Fed%3D2560%26https%3A%2F%2Ft.me%2FWangCai2%F0%9F%87%A8%F0%9F%87%B3",
+        "extra": "tcp_closed_or_filtered"
+      },
+      {
+        "base": "trojan://telegram-id-directvpn@13.36.75.60:22223?security=tls&alpn=http/1.1&headerType=none&type=tcp&sni=trojan.burgerip.co.uk",
+        "extra": "tcp_closed_or_filtered"
+      },
+      {
+        "base": "vless://08125e7d-1b17-458e-88f0-c590d0c60702@51.250.78.186:443?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&fp=random&sni=max.ru&pbk=Ew5a5rNW0ZLY9s4xnI3iZHbNLw2I21bp_kwa5poLcDU&sid=b2a6e3d42f05c3d1&spx=%2F",
+        "extra": "tcp_closed_or_filtered"
+      },
+      {
+        "base": "vless://08c017e5-07a2-4c32-b2b1-c4fa8075463a@217.13.104.133:443?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&fp=randomized&sni=eh.vk.com&pbk=ZGwYjRp5RxlVpHUTPzi7pB4ZZuDU5FZEaFgBM71teiQ&sid=0669a3e6b300d069&spx=%2F",
+        "extra": "tcp_closed_or_filtered"
+      },
+      {
+        "base": "vless://0c8a9f50-51b3-43b5-b1fb-09fc3131a800@gwapp-nl01.freenets.store:8443?type=tcp&security=reality&sni=gwapp-nl01.freenets.store&fp=chrome&pbk=3VpWLkd8rOkubuhzrNMT8sIAdSgMazBQfE3OdMtjKSA&sid=&flow=xtls-rprx-vision",
+        "extra": "tcp_closed_or_filtered"
+      },
+      {
+        "base": "vless://0d7fc7f4-122e-4576-b4cc-c965bd7af243@185.39.206.247:4357?type=tcp&security=reality&encryption=none&flow=xtls-rprx-vision&fp=chrome&pbk=SbVKOEMjK0sIlbwg4akyBg5mL5KZwwB-ed4eEE7YnRc&sid=&sni=files.moscownews24.ru",
+        "extra": "tcp_closed_or_filtered"
+      },
+      {
+        "base": "vless://0d7fc7f4-122e-4576-b4cc-c965bd7af243@185.39.206.247:4357?type=tcp&security=reality&encryption=none&flow=xtls-rprx-vision&fp=chrome&pbk=SbVKOEMjK0sIlbwg4akyBg5mL5KZwwB-ed4eEE7YnRc&sni=files.moscownews24.ru",
+        "extra": "tcp_closed_or_filtered"
+      },
+      {
+        "base": "vless://0d7fc7f4-122e-4576-b4cc-c965bd7af243@217.149.30.32:4403?type=tcp&security=reality&flow=xtls-rprx-vision&fp=chrome&pbk=SbVKOEMjK0sIlbwg4akyBg5mL5KZwwB-ed4eEE7YnRc&sni=files.moscownews24.ru",
+        "extra": "tcp_closed_or_filtered"
+      },
+      {
+        "base": "vless://0d7fc7f4-122e-4576-b4cc-c965bd7af243@217.198.6.95:4397?type=tcp&security=reality&encryption=none&flow=xtls-rprx-vision&fp=chrome&pbk=SbVKOEMjK0sIlbwg4akyBg5mL5KZwwB-ed4eEE7YnRc&sid=&sni=files.moscownews24.ru",
+        "extra": "tcp_closed_or_filtered"
+      },
+      {
+        "base": "vless://0d7fc7f4-122e-4576-b4cc-c965bd7af243@31.130.149.220:4359?type=tcp&security=reality&flow=xtls-rprx-vision&fp=chrome&pbk=SbVKOEMjK0sIlbwg4akyBg5mL5KZwwB-ed4eEE7YnRc&sni=files.moscownews24.ru",
+        "extra": "tcp_closed_or_filtered"
+      },
+      {
+        "base": "vless://0d7fc7f4-122e-4576-b4cc-c965bd7af243@5.42.110.155:4355?type=tcp&security=reality&flow=xtls-rprx-vision&fp=chrome&pbk=SbVKOEMjK0sIlbwg4akyBg5mL5KZwwB-ed4eEE7YnRc&sni=files.moscownews24.ru",
+        "extra": "tcp_closed_or_filtered"
+      },
+      {
+        "base": "vless://0d7fc7f4-122e-4576-b4cc-c965bd7af243@5.42.110.155:4359?type=tcp&security=reality&encryption=none&flow=xtls-rprx-vision&fp=chrome&pbk=SbVKOEMjK0sIlbwg4akyBg5mL5KZwwB-ed4eEE7YnRc&sid=&sni=files.moscownews24.ru",
+        "extra": "tcp_closed_or_filtered"
+      },
+      {
+        "base": "vless://0d7fc7f4-122e-4576-b4cc-c965bd7af243@5.42.124.169:8443?type=tcp&security=reality&encryption=none&flow=xtls-rprx-vision&fp=chrome&pbk=SbVKOEMjK0sIlbwg4akyBg5mL5KZwwB-ed4eEE7YnRc&sni=files.moscownews24.ru",
+        "extra": "tcp_closed_or_filtered"
+      },
+      {
+        "base": "vless://0d7fc7f4-122e-4576-b4cc-c965bd7af243@72.56.33.181:4398?type=tcp&security=reality&flow=xtls-rprx-vision&fp=chrome&pbk=SbVKOEMjK0sIlbwg4akyBg5mL5KZwwB-ed4eEE7YnRc&sni=files.moscownews24.ru",
+        "extra": "tcp_closed_or_filtered"
+      },
+      {
+        "base": "vless://0d7fc7f4-122e-4576-b4cc-c965bd7af243@72.56.8.107:4359?type=tcp&security=reality&encryption=none&flow=xtls-rprx-vision&fp=chrome&pbk=SbVKOEMjK0sIlbwg4akyBg5mL5KZwwB-ed4eEE7YnRc&sni=files.moscownews24.ru",
+        "extra": "tcp_closed_or_filtered"
+      },
+      {
+        "base": "trojan://q2jXRWncMA7pQren_VjQKhSQfoBWK_@160.119.251.210:2083?allowInsecure=1&host=xo.e0f.cx&path=%2Ftrojan-ws&sni=xo.e0f.cx&type=ws",
+        "extra": "dead_or_timeout"
+      },
+      {
+        "base": "trojan://telegram-id-privatevpns@13.36.75.60:22222?security=tls&alpn=http/1.1&headerType=none&type=tcp&sni=trojan.burgerip.co.uk",
+        "extra": "dead_or_timeout"
+      },
+      {
+        "base": "vless://016a5340-e7dc-4cd8-9d11-298300567a49@fi-3-yapi.maxg.ch:443?security=reality&type=tcp&headerType=&path=&host=&flow=xtls-rprx-vision&sni=api-maps.yandex.ru&fp=&pbk=FJ4KCJmIbZw_lLKrIueo8yUEP959xvvCOVXUEc2Zclo&sid=a1b2c3d4e5f6",
+        "extra": "dead_or_timeout"
+      },
+      {
+        "base": "vless://016a5340-e7dc-4cd8-9d11-298300567a49@ch-2-yapi.maxg.ch:443?security=reality&type=tcp&headerType=&path=&host=&flow=xtls-rprx-vision&sni=api-maps.yandex.ru&fp=&pbk=FJ4KCJmIbZw_lLKrIueo8yUEP959xvvCOVXUEc2Zclo&sid=a1b2c3d4e5f6",
+        "extra": "dead_or_timeout"
+      }
+    ],
     "wl-deny": [
       {
-        "base": "vless://016a5340-e7dc-4cd8-9d11-298300567a49@ru-4.maxg.ch:443?security=reality&type=tcp&headerType=&path=&host=&flow=xtls-rprx-vision&sni=ads.x5.ru&fp=&pbk=QlQDX8jxqNJE1qtZmaZCDxE7gZqcLlOKdWd5YKNv0Gg&sid=555b9b33d083d3f1&spx=%252Fcdn-cgi%252Ftrace",
+        "base": "vless://05519058-d2ac-4f28-9e4a-2b2a1386749e@13.36.75.60:22224?type=ws&security=tls&path=%2Ftelegram-channel-vlessconfig&sni=trojan.burgerip.co.uk",
         "extra": "skip_mobile_not_in_whitelist"
       },
       {
-        "base": "vless://0844ceed-af3c-46cd-9d29-2295309a1701@201.rushrushnode.org:10201?type=tcp&security=reality&encryption=none&flow=xtls-rprx-vision&fp=chrome&pbk=GwBhOiy3pLa73zga-wmG07xRfiI71_A9VDi-DiHeBWk&sid=9153&sni=img14.360buyimg.com",
+        "base": "vless://0844ceed-af3c-46cd-9d29-2295309a1701@201.rushrushnode.org:10201?type=tcp&security=reality&encryption=none&flow=xtls-rprx-vision&fp=safari&pbk=GwBhOiy3pLa73zga-wmG07xRfiI71_A9VDi-DiHeBWk&sid=9153&sni=img14.360buyimg.com",
         "extra": "skip_mobile_not_in_whitelist"
       },
       {
-        "base": "vless://0d7fc7f4-122e-4576-b4cc-c965bd7af243@109.196.98.23:4356?type=tcp&security=reality&flow=xtls-rprx-vision&fp=chrome&pbk=SbVKOEMjK0sIlbwg4akyBg5mL5KZwwB-ed4eEE7YnRc&sni=files.moscownews24.ru",
+        "base": "vless://0d7fc7f4-122e-4576-b4cc-c965bd7af243@109.196.98.23:4356?type=tcp&security=reality&flow=xtls-rprx-vision&fp=chrome&pbk=SbVKOEMjK0sIlbwg4akyBg5mL5KZwwB-ed4eEE7YnRc&sni=files.moscownews24.ru&source_name=etoneya_1&provider_id=etoneya_1",
         "extra": "skip_mobile_not_in_whitelist"
       },
       {
-        "base": "vless://0d7fc7f4-122e-4576-b4cc-c965bd7af243@109.196.98.23:4357?type=tcp&security=reality&flow=xtls-rprx-vision&fp=chrome&pbk=SbVKOEMjK0sIlbwg4akyBg5mL5KZwwB-ed4eEE7YnRc&sni=files.moscownews24.ru",
+        "base": "vless://0d7fc7f4-122e-4576-b4cc-c965bd7af243@109.196.98.23:4359?type=tcp&security=reality&flow=xtls-rprx-vision&fp=chrome&pbk=SbVKOEMjK0sIlbwg4akyBg5mL5KZwwB-ed4eEE7YnRc&sni=files.moscownews24.ru",
         "extra": "skip_mobile_not_in_whitelist"
       },
       {
-        "base": "vless://0d7fc7f4-122e-4576-b4cc-c965bd7af243@109.196.98.23:4359?type=tcp&security=reality&encryption=none&flow=xtls-rprx-vision&fp=chrome&pbk=SbVKOEMjK0sIlbwg4akyBg5mL5KZwwB-ed4eEE7YnRc&sid=&sni=files.moscownews24.ru",
+        "base": "vless://0d7fc7f4-122e-4576-b4cc-c965bd7af243@109.196.98.23:4393?type=tcp&security=reality&encryption=none&flow=xtls-rprx-vision&fp=chrome&pbk=SbVKOEMjK0sIlbwg4akyBg5mL5KZwwB-ed4eEE7YnRc&sid=&sni=files.moscownews24.ru",
         "extra": "skip_mobile_not_in_whitelist"
       },
       {
-        "base": "vless://0d7fc7f4-122e-4576-b4cc-c965bd7af243@109.196.98.23:4359?type=tcp&security=reality&encryption=none&flow=xtls-rprx-vision&fp=chrome&pbk=SbVKOEMjK0sIlbwg4akyBg5mL5KZwwB-ed4eEE7YnRc&sni=files.moscownews24.ru",
+        "base": "vless://0d7fc7f4-122e-4576-b4cc-c965bd7af243@109.196.98.23:4393?type=tcp&security=reality&flow=xtls-rprx-vision&fp=chrome&pbk=SbVKOEMjK0sIlbwg4akyBg5mL5KZwwB-ed4eEE7YnRc&sni=files.moscownews24.ru",
         "extra": "skip_mobile_not_in_whitelist"
       },
       {
-        "base": "vless://0d7fc7f4-122e-4576-b4cc-c965bd7af243@109.196.98.23:4393?type=tcp&security=reality&encryption=none&flow=xtls-rprx-vision&fp=chrome&pbk=SbVKOEMjK0sIlbwg4akyBg5mL5KZwwB-ed4eEE7YnRc&sni=files.moscownews24.ru",
+        "base": "vless://0d7fc7f4-122e-4576-b4cc-c965bd7af243@109.196.98.23:4398?type=tcp&security=reality&flow=xtls-rprx-vision&fp=chrome&pbk=SbVKOEMjK0sIlbwg4akyBg5mL5KZwwB-ed4eEE7YnRc&sni=files.moscownews24.ru&source_name=etoneya_1&provider_id=etoneya_1",
         "extra": "skip_mobile_not_in_whitelist"
       },
       {
-        "base": "vless://0d7fc7f4-122e-4576-b4cc-c965bd7af243@185.39.206.247:4357?type=tcp&security=reality&flow=xtls-rprx-vision&fp=chrome&pbk=SbVKOEMjK0sIlbwg4akyBg5mL5KZwwB-ed4eEE7YnRc&sni=files.moscownews24.ru&source_name=etoneya_1&provider_id=etoneya_1",
+        "base": "vless://0d7fc7f4-122e-4576-b4cc-c965bd7af243@147.45.99.236:8443?type=tcp&security=reality&encryption=none&flow=xtls-rprx-vision&fp=chrome&pbk=SbVKOEMjK0sIlbwg4akyBg5mL5KZwwB-ed4eEE7YnRc&sid=&sni=files.moscownews24.ru",
         "extra": "skip_mobile_not_in_whitelist"
       },
       {
-        "base": "vless://0d7fc7f4-122e-4576-b4cc-c965bd7af243@194.26.229.161:4355?type=tcp&security=reality&encryption=none&flow=xtls-rprx-vision&fp=chrome&pbk=SbVKOEMjK0sIlbwg4akyBg5mL5KZwwB-ed4eEE7YnRc&sni=files.moscownews24.ru",
+        "base": "vless://0d7fc7f4-122e-4576-b4cc-c965bd7af243@147.45.99.236:8443?type=tcp&security=reality&encryption=none&flow=xtls-rprx-vision&fp=chrome&pbk=SbVKOEMjK0sIlbwg4akyBg5mL5KZwwB-ed4eEE7YnRc&sni=files.moscownews24.ru",
         "extra": "skip_mobile_not_in_whitelist"
       },
       {
-        "base": "vless://0d7fc7f4-122e-4576-b4cc-c965bd7af243@194.87.151.215:4355?type=tcp&security=reality&flow=xtls-rprx-vision&fp=chrome&pbk=SbVKOEMjK0sIlbwg4akyBg5mL5KZwwB-ed4eEE7YnRc&sni=files.moscownews24.ru",
+        "base": "vless://0d7fc7f4-122e-4576-b4cc-c965bd7af243@147.45.99.236:8443?type=tcp&security=reality&flow=xtls-rprx-vision&fp=chrome&pbk=SbVKOEMjK0sIlbwg4akyBg5mL5KZwwB-ed4eEE7YnRc&sni=files.moscownews24.ru&source_name=etoneya_1&provider_id=etoneya_1",
         "extra": "skip_mobile_not_in_whitelist"
       },
       {
-        "base": "vless://0d7fc7f4-122e-4576-b4cc-c965bd7af243@194.87.151.215:4356?type=tcp&security=reality&encryption=none&flow=xtls-rprx-vision&fp=chrome&pbk=SbVKOEMjK0sIlbwg4akyBg5mL5KZwwB-ed4eEE7YnRc&sni=files.moscownews24.ru",
+        "base": "vless://0d7fc7f4-122e-4576-b4cc-c965bd7af243@194.26.229.119:4356?type=tcp&security=reality&encryption=none&flow=xtls-rprx-vision&fp=chrome&pbk=SbVKOEMjK0sIlbwg4akyBg5mL5KZwwB-ed4eEE7YnRc&sni=files.moscownews24.ru",
         "extra": "skip_mobile_not_in_whitelist"
       },
       {
-        "base": "vless://0d7fc7f4-122e-4576-b4cc-c965bd7af243@194.87.151.215:4356?type=tcp&security=reality&flow=xtls-rprx-vision&fp=chrome&pbk=SbVKOEMjK0sIlbwg4akyBg5mL5KZwwB-ed4eEE7YnRc&sni=files.moscownews24.ru",
+        "base": "vless://0d7fc7f4-122e-4576-b4cc-c965bd7af243@194.26.229.119:4356?type=tcp&security=reality&flow=xtls-rprx-vision&fp=chrome&pbk=SbVKOEMjK0sIlbwg4akyBg5mL5KZwwB-ed4eEE7YnRc&sni=files.moscownews24.ru",
         "extra": "skip_mobile_not_in_whitelist"
       },
       {
-        "base": "vless://0d7fc7f4-122e-4576-b4cc-c965bd7af243@194.87.151.215:4515?type=tcp&security=reality&encryption=none&flow=xtls-rprx-vision&fp=chrome&pbk=SbVKOEMjK0sIlbwg4akyBg5mL5KZwwB-ed4eEE7YnRc&sid=&sni=files.moscownews24.ru",
+        "base": "vless://0d7fc7f4-122e-4576-b4cc-c965bd7af243@194.26.229.119:4359?type=tcp&security=reality&flow=xtls-rprx-vision&fp=chrome&pbk=SbVKOEMjK0sIlbwg4akyBg5mL5KZwwB-ed4eEE7YnRc&sni=files.moscownews24.ru",
         "extra": "skip_mobile_not_in_whitelist"
       },
       {
-        "base": "vless://0d7fc7f4-122e-4576-b4cc-c965bd7af243@194.87.151.215:4515?type=tcp&security=reality&flow=xtls-rprx-vision&fp=chrome&pbk=SbVKOEMjK0sIlbwg4akyBg5mL5KZwwB-ed4eEE7YnRc&sni=files.moscownews24.ru",
+        "base": "vless://0d7fc7f4-122e-4576-b4cc-c965bd7af243@194.26.229.119:4374?type=tcp&security=reality&encryption=none&flow=xtls-rprx-vision&fp=chrome&pbk=SbVKOEMjK0sIlbwg4akyBg5mL5KZwwB-ed4eEE7YnRc&sid=&sni=files.moscownews24.ru",
         "extra": "skip_mobile_not_in_whitelist"
       },
       {
-        "base": "vless://0d7fc7f4-122e-4576-b4cc-c965bd7af243@212.193.26.227:4359?type=tcp&security=reality&encryption=none&flow=xtls-rprx-vision&fp=chrome&pbk=SbVKOEMjK0sIlbwg4akyBg5mL5KZwwB-ed4eEE7YnRc&sni=files.moscownews24.ru",
+        "base": "vless://0d7fc7f4-122e-4576-b4cc-c965bd7af243@194.26.229.119:4374?type=tcp&security=reality&flow=xtls-rprx-vision&fp=chrome&pbk=SbVKOEMjK0sIlbwg4akyBg5mL5KZwwB-ed4eEE7YnRc&sni=files.moscownews24.ru",
         "extra": "skip_mobile_not_in_whitelist"
       },
       {
-        "base": "vless://0d7fc7f4-122e-4576-b4cc-c965bd7af243@212.193.26.227:4424?type=tcp&security=reality&encryption=none&flow=xtls-rprx-vision&fp=chrome&pbk=SbVKOEMjK0sIlbwg4akyBg5mL5KZwwB-ed4eEE7YnRc&sid=&sni=files.moscownews24.ru",
+        "base": "vless://0d7fc7f4-122e-4576-b4cc-c965bd7af243@194.26.229.161:4355?type=tcp&security=reality&encryption=none&flow=xtls-rprx-vision&fp=chrome&pbk=SbVKOEMjK0sIlbwg4akyBg5mL5KZwwB-ed4eEE7YnRc&sid=&sni=files.moscownews24.ru",
         "extra": "skip_mobile_not_in_whitelist"
       },
       {
-        "base": "vless://0d7fc7f4-122e-4576-b4cc-c965bd7af243@217.149.29.185:4424?type=tcp&security=reality&encryption=none&flow=xtls-rprx-vision&fp=chrome&pbk=SbVKOEMjK0sIlbwg4akyBg5mL5KZwwB-ed4eEE7YnRc&sid=&sni=files.moscownews24.ru",
+        "base": "vless://0d7fc7f4-122e-4576-b4cc-c965bd7af243@194.26.229.161:4393?type=tcp&security=reality&encryption=none&flow=xtls-rprx-vision&fp=chrome&pbk=SbVKOEMjK0sIlbwg4akyBg5mL5KZwwB-ed4eEE7YnRc&sid=&sni=files.moscownews24.ru",
         "extra": "skip_mobile_not_in_whitelist"
       },
       {
-        "base": "vless://0d7fc7f4-122e-4576-b4cc-c965bd7af243@217.149.29.185:4430?type=tcp&security=reality&encryption=none&flow=xtls-rprx-vision&fp=chrome&pbk=SbVKOEMjK0sIlbwg4akyBg5mL5KZwwB-ed4eEE7YnRc&sni=files.moscownews24.ru",
+        "base": "vless://0d7fc7f4-122e-4576-b4cc-c965bd7af243@194.26.229.161:4393?type=tcp&security=reality&encryption=none&flow=xtls-rprx-vision&fp=chrome&pbk=SbVKOEMjK0sIlbwg4akyBg5mL5KZwwB-ed4eEE7YnRc&sni=files.moscownews24.ru",
         "extra": "skip_mobile_not_in_whitelist"
       },
       {
-        "base": "vless://0d7fc7f4-122e-4576-b4cc-c965bd7af243@217.149.30.191:4424?type=tcp&security=reality&flow=xtls-rprx-vision&fp=chrome&pbk=SbVKOEMjK0sIlbwg4akyBg5mL5KZwwB-ed4eEE7YnRc&sni=files.moscownews24.ru",
+        "base": "vless://0d7fc7f4-122e-4576-b4cc-c965bd7af243@194.26.229.161:4393?type=tcp&security=reality&flow=xtls-rprx-vision&fp=chrome&pbk=SbVKOEMjK0sIlbwg4akyBg5mL5KZwwB-ed4eEE7YnRc&sni=files.moscownews24.ru",
         "extra": "skip_mobile_not_in_whitelist"
       },
       {
-        "base": "vless://0d7fc7f4-122e-4576-b4cc-c965bd7af243@217.149.30.32:4355?type=tcp&security=reality&encryption=none&flow=xtls-rprx-vision&fp=chrome&pbk=SbVKOEMjK0sIlbwg4akyBg5mL5KZwwB-ed4eEE7YnRc&sid=&sni=files.moscownews24.ru",
+        "base": "vless://0d7fc7f4-122e-4576-b4cc-c965bd7af243@194.26.229.161:4424?type=tcp&security=reality&encryption=none&flow=xtls-rprx-vision&fp=chrome&pbk=SbVKOEMjK0sIlbwg4akyBg5mL5KZwwB-ed4eEE7YnRc&sni=files.moscownews24.ru",
         "extra": "skip_mobile_not_in_whitelist"
       }
     ],
-    "ip-block": [
+    "probable-provider-dpi": [
       {
-        "base": "vless://05519058-d2ac-4f28-9e4a-2b2a1386749e@13.39.164.242:22224?type=ws&security=tls&path=%2Ftelegram-channel-vlessconfig&sni=trojan.burgerip.co.uk",
-        "extra": "tcp_closed_or_filtered"
-      },
+        "base": "vless://5cb12840-6703-4313-a70b-2e8788a00b3d@158.160.125.198:443?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&fp=random&sni=smartcaptcha.yandexcloud.net&pbk=66kZLshj9fxAIQA7NsABohNwgiOcY71enc6as_Frqw0&sid=3c1523da43287ec4&spx=%2F",
+        "extra": "host=158.160.125.198"
+      }
+    ],
+    "tcp-open-but-l7-block": [
       {
-        "base": "vless://0c8a9f50-51b3-43b5-b1fb-09fc3131a800@gwapp-nl01.freenets.store:8443?type=tcp&security=reality&encryption=none&flow=xtls-rprx-vision&fp=chrome&pbk=3VpWLkd8rOkubuhzrNMT8sIAdSgMazBQfE3OdMtjKSA&sni=gwapp-nl01.freenets.store",
-        "extra": "tcp_closed_or_filtered"
-      },
-      {
-        "base": "vless://0d7fc7f4-122e-4576-b4cc-c965bd7af243@72.56.35.203:8443?type=tcp&security=reality&encryption=none&flow=xtls-rprx-vision&fp=chrome&pbk=SbVKOEMjK0sIlbwg4akyBg5mL5KZwwB-ed4eEE7YnRc&sni=files.moscownews24.ru",
-        "extra": "tcp_closed_or_filtered"
-      },
-      {
-        "base": "vless://0e3ffa82-20c1-400e-b5fd-eaa7e5a45fd1@62.152.59.113:443?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&fp=qq&sni=smartcaptcha.yandexcloud.net&pbk=1vSZjvhZO01oAEH3b7eebR1qF5dLU1Dq2E7xu8pwGSs&sid=428ef87fd47a3a32",
-        "extra": "tcp_closed_or_filtered"
-      },
-      {
-        "base": "vless://13c8cd10-d1b2-478e-a38c-88487b22e215@62.152.59.122:443?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&fp=qq&sni=smartcaptcha.yandexcloud.net&pbk=1vSZjvhZO01oAEH3b7eebR1qF5dLU1Dq2E7xu8pwGSs&sid=428ef87fd47a3a32",
-        "extra": "tcp_closed_or_filtered"
-      },
-      {
-        "base": "vless://2983c1d0-2c98-4e16-a92a-a64351ec2b30@eston2.o4ka-internet.com:443?type=tcp&security=reality&encryption=none&flow=xtls-rprx-vision&fp=chrome&pbk=V2JprbR_aJkS7uX6anyU3nrswGxdvDQT2HpY4WnzuC8&sid=5629431325884ff0&sni=eston2.o4ka-internet.com",
-        "extra": "tcp_closed_or_filtered"
-      },
-      {
-        "base": "vless://2983c1d0-2c98-4e16-a92a-a64351ec2b30@eston2.o4ka-internet.com:443?type=tcp&security=reality&encryption=none&flow=xtls-rprx-vision&fp=random&pbk=V2JprbR_aJkS7uX6anyU3nrswGxdvDQT2HpY4WnzuC8&sid=5629431325884ff0&sni=eston2.o4ka-internet.com&spx=/",
-        "extra": "tcp_closed_or_filtered"
-      },
-      {
-        "base": "trojan://telegram-id-directvpn@13.39.164.242:22223?security=tls&alpn=http/1.1&headerType=none&type=tcp&sni=trojan.burgerip.co.uk",
-        "extra": "dead_or_timeout"
-      },
-      {
-        "base": "trojan://telegram-id-privatevpns@13.39.164.242:22222?security=tls&alpn=http/1.1&headerType=none&type=tcp&sni=trojan.burgerip.co.uk",
-        "extra": "dead_or_timeout"
-      },
-      {
-        "base": "vless://187034d2-ce5b-4487-b82a-f7964dda69ba@95.85.249.1:443?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&fp=chrome&sni=m.vkvideo.cs7777.vk.ru&pbk=dfpjZXFTymcxlvi1QnQwuja8AVmTBtHiKMOecY3_l2E",
-        "extra": "dead_or_timeout"
-      },
-      {
-        "base": "vless://0ebd2a93-bb87-4073-baa6-843af0ad28ea@217.168.240.172:3443?encryption=none&type=xhttp&security=reality&path=%2F&mode=auto&extra=null&fp=chrome&sni=max.ru&pbk=XqH-gNEL9eJfr1pglaI8WU3OvE654_5duXYBS35UXlM&sid=ab",
-        "extra": "dead_or_timeout"
-      },
-      {
-        "base": "vless://0e2b4a50-8ebe-45b4-b2cc-d0ae7f972e4f@91.84.121.138:443?type=tcp&security=reality&encryption=none&sni=max.ru&fp=chrome&pbk=14mbxpFBwnpp817ZLgT-6dVqsOmNPIaH7ygYcYScjGg&sid=2b4790ccbac1edb2&flow=xtls-rprx-vision",
-        "extra": "dead_or_timeout"
-      },
-      {
-        "base": "vless://2983c1d0-2c98-4e16-a92a-a64351ec2b30@109.120.189.4:443?type=tcp&security=reality&encryption=none&flow=xtls-rprx-vision&fp=random&pbk=YnOlmcxFiHgitIcjba45C7z6kw7txOWnImgSfMCtsiA&sid=1da44564cda563cc&sni=ads.x5.ru&source_name=etoneya_1&provider_id=etoneya_1",
-        "extra": "dead_or_timeout"
-      },
-      {
-        "base": "vless://34222749-f6ff-457e-887b-ff11f3cec0a2@5.188.140.193:8443?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&fp=chrome&sni=ads.x5.ru&pbk=RDVV8uSBORVgujz5BYVvzqDTziYJZI5hiISGSNR_30M&sid=b44a71b9",
-        "extra": "tcp_closed_or_filtered"
-      },
-      {
-        "base": "vless://34222749-f6ff-457e-887b-ff11f3cec0a2@jp5.wequ.host:8443?type=tcp&security=reality&encryption=none&flow=xtls-rprx-vision&fp=qq&pbk=B5LCxNoMq6SZff41mG8h4qaTWXl3gFn_PAt1Vh-Kaxc&sid=c8efb482&sni=jp5.wequ.host&spx=/",
-        "extra": "tcp_closed_or_filtered"
-      },
-      {
-        "base": "vless://34222749-f6ff-457e-887b-ff11f3cec0a2@lte19.wequ.host:5443?type=tcp&security=reality&encryption=none&flow=xtls-rprx-vision&fp=qq&pbk=juJZSsGzwMgRzK5nZlSheJyfF46I7kD205rwMoHSlCI&sid=0b2998bc&sni=max.ru&spx=/",
-        "extra": "tcp_closed_or_filtered"
-      },
-      {
-        "base": "vless://36a2677c-15fa-4cce-a3ab-598fa6e4dfd1@87.121.82.13:33936?type=tcp&security=reality&encryption=none&flow=xtls-rprx-vision&fp=chrome&pbk=fHYPVpBboesMf_SCl4V-O9-L93ksqs9t9yp6bxKt4Wo&sid=bd2a259882&sni=sso.passport.yandex.ru&spx=%2525252525252525252525252F",
-        "extra": "tcp_closed_or_filtered"
-      },
-      {
-        "base": "vless://37bcd084-a17c-44da-9868-ad5c4632cf8c@217.149.30.74:4357?type=tcp&security=reality&flow=xtls-rprx-vision&fp=chrome&pbk=SbVKOEMjK0sIlbwg4akyBg5mL5KZwwB-ed4eEE7YnRc&sni=files.moscownews24.ru",
-        "extra": "tcp_closed_or_filtered"
-      },
-      {
-        "base": "vless://37bcd084-a17c-44da-9868-ad5c4632cf8c@5.129.242.10:4430?type=tcp&security=reality&encryption=none&flow=xtls-rprx-vision&fp=chrome&pbk=SbVKOEMjK0sIlbwg4akyBg5mL5KZwwB-ed4eEE7YnRc&sni=files.moscownews24.ru",
-        "extra": "tcp_closed_or_filtered"
-      },
-      {
-        "base": "vless://37bcd084-a17c-44da-9868-ad5c4632cf8c@72.56.235.116:4289?type=tcp&security=reality&encryption=none&flow=xtls-rprx-vision&fp=chrome&pbk=SbVKOEMjK0sIlbwg4akyBg5mL5KZwwB-ed4eEE7YnRc&sid=&sni=files.moscownews24.ru",
-        "extra": "tcp_closed_or_filtered"
+        "base": "vless://5cb12840-6703-4313-a70b-2e8788a00b3d@158.160.125.198:443?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&fp=random&sni=smartcaptcha.yandexcloud.net&pbk=66kZLshj9fxAIQA7NsABohNwgiOcY71enc6as_Frqw0&sid=3c1523da43287ec4&spx=%2F",
+        "extra": "158.160.125.198"
       }
     ]
   },
-  "generated_at_utc": "2026-04-21T14:35:26.121063+00:00"
+  "generated_at_utc": "2026-04-21T16:09:03.340896+00:00"
 }
