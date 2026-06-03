@@ -1,118 +1,92 @@
 {
   "codes": {
-    "tcp-open-but-l7-block": 5,
-    "probable-provider-dpi": 5,
+    "tcp-open-but-l7-block": 0,
+    "probable-provider-dpi": 0,
     "uuid-rejected": 0,
-    "wl-deny": 0,
-    "ip-block": 15
+    "wl-deny": 9,
+    "ip-block": 10
   },
   "samples": {
     "ip-block": [
       {
-        "base": "vless://00c6bc94-091d-4683-ad0d-3ba06f20f95c@158.160.53.108:443?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&fp=safari&sni=yandex.ru&pbk=CF49-iS9dsHBwvqYFoDs_T3Me8TT0FpNW2kibGBkVXY",
+        "base": "vless://00c6bc94-091d-4683-ad0d-3ba06f20f95c@84.201.159.182:443?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&fp=chrome&sni=yandex.ru&pbk=WrPShaEtQUXeKeyWDuELzBsd_ygDsU-k2bL1Avi13xI",
         "extra": "tcp_closed_or_filtered"
       },
       {
-        "base": "vless://08fe5dc7-1d5b-4767-b695-ff8c9047729b@158.160.53.108:443?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&fp=safari&sni=yandex.ru&pbk=CF49-iS9dsHBwvqYFoDs_T3Me8TT0FpNW2kibGBkVXY",
+        "base": "vless://0517686a-e987-4adb-ab6f-2ff8c2d8e7ed@176.109.101.215:7443?encryption=none&type=tcp&security=reality&fp=chrome&sni=sso.passport.yandex.ru&pbk=Z84J2IelR9ch3k8VtlVhhs5ycBUlXA7wHBWcBrjqnAw&sid=7dbf7d3233971d5c",
         "extra": "tcp_closed_or_filtered"
       },
       {
-        "base": "vless://07ab8a15-a4a5-4a03-92b4-4e6a2e9aa5e7@poland.boot-lee.ru:8443?type=tcp&headerType=none&security=reality&encryption=none&sni=api-maps.yandex.ru&fp=qq&pbk=RlAi5R84YF3U7llMLLoEui7R7nXhNWYWWy8Zukoo0m8&sid=019ae4dcc8f3aae7&flow=xtls-rprx-vision",
-        "extra": "dead_or_timeout"
-      },
-      {
-        "base": "vless://007a8322-ee79-4426-87cf-b8aceaa9b50a@158.160.135.170:443?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&fp=edge&sni=eh.vk.com&pbk=jSx3_X_tBAcNgp7SrKSfZnr5WN0cTN2ShEJv4rHceQU",
-        "extra": "dead_or_timeout"
-      },
-      {
-        "base": "vless://0635abbd-a3e3-4af4-9b8c-9f68255853f0@51.250.24.232:443?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&fp=safari&sni=cdp.x5.ru&pbk=wgXD4k3A16WR0aL63N9Mx8xoqFigJLyQWJXi-l3MPXI&sid=8ec792bfd725be8a",
-        "extra": "dead_or_timeout"
-      },
-      {
-        "base": "vless://07f26ed3-6727-40c4-bbfd-91e52534adb7@51.250.17.80:443?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&fp=safari&sni=cdp.x5.ru&pbk=wgXD4k3A16WR0aL63N9Mx8xoqFigJLyQWJXi-l3MPXI&sid=8ec792bfd725be8a",
-        "extra": "dead_or_timeout"
-      },
-      {
-        "base": "vless://007a8322-ee79-4426-87cf-b8aceaa9b50a@158.160.135.170:443?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&fp=firefox&sni=sun6-22.userapi.com&pbk=jSx3_X_tBAcNgp7SrKSfZnr5WN0cTN2ShEJv4rHceQU",
-        "extra": "dead_or_timeout"
-      },
-      {
-        "base": "vless://07f26ed3-6727-40c4-bbfd-91e52534adb7@51.250.24.232:443?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&fp=safari&sni=cdp.x5.ru&pbk=wgXD4k3A16WR0aL63N9Mx8xoqFigJLyQWJXi-l3MPXI&sid=8ec792bfd725be8a",
-        "extra": "dead_or_timeout"
-      },
-      {
-        "base": "vless://0519d1ca-5f0b-40a1-9fb2-619d0b7794dc@158.160.135.170:443?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&fp=chrome&sni=rambler.ru&pbk=jSx3_X_tBAcNgp7SrKSfZnr5WN0cTN2ShEJv4rHceQU",
-        "extra": "dead_or_timeout"
-      },
-      {
-        "base": "vless://0519d1ca-5f0b-40a1-9fb2-619d0b7794dc@158.160.135.170:443?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&fp=edge&sni=eh.vk.com&pbk=jSx3_X_tBAcNgp7SrKSfZnr5WN0cTN2ShEJv4rHceQU",
-        "extra": "dead_or_timeout"
-      },
-      {
-        "base": "vless://0519d1ca-5f0b-40a1-9fb2-619d0b7794dc@158.160.135.170:443?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&fp=firefox&sni=ads.x5.ru&pbk=jSx3_X_tBAcNgp7SrKSfZnr5WN0cTN2ShEJv4rHceQU",
-        "extra": "dead_or_timeout"
-      },
-      {
-        "base": "vless://0910f729-be7f-475e-8e68-1e2417b362c6@5.188.114.240:443?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&fp=qq&sni=ads.x5.ru&pbk=c8fQY4Ywo9NPZS0CuujyztRI-8z0D7fREoz8laMDVkQ&sid=a9c4f17e3b62d8",
+        "base": "vless://0eed9d53-0d6a-4666-a685-dd2b9b47a0cb@158.160.206.199:443?encryption=none&type=grpc&security=reality&mode=gun&fp=chrome&sni=ads.x5.ru&pbk=AvSwsAIp3t2sTvNDZwTPkbcanvu9wtvLyZ6FCzIM-Rk&sid=7ada97abaa&spx=%2F",
         "extra": "tcp_closed_or_filtered"
       },
       {
-        "base": "vless://2638d176-c098-4aa4-9a0a-221985c5160a@185.91.53.153:443?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&fp=firefox&sni=5post-gate.x5.ru&pbk=kDGigLxn2RUJ8HqhPVUb8pRAcjn5zMhR0-QrORmbIDk&sid=be6abde66d48cd13&spx=%2F",
+        "base": "vless://0517686a-e987-4adb-ab6f-2ff8c2d8e7ed@176.109.101.215:7443?encryption=none&type=tcp&security=reality&fp=chrome&sni=eh.vk.com&pbk=Z84J2IelR9ch3k8VtlVhhs5ycBUlXA7wHBWcBrjqnAw&sid=7dbf7d3233971d5c",
+        "extra": "dead_or_timeout"
+      },
+      {
+        "base": "vless://0517686a-e987-4adb-ab6f-2ff8c2d8e7ed@176.109.101.215:7443?encryption=none&type=tcp&security=reality&fp=chrome&sni=max.ru&pbk=Z84J2IelR9ch3k8VtlVhhs5ycBUlXA7wHBWcBrjqnAw&sid=7dbf7d3233971d5c",
+        "extra": "dead_or_timeout"
+      },
+      {
+        "base": "vless://12cef4c0-3628-49d3-9bfe-8843572dad8e@5.188.114.240:443?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&fp=qq&sni=ads.x5.ru&pbk=c8fQY4Ywo9NPZS0CuujyztRI-8z0D7fREoz8laMDVkQ&sid=5d8e1a9c4f72b3",
         "extra": "tcp_closed_or_filtered"
       },
       {
-        "base": "vless://2638d176-c098-4aa4-9a0a-221985c5160a@87.228.101.37:443?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&fp=firefox&sni=api-maps.yandex.ru&pbk=kDGigLxn2RUJ8HqhPVUb8pRAcjn5zMhR0-QrORmbIDk&sid=be6abde66d48cd13&spx=%2F",
+        "base": "vless://2638d176-c098-4aa4-9a0a-221985c5160a@87.228.101.37:443?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&fp=firefox&sni=5post-gate.x5.ru&pbk=kDGigLxn2RUJ8HqhPVUb8pRAcjn5zMhR0-QrORmbIDk&sid=be6abde66d48cd13&spx=%2F",
         "extra": "tcp_closed_or_filtered"
       },
       {
-        "base": "vless://2638d176-c098-4aa4-9a0a-221985c5160a@87.228.101.57:443?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&fp=firefox&sni=5post-gate.x5.ru&pbk=kDGigLxn2RUJ8HqhPVUb8pRAcjn5zMhR0-QrORmbIDk&sid=be6abde66d48cd13&spx=%2F",
-        "extra": "tcp_closed_or_filtered"
+        "base": "vless://22f97634-cb4f-4661-b9e0-9d3865544e1e@2.27.59.11:8443?type=grpc&headerType=none&security=reality&encryption=none&sni=max.ru&fp=chrome&pbk=TdT90qbeyM7WO0QCztOhKDGKOi2qaFFif0hO0cfK1E4&sid=ea1058117be12087&spx=%2F&serviceName=max.ru",
+        "extra": "dead_or_timeout"
+      },
+      {
+        "base": "vless://22f97634-cb4f-4661-b9e0-9d3865544e1e@132.243.65.107:8443?type=grpc&headerType=none&security=reality&encryption=none&sni=max.ru&fp=chrome&pbk=TdT90qbeyM7WO0QCztOhKDGKOi2qaFFif0hO0cfK1E4&sid=ea1058117be12087&spx=%2F&serviceName=max.ru",
+        "extra": "dead_or_timeout"
+      },
+      {
+        "base": "vless://22f97634-cb4f-4661-b9e0-9d3865544e1e@132.243.223.219:8443?type=grpc&headerType=none&security=reality&encryption=none&sni=max.ru&fp=chrome&pbk=TdT90qbeyM7WO0QCztOhKDGKOi2qaFFif0hO0cfK1E4&sid=ea1058117be12087&spx=%2F&serviceName=max.ru",
+        "extra": "dead_or_timeout"
       }
     ],
-    "probable-provider-dpi": [
+    "wl-deny": [
       {
-        "base": "vless://01c1f334-7b0e-03e8-8b90-51f04436e2ea@89.208.231.191:52006?flow=xtls-rprx-vision&encryption=none&type=tcp&security=tls&fp=chrome&alpn=h2%2Chttp%2F1.1",
-        "extra": "host=89.208.231.191"
+        "base": "vless://043f16ef-848d-4bf8-b2b5-df7a87e6ef6e@51.250.104.246:443?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&fp=safari&sni=cdp.x5.ru&pbk=wgXD4k3A16WR0aL63N9Mx8xoqFigJLyQWJXi-l3MPXI&sid=8ec792bfd725be8a",
+        "extra": "skip_mobile_not_in_whitelist"
       },
       {
-        "base": "vless://01c1f334-7b0e-07d0-8b90-51f04436e2ea@89.208.231.191:52006?flow=xtls-rprx-vision&encryption=none&type=tcp&security=tls&fp=chrome&alpn=h2%2Chttp%2F1.1",
-        "extra": "host=89.208.231.191"
+        "base": "vless://0517686a-e987-4adb-ab6f-2ff8c2d8e7ed@176.109.101.215:8083?encryption=none&type=tcp&security=reality&fp=qq&sni=ads.x5.ru&pbk=Z84J2IelR9ch3k8VtlVhhs5ycBUlXA7wHBWcBrjqnAw&sid=7dbf7d3233971d5c",
+        "extra": "skip_mobile_not_in_whitelist"
       },
       {
-        "base": "vless://01c1f334-7b0e-0bb8-8b90-51f04436e2ea@89.208.231.191:52006?flow=xtls-rprx-vision&encryption=none&type=tcp&security=tls&fp=chrome&alpn=h2%2Chttp%2F1.1",
-        "extra": "host=89.208.231.191"
+        "base": "vless://0517686a-e987-4adb-ab6f-2ff8c2d8e7ed@176.109.101.215:8444?encryption=none&type=tcp&security=reality&fp=qq&sni=ads.x5.ru&pbk=Z84J2IelR9ch3k8VtlVhhs5ycBUlXA7wHBWcBrjqnAw&sid=7dbf7d3233971d5c",
+        "extra": "skip_mobile_not_in_whitelist"
       },
       {
-        "base": "vless://01c1f334-7b0e-1f40-8b90-51f04436e2ea@89.208.231.191:52006?flow=xtls-rprx-vision&encryption=none&type=tcp&security=tls&fp=chrome&alpn=h2%2Chttp%2F1.1",
-        "extra": "host=89.208.231.191"
+        "base": "vless://06c3711f-a732-4b24-89b9-9276b5601af2@de2.pink-service.ru:443?type=tcp&headerType=none&security=reality&encryption=none&sni=de.pink-service.ru&fp=qq&pbk=2fgsbEAn-ALVpjnE4ZTPrzaZY70vVplYwldCnslInE0&sid=86b80f1e713a33ad&flow=xtls-rprx-vision",
+        "extra": "skip_mobile_not_in_whitelist"
       },
       {
-        "base": "vless://01c1f334-7b0e-2328-8b90-51f04436e2ea@89.208.231.191:52006?flow=xtls-rprx-vision&encryption=none&type=tcp&security=tls&fp=chrome&alpn=h2%2Chttp%2F1.1",
-        "extra": "host=89.208.231.191"
-      }
-    ],
-    "tcp-open-but-l7-block": [
-      {
-        "base": "vless://01c1f334-7b0e-03e8-8b90-51f04436e2ea@89.208.231.191:52006?flow=xtls-rprx-vision&encryption=none&type=tcp&security=tls&fp=chrome&alpn=h2%2Chttp%2F1.1",
-        "extra": "89.208.231.191"
+        "base": "vless://22f97634-cb4f-4661-b9e0-9d3865544e1e@194.113.34.202:8443?encryption=none&security=reality&fp=chrome&pbk=TdT90qbeyM7WO0QCztOhKDGKOi2qaFFif0hO0cfK1E4&sid=ea1058117be12087&spx=%2F&type=grpc&authority=&serviceName=max.ru&mode=multi",
+        "extra": "skip_mobile_not_in_whitelist"
       },
       {
-        "base": "vless://01c1f334-7b0e-07d0-8b90-51f04436e2ea@89.208.231.191:52006?flow=xtls-rprx-vision&encryption=none&type=tcp&security=tls&fp=chrome&alpn=h2%2Chttp%2F1.1",
-        "extra": "89.208.231.191"
+        "base": "vless://22f97634-cb4f-4661-b9e0-9d3865544e1e@194.113.34.202:8443?type=grpc&headerType=none&security=reality&encryption=none&fp=chrome&pbk=TdT90qbeyM7WO0QCztOhKDGKOi2qaFFif0hO0cfK1E4&sid=ea1058117be12087&spx=%2F&serviceName=max.ru",
+        "extra": "skip_mobile_not_in_whitelist"
       },
       {
-        "base": "vless://01c1f334-7b0e-0bb8-8b90-51f04436e2ea@89.208.231.191:52006?flow=xtls-rprx-vision&encryption=none&type=tcp&security=tls&fp=chrome&alpn=h2%2Chttp%2F1.1",
-        "extra": "89.208.231.191"
+        "base": "vless://22f97634-cb4f-4661-b9e0-9d3865544e1e@45.198.0.213:8443?type=grpc&headerType=none&security=reality&encryption=none&fp=chrome&pbk=TdT90qbeyM7WO0QCztOhKDGKOi2qaFFif0hO0cfK1E4&sid=ea1058117be12087&spx=%2F&serviceName=max.ru",
+        "extra": "skip_mobile_not_in_whitelist"
       },
       {
-        "base": "vless://01c1f334-7b0e-1f40-8b90-51f04436e2ea@89.208.231.191:52006?flow=xtls-rprx-vision&encryption=none&type=tcp&security=tls&fp=chrome&alpn=h2%2Chttp%2F1.1",
-        "extra": "89.208.231.191"
+        "base": "vless://24ebe7f7-653f-4fd9-95ba-a9ddbba51cdf@lt1.cyphervpn.pro:443?type=tcp&headerType=none&security=reality&encryption=none&sni=lt1.cyphervpn.pro&fp=firefox&pbk=USffNprEM08MHiuVy5bj6-kvxugxycuZcgQDFJyz2Wc&sid=8f9d033ad6d2cebf&flow=xtls-rprx-vision",
+        "extra": "skip_mobile_not_in_whitelist"
       },
       {
-        "base": "vless://01c1f334-7b0e-2328-8b90-51f04436e2ea@89.208.231.191:52006?flow=xtls-rprx-vision&encryption=none&type=tcp&security=tls&fp=chrome&alpn=h2%2Chttp%2F1.1",
-        "extra": "89.208.231.191"
+        "base": "vless://24ebe7f7-653f-4fd9-95ba-a9ddbba51cdf@nl1.cyphervpn.pro:2443?type=tcp&headerType=none&security=reality&encryption=none&sni=nl1.cyphervpn.pro&fp=firefox&pbk=USffNprEM08MHiuVy5bj6-kvxugxycuZcgQDFJyz2Wc&sid=8f9d033ad6d2cebf&flow=xtls-rprx-vision",
+        "extra": "skip_mobile_not_in_whitelist"
       }
     ]
   },
-  "generated_at_utc": "2026-06-03T17:56:08.251845+00:00"
+  "generated_at_utc": "2026-06-03T20:46:32.322549+00:00"
 }
