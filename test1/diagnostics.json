@@ -1,128 +1,196 @@
 {
   "codes": {
-    "tcp-open-but-l7-block": 1,
-    "probable-provider-dpi": 1,
+    "tcp-open-but-l7-block": 5,
+    "probable-provider-dpi": 5,
     "uuid-rejected": 0,
-    "wl-deny": 5,
-    "ip-block": 24
+    "wl-deny": 14,
+    "ip-block": 20
   },
   "samples": {
     "ip-block": [
       {
-        "base": "ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTpZcEdaelk4aE5kRk81R1hj@20.164.211.148:443",
+        "base": "ss://7131f38f-9a4a-4e38-ae1d-aa9e132265ea@proxy.wastech.org:443?Telegram=&security=tls&encryption=none&insecure=0&headerType=none&fp=chrome&type=tcp&allowInsecure=0&sni=&note=",
         "extra": "tcp_closed_or_filtered"
       },
       {
-        "base": "vless://0752b610-6fd0-4382-a40c-39d59b416a1e@fr.gsupport.support:443?type=tcp&headerType=none&security=reality&encryption=none&sni=video.intfreed.ru&fp=safari&pbk=JxwG7rAbNCd_C82p9K69AZDWh51fri2nm3wLHHrfyiw&sid=7755e972daf8eec8&flow=xtls-rprx-vision",
+        "base": "ss://86eda06a-375d-43e9-b475-56bb340fba5d@dewarp.xtrustnet.sbs:443?security=reality&encryption=none&pbk=lGgOeXX3YPrL2dk3_cFjVapmErxrrNURexmCas1IDRc&headerType=none&fp=chrome&type=tcp&sni=dewarp.xtrustnet.sbs&sid=0123456789abcdef",
         "extra": "tcp_closed_or_filtered"
       },
       {
-        "base": "vless://0752b610-6fd0-4382-a40c-39d59b416a1e@sw2.gsupport.support:443?type=tcp&headerType=none&security=reality&encryption=none&sni=video.intfreed.ru&fp=safari&pbk=JxwG7rAbNCd_C82p9K69AZDWh51fri2nm3wLHHrfyiw&sid=7755e972daf8eec8&flow=xtls-rprx-vision",
+        "base": "ss://931729a8-3c20-4841-89a1-f18dc9ce0a6f@cdn9-33.vk-cdnvideo.com:8443?security=tls&encryption=none&headerType=none&fp=chrome&allowinsecure=0&type=tcp&sni=cdn9-33.vk-cdnvideo.com",
         "extra": "tcp_closed_or_filtered"
       },
       {
-        "base": "vless://0f63f4d4-910c-4bf6-8d7c-5822672eb2e3@5.188.114.178:443?encryption=none&type=xhttp&security=reality&path=%2Fapi%2Fv2%2F&mode=packet-up&extra=%7B%22host%22%3A%22%22%2C%22path%22%3A%22%22%2C%22mode%22%3A%22packet-up%22%2C%22headers%22%3Anull%2C%22xPaddingBytes%22%3A%22100-1000%22%2C%22xPaddingObfsMode%22%3Afalse%2C%22xPaddingKey%22%3A%22%22%2C%22xPaddingHeader%22%3A%22%22%2C%22xPaddingPlacement%22%3A%22%22%2C%22xPaddingMethod%22%3A%22%22%2C%22uplinkHTTPMethod%22%3A%22%22%2C%22sessionPlacement%22%3A%22%22%2C%22sessionKey%22%3A%22%22%2C%22seqPlacement%22%3A%22%22%2C%22seqKey%22%3A%22%22%2C%22uplinkDataPlacement%22%3A%22%22%2C%22uplinkDataKey%22%3A%22%22%2C%22uplinkChunkSize%22%3A0%2C%22noGRPCHeader%22%3Afalse%2C%22noSSEHeader%22%3Afalse%2C%22scMaxEachPostBytes%22%3A%220%22%2C%22scMinPostsIntervalMs%22%3A%220%22%2C%22scMaxBufferedPosts%22%3A0%2C%22scStreamUpServerSecs%22%3A%220%22%2C%22xmux%22%3A%7B%22maxConcurrency%22%3A%228-16%22%2C%22maxConnections%22%3A%220%22%2C%22cMaxReuseTimes%22%3A%2296-192%22%2C%22hMaxRequestTimes%22%3A%22400-600%22%2C%22hMaxReusableSecs%22%3A%221800-3000%22%2C%22hKeepAlivePeriod%22%3A0%7D%2C%22downloadSettings%22%3Anull%2C%22extra%22%3Anull%7D&fp=randomized&sni=eda.yandex.ru&pbk=XQR4nMq5aBnJ4h1RTCRRJdkdtO0Mtitt1cDtY0whkBI&sid=74bc9b278afc749a",
+        "base": "vless://02ecc044-9dad-48db-9d5c-fb39199e1f44@46.8.209.104:443?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&fp=qq&sni=ads.x5.ru&pbk=z67jBKrK0gsKfg-sz_8_CFMtKq9fAtWJPEJpHvo-OFU&sid=c31f9a0e7d4b52",
         "extra": "tcp_closed_or_filtered"
       },
       {
-        "base": "trojan://LYaEYwjN8LjWTRJdCCTzW7V6gK7atJVu@de-1.hysteria.ltd:9443?security=tls&insecure=0&headerType=&type=tcp&allowInsecure=0&sni=de-1.hysteria.ltd",
-        "extra": "dead_or_timeout"
-      },
-      {
-        "base": "trojan://LYaEYwjN8LjWTRJdCCTzW7V6gK7atJVu@ch-2.bexum.fun:443?security=tls&insecure=0&headerType=&type=tcp&allowInsecure=0",
-        "extra": "dead_or_timeout"
-      },
-      {
-        "base": "trojan://SHAMOJ3rnxb5LyMDn6CRXA@vip-srv-for-you.parsiclouds.ir:443?mode=auto&path=/download&security=tls&alpn=h2,http/1.1&extra={\"scMaxEachPostBytes\": \"1000000\", \"scMaxConcurrentPosts\": 100, \"scMinPostsIntervalMs\": 30, \"xPaddingBytes\": \"10-50\", \"noGRPCHeader\": false}&insecure=0&host=x1-dpim9mztudx78ieloo1t.parsiclouds.ir&fp=chrome&type=xhttp&allowInsecure=0&sni=x1-dpim9mztudx78ieloo1t.parsiclouds.ir",
-        "extra": "dead_or_timeout"
-      },
-      {
-        "base": "trojan://A3uIh_5NqMg3hFa.gDYWT.afz0UuJ6=VIM@172.237.145.189:443?security=tls&insecure=0&headerType=none&type=tcp&allowInsecure=0&sni=172.237.145.189",
-        "extra": "dead_or_timeout"
-      },
-      {
-        "base": "trojan://SHAMOJ3rnxb5LyMDn6CRXA@vip-srv-for-you.parsiclouds.ir:443?mode=auto&path=/download&security=tls&alpn=h2,http/1.1&insecure=0&host=x1-dpim9mztudx78ieloo1t.parsiclouds.ir&fp=chrome&type=xhttp&allowInsecure=0&sni=x1-dpim9mztudx78ieloo1t.parsiclouds.ir",
-        "extra": "dead_or_timeout"
-      },
-      {
-        "base": "trojan://386bd471-4e29-4e79-9a3c-6bc6076ce4b6@edu.ruangguru.com.cyylr.eu.cc:443?security=tls&sni=edu.ruangguru.com.cyylr.eu.cc&fp=chrome&insecure=0&allowInsecure=0&type=ws&path=/id-tksi",
-        "extra": "dead_or_timeout"
-      },
-      {
-        "base": "vless://08b92e50-6018-4812-bda7-ba4023fb33bb@62.113.43.195:443?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&fp=qq&sni=api-maps.yandex.ru&pbk=RJETAkoZ6lowmwc5f0HtPy00c3dfojqQuypriLExXRE&sid=abbcd128",
-        "extra": "dead_or_timeout"
-      },
-      {
-        "base": "vless://08b92e50-6018-4812-bda7-ba4023fb33bb@62.113.43.195:443?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&fp=qq&sni=eh.vk.com&pbk=RJETAkoZ6lowmwc5f0HtPy00c3dfojqQuypriLExXRE&sid=abbcd128",
-        "extra": "dead_or_timeout"
-      },
-      {
-        "base": "trojan://DX4wKmVl.CNIjwO5CYf7_qg+f1eMN4yt_F@130.94.3.146:443?security=tls&insecure=0&headerType=none&fp=chrome&type=tcp&allowInsecure=0&sni=www.event-snapshot.click",
-        "extra": "dead_or_timeout"
-      },
-      {
-        "base": "trojan://Config0plus@104.19.229.21:443?security=tls&sni=api24-normal.tiktokv.com.cyylr.eu.cc&insecure=0&allowInsecure=0&type=ws&host=api24-normal.tiktokv.com.cyylr.eu.cc&path=/id-tksi",
-        "extra": "dead_or_timeout"
-      },
-      {
-        "base": "vless://02ecc044-9dad-48db-9d5c-fb39199e1f44@46.8.209.104:443?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&fp=qq&sni=ads.x5.ru&pbk=z67jBKrK0gsKfg-sz_8_CFMtKq9fAtWJPEJpHvo-OFU&sid=5d8e1a9c4f72b3",
-        "extra": "dead_or_timeout"
-      },
-      {
-        "base": "vless://02ecc044-9dad-48db-9d5c-fb39199e1f44@46.8.209.104:443?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&fp=qq&sni=ads.x5.ru&pbk=z67jBKrK0gsKfg-sz_8_CFMtKq9fAtWJPEJpHvo-OFU&sid=a9c4f17e3b62d8",
-        "extra": "dead_or_timeout"
-      },
-      {
-        "base": "vless://182625a9-99de-4ee8-b35e-f774d6b73b12@51.250.102.69:443?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&fp=safari&sni=cdp.x5.ru&pbk=wgXD4k3A16WR0aL63N9Mx8xoqFigJLyQWJXi-l3MPXI&sid=8ec792bfd725be8a",
+        "base": "vless://02ecc044-9dad-48db-9d5c-fb39199e1f44@51.250.18.25:443?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&fp=qq&sni=ads.x5.ru&pbk=oqRus6Z_Q1jqJaTEPu7ENbRL0-XKOw54K0jwCCGLtEk&sid=5d8e1a9c4f72b3",
         "extra": "tcp_closed_or_filtered"
       },
       {
-        "base": "vless://182625a9-99de-4ee8-b35e-f774d6b73b12@51.250.108.162:443?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&fp=safari&sni=cdp.x5.ru&pbk=wgXD4k3A16WR0aL63N9Mx8xoqFigJLyQWJXi-l3MPXI&sid=8ec792bfd725be8a",
+        "base": "vless://0e2cbdd5-eb0c-4f75-b8b5-8fc20b4f05c1@158.160.232.92:443?encryption=none&type=grpc&security=reality&mode=gun&fp=chrome&sni=ads.x5.ru&pbk=AvSwsAIp3t2sTvNDZwTPkbcanvu9wtvLyZ6FCzIM-Rk&sid=7ada97abaa&spx=%2F",
         "extra": "tcp_closed_or_filtered"
       },
       {
-        "base": "vless://194248ca-1c58-42f3-950e-5e1c3f69fdb1@51.250.47.219:443?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&fp=chrome&sni=yandex.ru&pbk=WrPShaEtQUXeKeyWDuELzBsd_ygDsU-k2bL1Avi13xI",
+        "base": "vless://0e2cbdd5-eb0c-4f75-b8b5-8fc20b4f05c1@5.188.114.66:443?encryption=none&type=grpc&security=reality&mode=gun&fp=chrome&sni=ads.x5.ru&pbk=pEAQqtg98GKvvOnwTcpZp508WvMFZcFx8x7c5wzelVc&sid=7ad1211a97aa&spx=%2F",
         "extra": "tcp_closed_or_filtered"
       },
       {
-        "base": "vless://1bbd08ee-1c30-4ede-9d74-130051258b68@87.228.101.236:443?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&fp=firefox&sni=5post-gate.x5.ru&pbk=kDGigLxn2RUJ8HqhPVUb8pRAcjn5zMhR0-QrORmbIDk&sid=be6abde66d48cd13&spx=%2F",
+        "base": "vless://1014818b-5c5c-46b1-98fe-eaf8d5eba642@ru-vk-5.1001notes.ru:443?type=xhttp&headerType=none&security=tls&encryption=none&sni=ru-vk-5.1001notes.ru&fp=chrome&path=%2Fvk&insecure=0",
         "extra": "tcp_closed_or_filtered"
+      },
+      {
+        "base": "vless://108c93de-0773-4f91-96fe-5af2b868cd7b@158.160.59.225:443?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&fp=qq&sni=smartcaptcha.yandexcloud.net&pbk=1vSZjvhZO01oAEH3b7eebR1qF5dLU1Dq2E7xu8pwGSs&sid=428ef87fd47a3a32&spx=%2F",
+        "extra": "tcp_closed_or_filtered"
+      },
+      {
+        "base": "trojan://humanity@188.114.98.0:443?path=/assignment&security=tls&fp=chrome&type=ws&sni=www.calmloud.com",
+        "extra": "dead_or_timeout"
+      },
+      {
+        "base": "trojan://s_WEN9lMmufG+qDIsn-4C7JOVAnDdbS3Ui@172.236.220.10:443?allowInsecure=0",
+        "extra": "dead_or_timeout"
+      },
+      {
+        "base": "trojan://s_WEN9lMmufG+qDIsn-4C7JOVAnDdbS3Ui@172.236.220.10:443?security=tls&insecure=0&headerType=&type=tcp&allowInsecure=0&sni=172.236.220.10",
+        "extra": "dead_or_timeout"
+      },
+      {
+        "base": "trojan://r-_YbwF.j0TtHVewoFIppramjAnmSfqYzJ@172.238.120.124:443?security=tls&amp;insecure=0&amp;headerType=none&amp;fp=chrome&amp;type=tcp&amp;allowInsecure=0",
+        "extra": "dead_or_timeout"
+      },
+      {
+        "base": "vless://0ed84bf7-87da-4d93-aa3f-78b2cf5d645b@62.113.43.195:443?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&fp=qq&sni=api-maps.yandex.ru&pbk=RJETAkoZ6lowmwc5f0HtPy00c3dfojqQuypriLExXRE&sid=abbcd128",
+        "extra": "dead_or_timeout"
+      },
+      {
+        "base": "vless://0ed84bf7-87da-4d93-aa3f-78b2cf5d645b@62.113.43.195:443?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&fp=qq&sni=eh.vk.com&pbk=RJETAkoZ6lowmwc5f0HtPy00c3dfojqQuypriLExXRE&sid=abbcd128",
+        "extra": "dead_or_timeout"
+      },
+      {
+        "base": "vless://02ecc044-9dad-48db-9d5c-fb39199e1f44@46.8.209.104:443?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&fp=qq&sni=ads.x5.ru&pbk=z67jBKrK0gsKfg-sz_8_CFMtKq9fAtWJPEJpHvo-OFU&sid=7e2a9d4c5f18b0",
+        "extra": "dead_or_timeout"
+      },
+      {
+        "base": "vless://182625a9-99de-4ee8-b35e-f774d6b73b12@51.250.24.222:443?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&fp=safari&sni=cdp.x5.ru&pbk=wgXD4k3A16WR0aL63N9Mx8xoqFigJLyQWJXi-l3MPXI&sid=8ec792bfd725be8a",
+        "extra": "tcp_closed_or_filtered"
+      },
+      {
+        "base": "vless://194248ca-1c58-42f3-950e-5e1c3f69fdb1@158.160.128.13:443?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&fp=safari&sni=yandex.ru&pbk=CF49-iS9dsHBwvqYFoDs_T3Me8TT0FpNW2kibGBkVXY",
+        "extra": "tcp_closed_or_filtered"
+      },
+      {
+        "base": "vless://1a12bfb1-6104-4329-9456-4d5f3842cb7b@gertest.nekosocks.com:443?flow=xtls-rprx-vision&type=tcp&headerType=none&security=reality&fp=chrome&sni=gertest.nekosocks.com&pbk=5HK6AhUPIiVxSCT12HkhlxqfSBaPh6UPqONgMAlSKD0&sid=f34a04185a7a081e",
+        "extra": "tcp_closed_or_filtered"
+      },
+      {
+        "base": "vless://146eb6cf-a99c-4022-85ca-022cf81502dc@194.127.179.220:443?security=reality&encryption=none&pbk=7ReQIe2kMtP4rCrptgH5glkOM-JGcSAPzHNxOED-Z0s&headerType=none&fp=chrome&type=tcp&flow=xtls-rprx-vision&sni=web.max.ru&sid=247fd6dab1a34a48",
+        "extra": "dead_or_timeout"
       }
     ],
     "wl-deny": [
       {
-        "base": "vless://0101b333-b8bb-41bc-b949-391943edd15a@188.114.97.6:443?security=tls&allowInsecure=0&encryption=none&type=ws&host=ma33c.hamiibar.com&path=/ipiwqhws&sni=ma33c.hamiibar.com&fp=chrome",
+        "base": "vless://04d0cd8b-4755-491a-94f0-d1dd4083598d@ficl.themonji.com:8443?encryption=none&security=tls&type=ws&headerType=none&path=%2F%3Fed%3D2048&host=fic.themonji.com&sni=fic.themonji.com&fp=chrome&alpn=h3%2Ch2%2Chttp%2F1.1",
         "extra": "skip_mobile_not_in_whitelist"
       },
       {
-        "base": "vless://08b006dc-17e4-411d-9528-4369d72ad646@104.18.152.233:443?security=tls&allowInsecure=0&encryption=none&type=ws&host=support.zoom.us.ex33r.eu.cc&path=/sg-melbi&sni=support.zoom.us.ex33r.eu.cc&fp=chrome",
+        "base": "vless://0752b610-6fd0-4382-a40c-39d59b416a1e@ca.gsupport.support:443?type=tcp&security=reality&encryption=none&flow=xtls-rprx-vision&fp=safari&pbk=JxwG7rAbNCd_C82p9K69AZDWh51fri2nm3wLHHrfyiw&sid=7755e972daf8eec8&sni=video.intfreed.ru",
         "extra": "skip_mobile_not_in_whitelist"
       },
       {
-        "base": "vless://08b92e50-6018-4812-bda7-ba4023fb33bb@62.113.43.195:443?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&fp=qq&sni=ads.x5.ru&pbk=RJETAkoZ6lowmwc5f0HtPy00c3dfojqQuypriLExXRE&sid=abbcd128",
+        "base": "vless://0752b610-6fd0-4382-a40c-39d59b416a1e@de3.gsupport.support:443?encryption=none&flow=xtls-rprx-vision&fp=&pbk=JxwG7rAbNCd_C82p9K69AZDWh51fri2nm3wLHHrfyiw&security=reality&sid=7755e972daf8eec8&sni=video.intfreed.ru&type=tcp",
         "extra": "skip_mobile_not_in_whitelist"
       },
       {
-        "base": "vless://1014818b-5c5c-46b1-98fe-eaf8d5eba642@ca-xh-01.hpdata.click:443?type=xhttp&headerType=none&security=tls&encryption=none&sni=ca-xh-01.hpdata.click&fp=chrome&path=%2Fvk&insecure=0",
+        "base": "vless://0752b610-6fd0-4382-a40c-39d59b416a1e@de3.gsupport.support:443?type=tcp&headerType=none&security=reality&encryption=none&sni=video.intfreed.ru&fp=safari&pbk=JxwG7rAbNCd_C82p9K69AZDWh51fri2nm3wLHHrfyiw&sid=7755e972daf8eec8&flow=xtls-rprx-vision",
         "extra": "skip_mobile_not_in_whitelist"
       },
       {
-        "base": "vless://1014818b-5c5c-46b1-98fe-eaf8d5eba642@es-xh-01.hpdata.click:443?sni=es-xh-01.hpdata.click&fp=chrome&security=tls",
+        "base": "vless://0752b610-6fd0-4382-a40c-39d59b416a1e@main.gsupport.support:443?type=tcp&headerType=none&security=reality&encryption=none&sni=video.intfreed.ru&fp=safari&pbk=JxwG7rAbNCd_C82p9K69AZDWh51fri2nm3wLHHrfyiw&sid=7755e972daf8eec8&flow=xtls-rprx-vision",
+        "extra": "skip_mobile_not_in_whitelist"
+      },
+      {
+        "base": "vless://0752b610-6fd0-4382-a40c-39d59b416a1e@main.gsupport.support:443?type=tcp&security=reality&encryption=none&flow=xtls-rprx-vision&pbk=JxwG7rAbNCd_C82p9K69AZDWh51fri2nm3wLHHrfyiw&sid=7755e972daf8eec8&sni=video.intfreed.ru",
+        "extra": "skip_mobile_not_in_whitelist"
+      },
+      {
+        "base": "vless://0752b610-6fd0-4382-a40c-39d59b416a1e@nl2.gsupport.support:443?type=tcp&headerType=none&security=reality&encryption=none&sni=video.intfreed.ru&fp=safari&pbk=JxwG7rAbNCd_C82p9K69AZDWh51fri2nm3wLHHrfyiw&sid=7755e972daf8eec8&flow=xtls-rprx-vision",
+        "extra": "skip_mobile_not_in_whitelist"
+      },
+      {
+        "base": "vless://0752b610-6fd0-4382-a40c-39d59b416a1e@pln2.gsupport.support:443?type=tcp&headerType=none&security=reality&encryption=none&sni=video.intfreed.ru&fp=safari&pbk=JxwG7rAbNCd_C82p9K69AZDWh51fri2nm3wLHHrfyiw&sid=7755e972daf8eec8&flow=xtls-rprx-vision",
+        "extra": "skip_mobile_not_in_whitelist"
+      },
+      {
+        "base": "vless://0752b610-6fd0-4382-a40c-39d59b416a1e@pln2.gsupport.support:443?type=tcp&security=reality&encryption=none&flow=xtls-rprx-vision&fp=safari&pbk=JxwG7rAbNCd_C82p9K69AZDWh51fri2nm3wLHHrfyiw&sid=7755e972daf8eec8&sni=video.intfreed.ru",
+        "extra": "skip_mobile_not_in_whitelist"
+      },
+      {
+        "base": "vless://08b006dc-17e4-411d-9528-4369d72ad646@104.18.152.233:443/?type=ws&encryption=none&flow=&host=support.zoom.us.ex33r.eu.cc&path=%2Fsg-melbi&security=tls&sni=support.zoom.us.ex33r.eu.cc&alpn=networld_vpn-channel%40.networld_vpn-channel%40.networld_vpn-channel%40.networld_vpn-channel%40.networld_vpn-channel%40.networld_vpn-channel%40.networld_vpn-",
+        "extra": "skip_mobile_not_in_whitelist"
+      },
+      {
+        "base": "vless://08b006dc-17e4-411d-9528-4369d72ad646@104.18.152.233:443?encryption=none&host=support.zoom.us.ex33r.eu.cc&path=/sg-melbi&security=tls&sni=support.zoom.us.ex33r.eu.cc&type=ws",
+        "extra": "skip_mobile_not_in_whitelist"
+      },
+      {
+        "base": "vless://0ed84bf7-87da-4d93-aa3f-78b2cf5d645b@62.113.43.195:443?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&fp=qq&sni=ads.x5.ru&pbk=RJETAkoZ6lowmwc5f0HtPy00c3dfojqQuypriLExXRE&sid=abbcd128",
+        "extra": "skip_mobile_not_in_whitelist"
+      },
+      {
+        "base": "vless://1014818b-5c5c-46b1-98fe-eaf8d5eba642@de-xh-01.hpdata.click:443?type=xhttp&headerType=none&security=tls&encryption=none&sni=de-xh-01.hpdata.click&fp=chrome&path=/vk&insecure=0",
+        "extra": "skip_mobile_not_in_whitelist"
+      },
+      {
+        "base": "vless://1014818b-5c5c-46b1-98fe-eaf8d5eba642@it-xh-02.hpdata.click:443?type=xhttp&security=tls&fp=chrome&sni=it-xh-02.hpdata.click&path=/vk&mode=packet-up",
         "extra": "skip_mobile_not_in_whitelist"
       }
     ],
     "probable-provider-dpi": [
       {
-        "base": "vless://0f63f4d4-910c-4bf6-8d7c-5822672eb2e3@5.188.114.178:443?encryption=none&type=xhttp&security=reality&path=%2Fapi%2Fv2%2F&mode=packet-up&extra=%7B%22host%22%3A%22%22%2C%22path%22%3A%22%22%2C%22mode%22%3A%22packet-up%22%2C%22headers%22%3Anull%2C%22xPaddingBytes%22%3A%22100-1000%22%2C%22xPaddingObfsMode%22%3Afalse%2C%22xPaddingKey%22%3A%22%22%2C%22xPaddingHeader%22%3A%22%22%2C%22xPaddingPlacement%22%3A%22%22%2C%22xPaddingMethod%22%3A%22%22%2C%22uplinkHTTPMethod%22%3A%22%22%2C%22sessionPlacement%22%3A%22%22%2C%22sessionKey%22%3A%22%22%2C%22seqPlacement%22%3A%22%22%2C%22seqKey%22%3A%22%22%2C%22uplinkDataPlacement%22%3A%22%22%2C%22uplinkDataKey%22%3A%22%22%2C%22uplinkChunkSize%22%3A0%2C%22noGRPCHeader%22%3Afalse%2C%22noSSEHeader%22%3Afalse%2C%22scMaxEachPostBytes%22%3A%220%22%2C%22scMinPostsIntervalMs%22%3A%220%22%2C%22scMaxBufferedPosts%22%3A0%2C%22scStreamUpServerSecs%22%3A%220%22%2C%22xmux%22%3A%7B%22maxConcurrency%22%3A%228-16%22%2C%22maxConnections%22%3A%220%22%2C%22cMaxReuseTimes%22%3A%2296-192%22%2C%22hMaxRequestTimes%22%3A%22400-600%22%2C%22hMaxReusableSecs%22%3A%221800-3000%22%2C%22hKeepAlivePeriod%22%3A0%7D%2C%22downloadSettings%22%3Anull%2C%22extra%22%3Anull%7D&fp=randomized&sni=eda.yandex.ru&pbk=XQR4nMq5aBnJ4h1RTCRRJdkdtO0Mtitt1cDtY0whkBI&sid=52d25a9b6eef53fc",
-        "extra": "host=5.188.114.178"
+        "base": "vless://09d98f4f-e399-03e8-847e-6c98dae60806@89.208.231.191:52006?flow=xtls-rprx-vision&encryption=none&type=tcp&security=tls&fp=chrome&alpn=h2%2Chttp%2F1.1",
+        "extra": "host=89.208.231.191"
+      },
+      {
+        "base": "vless://09d98f4f-e399-07d0-847e-6c98dae60806@89.208.231.191:52006?flow=xtls-rprx-vision&encryption=none&type=tcp&security=tls&fp=chrome&alpn=h2%2Chttp%2F1.1",
+        "extra": "host=89.208.231.191"
+      },
+      {
+        "base": "vless://09d98f4f-e399-0bb8-847e-6c98dae60806@89.208.231.191:52006?flow=xtls-rprx-vision&encryption=none&type=tcp&security=tls&fp=chrome&alpn=h2%2Chttp%2F1.1",
+        "extra": "host=89.208.231.191"
+      },
+      {
+        "base": "vless://09d98f4f-e399-1f40-847e-6c98dae60806@89.208.231.191:52006?flow=xtls-rprx-vision&encryption=none&type=tcp&security=tls&fp=chrome&alpn=h2%2Chttp%2F1.1",
+        "extra": "host=89.208.231.191"
+      },
+      {
+        "base": "vless://09d98f4f-e399-2328-847e-6c98dae60806@89.208.231.191:52006?flow=xtls-rprx-vision&encryption=none&type=tcp&security=tls&fp=chrome&alpn=h2%2Chttp%2F1.1",
+        "extra": "host=89.208.231.191"
       }
     ],
     "tcp-open-but-l7-block": [
       {
-        "base": "vless://0f63f4d4-910c-4bf6-8d7c-5822672eb2e3@5.188.114.178:443?encryption=none&type=xhttp&security=reality&path=%2Fapi%2Fv2%2F&mode=packet-up&extra=%7B%22host%22%3A%22%22%2C%22path%22%3A%22%22%2C%22mode%22%3A%22packet-up%22%2C%22headers%22%3Anull%2C%22xPaddingBytes%22%3A%22100-1000%22%2C%22xPaddingObfsMode%22%3Afalse%2C%22xPaddingKey%22%3A%22%22%2C%22xPaddingHeader%22%3A%22%22%2C%22xPaddingPlacement%22%3A%22%22%2C%22xPaddingMethod%22%3A%22%22%2C%22uplinkHTTPMethod%22%3A%22%22%2C%22sessionPlacement%22%3A%22%22%2C%22sessionKey%22%3A%22%22%2C%22seqPlacement%22%3A%22%22%2C%22seqKey%22%3A%22%22%2C%22uplinkDataPlacement%22%3A%22%22%2C%22uplinkDataKey%22%3A%22%22%2C%22uplinkChunkSize%22%3A0%2C%22noGRPCHeader%22%3Afalse%2C%22noSSEHeader%22%3Afalse%2C%22scMaxEachPostBytes%22%3A%220%22%2C%22scMinPostsIntervalMs%22%3A%220%22%2C%22scMaxBufferedPosts%22%3A0%2C%22scStreamUpServerSecs%22%3A%220%22%2C%22xmux%22%3A%7B%22maxConcurrency%22%3A%228-16%22%2C%22maxConnections%22%3A%220%22%2C%22cMaxReuseTimes%22%3A%2296-192%22%2C%22hMaxRequestTimes%22%3A%22400-600%22%2C%22hMaxReusableSecs%22%3A%221800-3000%22%2C%22hKeepAlivePeriod%22%3A0%7D%2C%22downloadSettings%22%3Anull%2C%22extra%22%3Anull%7D&fp=randomized&sni=eda.yandex.ru&pbk=XQR4nMq5aBnJ4h1RTCRRJdkdtO0Mtitt1cDtY0whkBI&sid=52d25a9b6eef53fc",
-        "extra": "5.188.114.178"
+        "base": "vless://09d98f4f-e399-03e8-847e-6c98dae60806@89.208.231.191:52006?flow=xtls-rprx-vision&encryption=none&type=tcp&security=tls&fp=chrome&alpn=h2%2Chttp%2F1.1",
+        "extra": "89.208.231.191"
+      },
+      {
+        "base": "vless://09d98f4f-e399-07d0-847e-6c98dae60806@89.208.231.191:52006?flow=xtls-rprx-vision&encryption=none&type=tcp&security=tls&fp=chrome&alpn=h2%2Chttp%2F1.1",
+        "extra": "89.208.231.191"
+      },
+      {
+        "base": "vless://09d98f4f-e399-0bb8-847e-6c98dae60806@89.208.231.191:52006?flow=xtls-rprx-vision&encryption=none&type=tcp&security=tls&fp=chrome&alpn=h2%2Chttp%2F1.1",
+        "extra": "89.208.231.191"
+      },
+      {
+        "base": "vless://09d98f4f-e399-1f40-847e-6c98dae60806@89.208.231.191:52006?flow=xtls-rprx-vision&encryption=none&type=tcp&security=tls&fp=chrome&alpn=h2%2Chttp%2F1.1",
+        "extra": "89.208.231.191"
+      },
+      {
+        "base": "vless://09d98f4f-e399-2328-847e-6c98dae60806@89.208.231.191:52006?flow=xtls-rprx-vision&encryption=none&type=tcp&security=tls&fp=chrome&alpn=h2%2Chttp%2F1.1",
+        "extra": "89.208.231.191"
       }
     ]
   },
-  "generated_at_utc": "2026-06-07T17:04:52.310808+00:00"
+  "generated_at_utc": "2026-06-07T19:06:17.479698+00:00"
 }
