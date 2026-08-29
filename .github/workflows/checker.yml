@@ -35,6 +35,15 @@ jobs:
           script: |
             const owner = context.repo.owner;
             const repo = context.repo.repo;
+            const isPush = context.eventName === 'push';
+
+            // Temporary practical bypass for merge/update pushes:
+            // do not cancel by cooldown on push-triggered runs.
+            if (isPush) {
+              core.info('push event -> bypass 2h cooldown gate');
+              core.setOutput('should_run', 'true');
+              return;
+            }
 
             const wfRef = context.workflowRef || '';
             const m = wfRef.match(/\.github\/workflows\/([^@]+)@/);
